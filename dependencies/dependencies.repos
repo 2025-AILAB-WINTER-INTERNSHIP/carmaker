@@ -1,0 +1,12 @@
+# =============================================================================
+# dependencies/dependencies.repos
+# External ROS1/ROS2 repository synchronization via vcstool
+#
+# List external repository sources here. To ensure deterministic builds,
+# use specific tags or commit hashes for the 'version' field.
+# =============================================================================
+repositories:
+#  thirdparty/example_pkg:
+#    type: git
+#    url: https://github.com/example/example_pkg.git
+#    version: v1.0.0

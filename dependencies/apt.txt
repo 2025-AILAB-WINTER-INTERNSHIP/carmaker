@@ -1,0 +1,18 @@
+# =============================================================================
+# dependencies/apt.txt
+# User-defined system package extensions for the development environment
+#
+# Filtering Tag System Guide:
+#   - # runtime : Packages to include in the production (runtime) image
+#   - # ros1    : Packages for ROS 1 (Noetic) environments only
+#   - # ros2    : Packages for ROS 2 (Humble) environments only
+#   - (No tag)  : Installed in all dev environments, excluded from production
+#
+# Examples:
+#   - libyaml-cpp-dev # runtime,ros2 (Installed in ROS2 runtime & dev)
+#   - python3-catkin-tools # ros1    (ROS1 dev-only tool)
+# =============================================================================
+
+# Build & Utilities
+ccache
+ninja-build

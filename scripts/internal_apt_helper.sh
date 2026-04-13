@@ -1,0 +1,200 @@
+#!/bin/bash
+# =============================================================================
+# scripts/internal_apt_helper.sh
+# Build-time APT management utility for automated package installation
+#
+# Handles APT initialization, snapshot configuration, ROS repository setup,
+# and filtered package installation (all vs runtime) during the Docker build
+# process.
+# =============================================================================
+
+set -eo pipefail
+COMMAND=$1
+
+# Load logging utility (path may vary during docker build)
+SOURCE_LOG="/tmp/utils_logging.sh"
+[ ! -f "$SOURCE_LOG" ] && SOURCE_LOG="/docker_dev/scripts/utils_logging.sh"
+[ ! -f "$SOURCE_LOG" ] && SOURCE_LOG="$(dirname "${BASH_SOURCE[0]}")/utils_logging.sh"
+[ -f "$SOURCE_LOG" ] && source "$SOURCE_LOG"
+LOG_PREFIX="[APT Helper]"
+
+# 0. Initialize APT for Docker Container (Enable caching for BuildKit mount compatibility)
+init_apt() {
+    rm -f /etc/apt/apt.conf.d/docker-clean
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
+    log_info "Docker APT cache preservation enabled."
+}
+
+# 1. Configure APT Snapshot Repository and Disable Valid-Until Checks
+setup_snapshot() {
+    local date=$1
+    if [ "$date" != "latest" ] && [ -n "$date" ]; then
+        # Disable Valid-Until verification for historical snapshots
+        echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99-disable-valid-until
+
+        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            # [Ubuntu 24.04+ (DEB822 Format)]
+            echo "APT::Snapshot \"$date\";" > /etc/apt/apt.conf.d/99-snapshot
+        elif [ -f /etc/apt/sources.list ]; then
+            # [Ubuntu 20.04 / 22.04 (Legacy Format)]
+            sed -i "s|http://archive.ubuntu.com/ubuntu/|http://snapshot.ubuntu.com/ubuntu/$date/|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com/ubuntu/|http://snapshot.ubuntu.com/ubuntu/$date/|g" /etc/apt/sources.list
+            sed -i "s|http://ports.ubuntu.com/ubuntu-ports/|http://snapshot.ubuntu.com/ubuntu-ports/$date/|g" /etc/apt/sources.list
+        fi
+        log_info "Snapshot configured for: $date"
+    fi
+}
+
+# 1-1. Configure ROS Repository (Import GPG keys and setup source lists)
+setup_ros_repo() {
+    local distro=$1
+    [ -z "$distro" ] && return
+
+    # Ensure minimal prerequisites for repository management (curl, gnupg2)
+    apt-get update && apt-get install -y --no-install-recommends curl gnupg2
+
+    # Get Ubuntu codename without lsb_release
+    local codename
+    codename=$(grep '^VERSION_CODENAME=' /etc/os-release | cut -d= -f2)
+    if [ -z "$codename" ]; then codename=$(grep '^UBUNTU_CODENAME=' /etc/os-release | cut -d= -f2); fi
+
+    # Known GPG fingerprint for ROS repository key
+    local ROS_GPG_FINGERPRINT="C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"
+
+    # Use mktemp for safe temp file (prevents symlink attacks in multi-user environments)
+    local TMP_KEY
+    TMP_KEY=$(mktemp /tmp/ros_repo_key.XXXXXX)
+    trap 'rm -f "$TMP_KEY"' RETURN
+
+    if [ "$distro" = "noetic" ]; then
+        curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc -o "$TMP_KEY"
+    else
+        curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o "$TMP_KEY"
+    fi
+
+    # Verify GPG key fingerprint (supply-chain attack mitigation)
+    # Policy: STRICT_GPG_CHECK=true → Fail-Closed (abort on mismatch, for high-security environments)
+    #         STRICT_GPG_CHECK=false/unset → Fail-Open (warn only, resilient to key rotations)
+    local ACTUAL_FP
+    ACTUAL_FP=$(gpg --with-colons --import-options show-only --import "$TMP_KEY" 2>/dev/null \
+        | awk -F: '/^fpr/{print $10; exit}')
+    if [ -n "$ROS_GPG_FINGERPRINT" ] && [ "$ACTUAL_FP" != "$ROS_GPG_FINGERPRINT" ]; then
+        if [ "${STRICT_GPG_CHECK:-false}" = "true" ]; then
+            log_error "FATAL: GPG fingerprint mismatch! Expected: $ROS_GPG_FINGERPRINT, Got: $ACTUAL_FP"
+            log_error "Aborting (STRICT_GPG_CHECK=true). To update, run 'make update-gpg' on the host."
+            return 1
+        else
+            log_warn "GPG fingerprint mismatch! Expected: $ROS_GPG_FINGERPRINT, Got: $ACTUAL_FP"
+            log_warn "Continuing (Fail-Open). To update and silence this warning, run 'make update-gpg' on the host."
+        fi
+    else
+        log_info "GPG key fingerprint verified: $ACTUAL_FP"
+    fi
+    gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg < "$TMP_KEY"
+
+    if [ "$distro" = "noetic" ]; then
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros/ubuntu $codename main" > /etc/apt/sources.list.d/ros1-latest.list
+    else
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $codename main" > /etc/apt/sources.list.d/ros2.list
+    fi
+    log_info "ROS repository configured for: $distro ($codename)"
+}
+
+# 2. Install user-defined packages with conditional tag-based filtering
+install_packages() {
+    local filter=$1  # "all" (dev/builder) or "runtime" (production)
+    local distro=$2
+    local dep_dir=${3:-"/opt/dependencies"} # Default dependency directory
+
+    local apt_file="/tmp/apt.txt"
+    local ros_file="/tmp/apt_ros.txt"
+
+    # Fallback to centralized dependency directory if /tmp files don't exist
+    [ ! -f "$apt_file" ] && [ -f "${dep_dir}/apt.txt" ] && apt_file="${dep_dir}/apt.txt"
+    [ ! -f "$ros_file" ] && [ -f "${dep_dir}/apt_ros.txt" ] && ros_file="${dep_dir}/apt_ros.txt"
+
+    # Detect target ROS version tag
+    local target_tag="none"
+    local other_tag="ros1|ros2"
+    if [ -n "$distro" ]; then
+        if [ "$distro" == "noetic" ]; then
+            target_tag="ros1"
+            other_tag="ros2"
+        else
+            target_tag="ros2"
+            other_tag="ros1"
+        fi
+    fi
+
+    local grep_pattern='^[^#]+'
+    [ "$filter" == "runtime" ] && grep_pattern='^[^#]+ # runtime'
+
+    local pkgs=""
+
+    # Internal helper for package list extraction and tag filtering
+    filter_pkg_list() {
+        local file=$1
+        local pattern=$2
+        if [ -f "$file" ]; then
+            # 1. Get lines matching basic pattern (e.g. # runtime)
+            # 2. Exclude lines explicitly tagged for the "other" version (e.g. # runtime,ros1)
+            # 3. Handle variables (${ROS_DISTRO}) and clean up comments
+            grep -E "$pattern" "$file" | \
+            grep -v -E " #.*,(${other_tag})| # (${other_tag})" | \
+            sed "s/\${ROS_DISTRO}/$distro/g" | \
+            sed 's/ #.*//' | xargs || true
+        fi
+    }
+
+    # Extract packages from apt.txt
+    if [ -f "$apt_file" ]; then
+        pkgs=$(filter_pkg_list "$apt_file" "$grep_pattern")
+    fi
+
+    # Extract packages from apt_ros.txt
+    if [ -n "$distro" ] && [ -f "$ros_file" ]; then
+        local ros_pkgs
+        ros_pkgs=$(filter_pkg_list "$ros_file" "$grep_pattern")
+        pkgs="$pkgs $ros_pkgs"
+    fi
+
+    pkgs=$(echo "$pkgs" | xargs) # Clean whitespace
+
+    if [ -n "$pkgs" ]; then
+        if [ -n "$distro" ]; then
+            log_info "Installing ($filter) packages for $distro ($target_tag): $pkgs"
+        else
+            log_info "Installing ($filter) packages: $pkgs"
+        fi
+        if ! apt-get update; then
+            log_error "'apt-get update' failed."
+            if [ -f /etc/apt/apt.conf.d/99-snapshot ]; then
+                log_info "Recommendation: A snapshot is active. Verify the snapshot date or repository availability."
+            fi
+            exit 1
+        fi
+        read -r -a pkg_array <<< "$pkgs"
+        apt-get install -y --no-install-recommends "${pkg_array[@]}"
+    else
+        log_info "No packages matched filter ($filter, $target_tag)"
+    fi
+}
+
+case "$COMMAND" in
+    "init-apt")
+        init_apt
+        ;;
+    "configure-snapshot")
+        setup_snapshot "$2"
+        ;;
+    "setup-ros-repo")
+        setup_ros_repo "$2"
+        ;;
+    "install-packages")
+        install_packages "$2" "$3" "$4"
+        ;;
+    *)
+        echo "Usage: $0 {init-apt|configure-snapshot|setup-ros-repo|install-packages} [args...]"
+        exit 1
+        ;;
+esac

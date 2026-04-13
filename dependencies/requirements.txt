@@ -1,0 +1,12 @@
+# =============================================================================
+# dependencies/requirements.txt
+# Python dependency fallback for uv (when pyproject.toml is missing)
+#
+# Note: This file is ignored if pyproject.toml and uv.lock are present.
+# List additional Python packages required for the project here.
+#
+# Example:
+# =============================================================================
+# numpy==1.26.4
+# opencv-python-headless
+# pandas

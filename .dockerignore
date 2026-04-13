@@ -1,0 +1,43 @@
+# =============================================================================
+# .dockerignore
+# Exclude files and directories from the Docker build context
+# =============================================================================
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Build Artifacts
+build/
+install/
+log/
+.ccache/
+
+# Thirdparty (Cloned inside the container via vcs import)
+thirdparty/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# C++ CMake cache
+CMakeCache.txt
+CMakeFiles/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment (Security)
+.env
+.env.*
+
+# Archives
+*.zip
+*.tar.gz
+
+# Documentation
+# *.md (Commented out to allow README.md access during build)

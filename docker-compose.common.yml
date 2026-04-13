@@ -1,0 +1,155 @@
+# =============================================================================
+# docker-compose.common.yml
+# Common Service Template and Configuration (SSOT: Single Source of Truth)
+# =============================================================================
+
+# ── Runtime Environment Definitions (Single Source of Truth) ──────────────────
+# Path sync required with internal logic in docker/entrypoint.sh
+x-common-env: &common-env
+  COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-myproject}
+  LANG: ${LANG:-C.UTF-8}
+  TZ: ${TZ:-UTC}
+  DISPLAY: ${DISPLAY:-:0}
+  DISPLAY_TYPE: ${DISPLAY_TYPE:-X11}
+  WAYLAND_DISPLAY: ${HOST_WAYLAND_DISPLAY:-}
+  XDG_RUNTIME_DIR: /tmp/runtime-root
+  UV_PYTHON: ${UV_PYTHON:-3.10}
+  GPU_MODE: ${GPU_MODE:-auto}
+  ROS_DISTRO: ${ROS_DISTRO:-humble}
+  SYNC_TARGET_DIR: ${SYNC_TARGET_DIR:-src/thirdparty}
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+  RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+  ROS_MASTER_URI: ${ROS_MASTER_URI:-http://localhost:11311}
+  ROS_HOSTNAME: ${ROS_HOSTNAME:-localhost}
+  ROS_IP: ${ROS_IP:-}
+  CMAKE_CXX_STANDARD: ${CMAKE_CXX_STANDARD:-17}
+  UV_SYNC_FLAGS: ${UV_SYNC_FLAGS:-}
+  CMAKE_EXTRA_ARGS: ${CMAKE_EXTRA_ARGS:-}
+  COLCON_EXTRA_FLAGS: ${COLCON_EXTRA_FLAGS:-}
+
+x-nvidia-env: &nvidia-env
+  <<: *common-env
+  GPU_MODE: nvidia
+  NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+  NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-all}
+  LIBGL_ALWAYS_SOFTWARE: "0"
+
+x-nvidia-deploy: &nvidia-deploy
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: ${NVIDIA_GPU_COUNT:-all}
+          capabilities: [gpu]
+
+# ── GPU Device Mounts (Intel/AMD) ──────────────────────────────────────────
+# (Anchors must be defined locally in each file to be compatible)
+
+# ── ROS Healthcheck Configuration ───────────────────────────────────────────
+x-ros-healthcheck: &ros-healthcheck
+  test: [
+    "CMD", "bash", "-c",
+    ". /opt/ros/$${ROS_DISTRO}/setup.bash 2>/dev/null && (ros2 --help >/dev/null 2>&1 || roscore -h >/dev/null 2>&1)"
+  ]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+
+# ── Dev Healthcheck Configuration (Lightweight Shell Liveness) ──────────────
+# Verify shell is alive via pid 1 liveness (not just 'echo alive')
+x-dev-healthcheck: &dev-healthcheck
+  test: ["CMD-SHELL", "kill -0 1 2>/dev/null || exit 1"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 10s
+
+# ── Service Templates (Abstract Bases) ───────────────────────────────────────
+services:
+  # Core Configuration Base (Shared across all services)
+  base-common:
+    platform: linux/${TARGETARCH:-amd64}
+    profiles: [abstract]
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    network_mode: ${NETWORK_MODE:-bridge}
+    ipc: ${IPC_MODE:-private}
+    privileged: ${PRIVILEGED:-false}
+    ulimits:
+      nofile:
+        soft: ${ULIMIT_NOFILE:-65535}
+        hard: ${ULIMIT_NOFILE:-65535}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        DEBIAN_FRONTEND: ${DEBIAN_FRONTEND:-noninteractive}
+        LANG: ${LANG:-C.UTF-8}
+        APT_SNAPSHOT_DATE: ${APT_SNAPSHOT_DATE:-latest}
+        UV_VERSION: ${UV_VERSION:-0.10.10}
+        UV_PYTHON: ${UV_PYTHON:-3.10}
+        CMAKE_CXX_STANDARD: ${CMAKE_CXX_STANDARD:-17}
+        BASE_IMAGE: ${BASE_IMAGE:-ubuntu:22.04}
+        ROS_DISTRO: ${ROS_DISTRO:-humble}
+        TARGETARCH: ${TARGETARCH:-amd64}
+        UV_SYNC_FLAGS: ${UV_SYNC_FLAGS:-}
+        CMAKE_EXTRA_ARGS: ${CMAKE_EXTRA_ARGS:-}
+        COLCON_EXTRA_FLAGS: ${COLCON_EXTRA_FLAGS:-}
+
+  # Pure Development Template
+  base-dev:
+    profiles: [abstract]
+    extends: base-common
+    environment:
+      <<: *common-env
+    healthcheck: *dev-healthcheck
+
+  # Integrated GPU (iGPU) Acceleration (Intel/AMD)
+  base-igpu:
+    profiles: [abstract]
+    extends: base-common
+    environment:
+      <<: *common-env
+    devices:
+      - /dev/dri:/dev/dri
+    healthcheck: *dev-healthcheck
+
+  # NVIDIA Acceleration Template
+  base-nvidia:
+    profiles: [abstract]
+    extends: base-common
+    environment:
+      <<: *nvidia-env
+    deploy:
+      <<: *nvidia-deploy
+    healthcheck: *dev-healthcheck
+
+  # ROS Specific Template
+  base-ros:
+    profiles: [abstract]
+    extends: base-common
+    environment:
+      <<: *common-env
+    healthcheck: *ros-healthcheck
+
+  # ROS + iGPU Acceleration Template
+  base-ros-igpu:
+    profiles: [abstract]
+    extends: base-common
+    environment:
+      <<: *common-env
+    devices:
+      - /dev/dri:/dev/dri
+    healthcheck: *ros-healthcheck
+
+  # Hybrid Container: ROS + NVIDIA Acceleration
+  base-ros-nvidia:
+    profiles: [abstract]
+    extends: base-common
+    environment:
+      <<: *nvidia-env
+    deploy:
+      <<: *nvidia-deploy
+    healthcheck: *ros-healthcheck

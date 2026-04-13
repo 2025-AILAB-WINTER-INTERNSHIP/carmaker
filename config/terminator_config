@@ -1,0 +1,116 @@
+# =============================================================================
+# config/terminator_config
+# Optimized layout and keybinding configuration for Terminator
+#
+# Features:
+#   - 2x2 Grid Layout (Main, Monitoring, Logs x2)
+#   - Intuitive Alt-based window management and broadcasting
+#   - D2Coding font support for enhanced legibility
+# =============================================================================
+
+[global_config]
+    title_hide_sizetext = True
+    suppress_multiple_term_dialog = True
+    inactive_color_offset = 0.8
+
+[keybindings]
+    # --- Window Management ---
+    open_new_term = <Alt>t
+    close_term = <Alt>w
+
+    # --- Screen Splitting ---
+    split_horiz = <Alt>h    # Split Horizontally (Top/Bottom)
+    split_vert = <Alt>v     # Split Vertically (Left/Right)
+
+    # --- Directional Focus (Arrow Keys) ---
+    go_up = <Alt>Up
+    go_down = <Alt>Down
+    go_left = <Alt>Left
+    go_right = <Alt>Right
+
+    # [Broadcast] Simultaneous input to all terminals (source commands, Ctrl+C, etc.)
+    broadcast_all = <Alt>a
+    broadcast_off = <Alt>o
+
+    # [Zoom] Toggle fullscreen for the active terminal (Vertical space for logs)
+    toggle_zoom = <Alt>z
+
+    # [Resize] Adjust terminal size (Ctrl+Shift+Arrow Keys)
+    resize_up = <Ctrl><Shift>Up
+    resize_down = <Ctrl><Shift>Down
+    resize_left = <Ctrl><Shift>Left
+    resize_right = <Ctrl><Shift>Right
+
+[profiles]
+    [[default]]
+        login_shell = True
+
+        use_system_font = False
+        font = D2Coding 12
+        title_font = D2Coding 12
+
+        background_color = "#1e1e1e"
+        foreground_color = "#f8fafc"
+        scrollback_infinite = True
+        exit_action = hold
+
+        cursor_shape = ibeam
+        cursor_color = "#f8fafc"
+        cursor_blink = True
+
+        show_titlebar = False
+        title_transmit_bg_color = "#3a3a3a"
+        title_transmit_fg_color = "#f8fafc"
+        title_inactive_bg_color = "#1e1e1e"
+
+[layouts]
+    [[default]]
+        # --- 2x2 Grid Layout ---
+        # Top-level window
+        [[[window0]]]
+            type = Window
+            parent = ""
+            size = 720, 600
+
+        # Step 1: Vertical Split (VPaned)
+        [[[child1]]]
+            type = VPaned
+            parent = window0
+            ratio = 0.5  # [Config] 50% Top, 50% Bottom
+
+        # Step 2-Top: Horizontal Split (HPaned)
+        [[[child2]]]
+            type = HPaned
+            parent = child1
+            ratio = 0.5  # [Config] 50% Left (Main), 50% Right (Sub/Monitoring)
+
+        # Step 3-Bottom: Horizontal Split (HPaned)
+        [[[child3]]]
+            type = HPaned
+            parent = child1
+            ratio = 0.5  # [Config] 50% Left (Log 1), 50% Right (Log 2)
+
+        # 1. Main Workshop (Top Left)
+        [[[terminal_main]]]
+            type = Terminal
+            parent = child2
+            profile = default
+
+        # 2. htop Monitoring (Top Right) -> [Config] Auto-execute
+        [[[terminal_htop]]]
+            type = Terminal
+            parent = child2
+            profile = default
+            command = htop
+
+        # 3. Log Terminal 1 (Bottom Left)
+        [[[terminal_log1]]]
+            type = Terminal
+            parent = child3
+            profile = default
+
+        # 4. Log Terminal 2 (Bottom Right)
+        [[[terminal_log2]]]
+            type = Terminal
+            parent = child3
+            profile = default
