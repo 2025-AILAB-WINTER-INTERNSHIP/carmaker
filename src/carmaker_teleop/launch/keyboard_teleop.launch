@@ -1,11 +1,12 @@
 <launch>
   <arg name="mode" default="carmaker_control"/>
-  <arg name="topic" default="/carmaker/control_signal"/>
+  <arg name="topic" default="/control_signal"/>
   <arg name="rate" default="20.0"/>
   <arg name="max_speed" default="3.0"/>
   <arg name="max_steer" default="0.5"/>
   <arg name="max_pedal" default="0.7"/>
-  <arg name="default_gear" default="2"/>
+  <arg name="max_accel" default="3.0"/>
+  <arg name="default_gear" default="1"/>
   <arg name="speed_step" default="0.2"/>
   <arg name="steer_step" default="0.05"/>
 
@@ -19,6 +20,7 @@
     <param name="max_speed" value="$(arg max_speed)"/>
     <param name="max_steer" value="$(arg max_steer)"/>
     <param name="max_pedal" value="$(arg max_pedal)"/>
+    <param name="max_accel" value="$(arg max_accel)"/>
     <param name="default_gear" value="$(arg default_gear)"/>
     <param name="speed_step" value="$(arg speed_step)"/>
     <param name="steer_step" value="$(arg steer_step)"/>

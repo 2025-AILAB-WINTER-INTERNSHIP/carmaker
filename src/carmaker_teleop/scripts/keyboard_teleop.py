@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import math
 import select
 import sys
 import termios
@@ -15,12 +14,18 @@ HELP = """
 Keyboard Teleop
 ---------------------------
 Moving:
-  w : increase throttle (+x)
-  x : decrease throttle (-x)
+  w : increase speed target (+x)
+  x : decrease speed target (-x)
   a : steer left
   d : steer right
   s : stop (speed=0, steer=0)
   space : emergency brake (speed=0, steer=0)
+
+Gear (carmaker_control mode):
+  r : gear drive (1)
+  n : gear neutral (0)
+  f : gear rear (-1)
+  p : gear parking (-9)
 
 Scale:
   q/z : speed up/down max speed
@@ -33,7 +38,7 @@ CTRL-C to quit
 class KeyboardTeleop(object):
     def __init__(self):
         self.mode = rospy.get_param("~mode", "carmaker_control").strip().lower()
-        self.topic = rospy.get_param("~topic", "/carmaker/control_signal")
+        self.topic = rospy.get_param("~topic", "/control_signal")
         self.rate_hz = float(rospy.get_param("~rate", 20.0))
 
         self.speed_step = float(rospy.get_param("~speed_step", 0.2))
@@ -41,10 +46,12 @@ class KeyboardTeleop(object):
         self.max_speed = float(rospy.get_param("~max_speed", 3.0))
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
         self.max_pedal = float(rospy.get_param("~max_pedal", 0.7))
-        self.default_gear = int(rospy.get_param("~default_gear", 2))
+        self.max_accel = float(rospy.get_param("~max_accel", 3.0))
+        self.default_gear = int(rospy.get_param("~default_gear", 1))
 
         self.speed = 0.0
         self.steer = 0.0
+        self.gear = self.default_gear
 
         if self.mode == "ackermann":
             self.pub = rospy.Publisher(self.topic, AckermannDriveStamped, queue_size=10)
@@ -80,7 +87,7 @@ class KeyboardTeleop(object):
             msg = Control_Signal()
             msg.header.stamp = rospy.Time.now()
             msg.steerangle = self.steer
-            msg.gear = self.default_gear
+            msg.gear = self.gear
 
             if self.speed >= 0.0:
                 msg.gas = self._clamp(abs(self.speed) / max(0.01, self.max_speed), 0.0, self.max_pedal)
@@ -88,6 +95,7 @@ class KeyboardTeleop(object):
             else:
                 msg.gas = 0.0
                 msg.brake = self._clamp(abs(self.speed) / max(0.01, self.max_speed), 0.0, self.max_pedal)
+            msg.accel = self._clamp(self.speed, -self.max_accel, self.max_accel)
 
             self.pub.publish(msg)
         else:
@@ -113,6 +121,18 @@ class KeyboardTeleop(object):
                 elif key in ("s", " "):
                     self.speed = 0.0
                     self.steer = 0.0
+                elif key == "r":
+                    self.gear = 1
+                    rospy.loginfo("gear=1 (drive)")
+                elif key == "n":
+                    self.gear = 0
+                    rospy.loginfo("gear=0 (neutral)")
+                elif key == "f":
+                    self.gear = -1
+                    rospy.loginfo("gear=-1 (rear)")
+                elif key == "p":
+                    self.gear = -9
+                    rospy.loginfo("gear=-9 (parking)")
                 elif key == "q":
                     self.max_speed = max(0.1, self.max_speed * 1.1)
                     rospy.loginfo("max_speed=%.3f", self.max_speed)
