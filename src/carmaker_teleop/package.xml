@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>carmaker_teleop</name>
+  <version>0.1.0</version>
+  <description>Keyboard teleoperation package for ROS1 CarMaker integration.</description>
+
+  <maintainer email="admin@example.com">admin</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>rospy</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>ackermann_msgs</build_depend>
+  <build_depend>carmaker_msgs</build_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>carmaker_msgs</exec_depend>
+
+  <export/>
+</package>
