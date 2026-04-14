@@ -4,7 +4,7 @@ Keyboard teleoperation package for CarMaker manual driving.
 
 ## Publish modes
 
-- `mode:=carmaker_control` publishes `carmaker_msgs/carmaker/control_signal` (default)
+- `mode:=carmaker_control` publishes `carmaker_msgs/Control_Signal` (default)
 - `mode:=twist` publishes `geometry_msgs/Twist`
 - `mode:=ackermann` publishes `ackermann_msgs/AckermannDriveStamped`
 
@@ -16,7 +16,7 @@ cd /workspace
 cbp carmaker_teleop
 source /workspace/install/setup.bash
 
-# default: /carmaker/control_signal as carmaker_msgs/carmaker/control_signal
+# default: /carmaker/control_signal as carmaker_msgs/Control_Signal
 roslaunch carmaker_teleop keyboard_teleop.launch
 ```
 
@@ -26,7 +26,8 @@ roslaunch carmaker_teleop keyboard_teleop.launch
 roslaunch carmaker_teleop keyboard_teleop.launch \
   mode:=carmaker_control \
   topic:=/carmaker/control_signal \
-  default_gear:=1
+  default_gear:=2 \
+  drive_gear:=2 neutral_gear:=1 reverse_gear:=0 park_gear:=-9
 ```
 
 ## If CarMaker expects Ackermann topic
@@ -35,13 +36,15 @@ roslaunch carmaker_teleop keyboard_teleop.launch \
 roslaunch carmaker_teleop keyboard_teleop.launch mode:=ackermann topic:=/ackermann_cmd
 ```
 
-## Key mapping
+## Key mapping (Game-like)
 
-- `w/x`: speed up/down
+- `w`: forward (auto drive gear + gas)
+- `s`: reverse (auto rear gear + gas)
+- `x`: coast (release gas/brake)
 - `a/d`: steer left/right
-- `s` or `space`: full stop
-- `r/n/f/p`: gear drive/neutral/rear/parking (1/0/-1/-9)
-- `q/z`: increase/decrease max speed
+- `space`: brake
+- `r/n/f/p`: gear drive/neutral/rear/parking
+- `q/z`: increase/decrease max pedal
 - `e/c`: increase/decrease max steer angle
 - `Ctrl+C`: quit
 
@@ -53,6 +56,13 @@ roslaunch carmaker_teleop keyboard_teleop.launch mode:=ackermann topic:=/ackerma
 - `max_steer` (default: `0.5`)
 - `max_pedal` (default: `0.7`)
 - `max_accel` (default: `3.0`)
-- `default_gear` (default: `1`)
+- `default_gear` (default: `2`)
+- `drive_gear` (default: `2`)
+- `neutral_gear` (default: `1`)
+- `reverse_gear` (default: `0`)
+- `park_gear` (default: `-9`)
+- `gas_step` (default: `0.08`)
+- `brake_step` (default: `0.10`)
+- `steer_return_rate` (default: `0.15`)
 - `speed_step` (default: `0.2`)
 - `steer_step` (default: `0.05`)
