@@ -4,7 +4,7 @@ Keyboard teleoperation package for CarMaker manual driving.
 
 ## Publish modes
 
-- `mode:=carmaker_control` publishes `carmaker_msgs/Control_Signal` (default)
+- `mode:=carmaker_control` publishes `carmaker_msgs/carmaker/control_signal` (default)
 - `mode:=twist` publishes `geometry_msgs/Twist`
 - `mode:=ackermann` publishes `ackermann_msgs/AckermannDriveStamped`
 
@@ -16,7 +16,7 @@ cd /workspace
 cbp carmaker_teleop
 source /workspace/install/setup.bash
 
-# default: /control_signal as carmaker_msgs/Control_Signal
+# default: /carmaker/control_signal as carmaker_msgs/carmaker/control_signal
 roslaunch carmaker_teleop keyboard_teleop.launch
 ```
 
@@ -25,7 +25,7 @@ roslaunch carmaker_teleop keyboard_teleop.launch
 ```bash
 roslaunch carmaker_teleop keyboard_teleop.launch \
   mode:=carmaker_control \
-  topic:=/control_signal \
+  topic:=/carmaker/control_signal \
   default_gear:=1
 ```
 
@@ -47,7 +47,7 @@ roslaunch carmaker_teleop keyboard_teleop.launch mode:=ackermann topic:=/ackerma
 
 ## Useful params
 
-- `topic` (default: `/control_signal`)
+- `topic` (default: `/carmaker/control_signal`)
 - `rate` (default: `20.0`)
 - `max_speed` (default: `3.0`)
 - `max_steer` (default: `0.5`)

@@ -38,7 +38,7 @@ CTRL-C to quit
 class KeyboardTeleop(object):
     def __init__(self):
         self.mode = rospy.get_param("~mode", "carmaker_control").strip().lower()
-        self.topic = rospy.get_param("~topic", "/control_signal")
+        self.topic = rospy.get_param("~topic", "/carmaker/control_signal")
         self.rate_hz = float(rospy.get_param("~rate", 20.0))
 
         self.speed_step = float(rospy.get_param("~speed_step", 0.2))
@@ -66,11 +66,8 @@ class KeyboardTeleop(object):
         rospy.loginfo(HELP)
 
     def _get_key(self):
-        tty.setraw(sys.stdin.fileno())
         rlist, _, _ = select.select([sys.stdin], [], [], 0.05)
-        key = sys.stdin.read(1) if rlist else ""
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.settings)
-        return key
+        return sys.stdin.read(1) if rlist else ""
 
     @staticmethod
     def _clamp(value, vmin, vmax):
@@ -107,6 +104,8 @@ class KeyboardTeleop(object):
     def run(self):
         rate = rospy.Rate(self.rate_hz)
         try:
+            # Keep terminal in raw mode while teleop is running so keystrokes are not echoed.
+            tty.setraw(sys.stdin.fileno())
             while not rospy.is_shutdown():
                 key = self._get_key()
 

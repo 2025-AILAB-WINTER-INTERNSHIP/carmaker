@@ -1,6 +1,6 @@
 <launch>
   <arg name="mode" default="carmaker_control"/>
-  <arg name="topic" default="/control_signal"/>
+  <arg name="topic" default="/carmaker/control_signal"/>
   <arg name="rate" default="20.0"/>
   <arg name="max_speed" default="3.0"/>
   <arg name="max_steer" default="0.5"/>
