@@ -1,13 +1,13 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 import select
 import sys
 import termios
 
 import rospy
-from geometry_msgs.msg import Twist
 from ackermann_msgs.msg import AckermannDriveStamped
-from carmaker_msgs.msg import Control_Signal
+from geometry_msgs.msg import Twist
 
+from carmaker_msgs.msg import Control_Signal
 
 HELP = """
 Keyboard Teleop
@@ -100,7 +100,9 @@ class KeyboardTeleop(object):
             msg.gear = self.gear
             msg.gas = self._clamp(self.gas, 0.0, self.max_pedal)
             msg.brake = self._clamp(self.brake, 0.0, 1.0)
-            msg.accel = self._clamp((msg.gas - msg.brake) * self.max_accel, -self.max_accel, self.max_accel)
+            msg.accel = self._clamp(
+                (msg.gas - msg.brake) * self.max_accel, -self.max_accel, self.max_accel
+            )
 
             self.pub.publish(msg)
         else:
@@ -127,19 +129,31 @@ class KeyboardTeleop(object):
                         if self.gear != self.drive_gear:
                             self.gear = self.drive_gear
                             rospy.loginfo("auto gear=%d (drive)", self.gear)
-                        self.gas = self._clamp(self.gas + self.gas_step, 0.0, self.max_pedal)
+                        self.gas = self._clamp(
+                            self.gas + self.gas_step, 0.0, self.max_pedal
+                        )
                     elif key == "s":
                         if self.gear != self.reverse_gear:
                             self.gear = self.reverse_gear
                             rospy.loginfo("auto gear=%d (rear)", self.gear)
-                        self.gas = self._clamp(self.gas + self.gas_step, 0.0, self.max_pedal)
+                        self.gas = self._clamp(
+                            self.gas + self.gas_step, 0.0, self.max_pedal
+                        )
                     elif key == "x":
                         self.gas = 0.0
                         self.brake = 0.0
                     elif key == "a":
-                        self.steer = self._clamp(self.steer + self.steer_step, -self.max_steer, self.max_steer)
+                        self.steer = self._clamp(
+                            self.steer + self.steer_step,
+                            -self.max_steer,
+                            self.max_steer,
+                        )
                     elif key == "d":
-                        self.steer = self._clamp(self.steer - self.steer_step, -self.max_steer, self.max_steer)
+                        self.steer = self._clamp(
+                            self.steer - self.steer_step,
+                            -self.max_steer,
+                            self.max_steer,
+                        )
                     elif key == " ":
                         self.gas = 0.0
                         self.brake = self._clamp(self.brake + self.brake_step, 0.0, 1.0)
@@ -168,23 +182,43 @@ class KeyboardTeleop(object):
                         rospy.loginfo("max_steer=%.3f", self.max_steer)
                     elif key == "c":
                         self.max_steer = max(0.01, self.max_steer * 0.9)
-                        self.steer = self._clamp(self.steer, -self.max_steer, self.max_steer)
+                        self.steer = self._clamp(
+                            self.steer, -self.max_steer, self.max_steer
+                        )
                         rospy.loginfo("max_steer=%.3f", self.max_steer)
                     elif key == "\x03":
                         break
 
                     # Natural steering return when A/D is not pressed.
                     if key not in ("a", "d"):
-                        self.steer *= (1.0 - self._clamp(self.steer_return_rate, 0.0, 1.0))
+                        self.steer *= 1.0 - self._clamp(
+                            self.steer_return_rate, 0.0, 1.0
+                        )
                 else:
                     if key == "w":
-                        self.speed = self._clamp(self.speed + self.speed_step, -self.max_speed, self.max_speed)
+                        self.speed = self._clamp(
+                            self.speed + self.speed_step,
+                            -self.max_speed,
+                            self.max_speed,
+                        )
                     elif key == "x":
-                        self.speed = self._clamp(self.speed - self.speed_step, -self.max_speed, self.max_speed)
+                        self.speed = self._clamp(
+                            self.speed - self.speed_step,
+                            -self.max_speed,
+                            self.max_speed,
+                        )
                     elif key == "a":
-                        self.steer = self._clamp(self.steer + self.steer_step, -self.max_steer, self.max_steer)
+                        self.steer = self._clamp(
+                            self.steer + self.steer_step,
+                            -self.max_steer,
+                            self.max_steer,
+                        )
                     elif key == "d":
-                        self.steer = self._clamp(self.steer - self.steer_step, -self.max_steer, self.max_steer)
+                        self.steer = self._clamp(
+                            self.steer - self.steer_step,
+                            -self.max_steer,
+                            self.max_steer,
+                        )
                     elif key in ("s", " "):
                         self.speed = 0.0
                         self.steer = 0.0
