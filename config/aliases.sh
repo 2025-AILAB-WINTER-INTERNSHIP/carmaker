@@ -72,7 +72,7 @@ alias cc='cd /docker_dev/config'
 # =============================================================================
 # Python / uv
 # =============================================================================
-alias uvs='uv sync --project /workspace/src'
+alias uvs='uv sync --project /workspace/src --extra ${UV_EXTRA:-cpu}'
 alias uvr='uv run'
 alias uvp='uv pip install'
 alias uvl='uv pip list'
@@ -116,6 +116,9 @@ alias use_nvidia='source /docker_dev/scripts/gpu_setup.sh nvidia && __gpu_status
 alias use_cpu='source /docker_dev/scripts/gpu_setup.sh cpu && __gpu_status_impl'
 
 # =============================================================================
+# One-step Workspace Initialization (uvs + sync_deps + build)
+alias mksync='uvs && sync_deps --rosdep && { (command -v colcon >/dev/null && cb) || ([ -f /workspace/src/CMakeLists.txt ] && mbuild) || echo -e "${YELLOW}[mksync] No ROS or CMake project detected, skipping build step.${NC}"; }'
+
 # Help / Documentation
 # =============================================================================
 function __print_help() {
@@ -123,6 +126,7 @@ function __print_help() {
     echo -e ""
     echo -e "  ${BLUE}[ROS & Build]${NC}"
     echo -e "    ${GREEN}cb${NC} / ${GREEN}cbm${NC} / ${GREEN}cbr${NC}  : colcon build (standard / metas / release)"
+    echo -e "    ${GREEN}mksync${NC}           : One-step initialization (uvs + sync_deps + cb)"
     echo -e "    ${GREEN}s${NC} / ${GREEN}sb${NC}           : Source workspace / Source bashrc"
     echo -e "    ${GREEN}rt${NC} / ${GREEN}rn${NC} / ${GREEN}rl${NC}     : ros2 topic / node / launch list"
     echo -e "    ${GREEN}cw${NC} / ${GREEN}cs${NC}           : cd to /workspace or /workspace/src"
