@@ -6,14 +6,21 @@
   <arg name="max_steer" default="0.5"/>
   <arg name="max_pedal" default="0.7"/>
   <arg name="max_accel" default="3.0"/>
-  <arg name="default_gear" default="2"/>
-  <arg name="drive_gear" default="2"/>
-  <arg name="neutral_gear" default="1"/>
-  <arg name="reverse_gear" default="0"/>
+  <arg name="default_gear" default="1"/>
+  <arg name="drive_gear" default="1"/>
+  <arg name="neutral_gear" default="0"/>
+  <arg name="reverse_gear" default="-1"/>
   <arg name="park_gear" default="-9"/>
   <arg name="gas_step" default="0.08"/>
   <arg name="brake_step" default="0.10"/>
+  <arg name="gas_decay_step" default="0.06"/>
+  <arg name="brake_decay_step" default="0.08"/>
   <arg name="steer_return_rate" default="0.15"/>
+  <arg name="precision_mode" default="false"/>
+  <arg name="precision_gas_scale" default="0.10"/>
+  <arg name="precision_steer_scale" default="1.60"/>
+  <arg name="precision_steer_return_scale" default="0.50"/>
+  <arg name="precision_max_pedal" default="0.10"/>
   <arg name="speed_step" default="0.2"/>
   <arg name="steer_step" default="0.05"/>
 
@@ -35,7 +42,14 @@
     <param name="park_gear" value="$(arg park_gear)"/>
     <param name="gas_step" value="$(arg gas_step)"/>
     <param name="brake_step" value="$(arg brake_step)"/>
+    <param name="gas_decay_step" value="$(arg gas_decay_step)"/>
+    <param name="brake_decay_step" value="$(arg brake_decay_step)"/>
     <param name="steer_return_rate" value="$(arg steer_return_rate)"/>
+    <param name="precision_mode" value="$(arg precision_mode)"/>
+    <param name="precision_gas_scale" value="$(arg precision_gas_scale)"/>
+    <param name="precision_steer_scale" value="$(arg precision_steer_scale)"/>
+    <param name="precision_steer_return_scale" value="$(arg precision_steer_return_scale)"/>
+    <param name="precision_max_pedal" value="$(arg precision_max_pedal)"/>
     <param name="speed_step" value="$(arg speed_step)"/>
     <param name="steer_step" value="$(arg steer_step)"/>
   </node>
