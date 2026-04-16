@@ -19,12 +19,12 @@ SOURCE_LOG="/docker_dev/scripts/utils_logging.sh"
 if [ -d /opt/ros ]; then
     # --- Build (Unified Colcon) ----------------------------------------------
     # CMAKE_CXX_STANDARD is injected via .env -> docker-compose -> ENV
-    alias cb='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17}'
-    alias cbp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} --packages-select'
+    alias cb='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3'
+    alias cbp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3 --packages-select'
 
     # Release mode (Optimized)
-    alias cbr='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17}'
-    alias cbrp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} --packages-select'
+    alias cbr='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3'
+    alias cbrp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3 --packages-select'
     alias cbt='colcon test'
     alias cbm='colcon build --symlink-install --metas /docker_dev/config/colcon.meta'
     alias s='source /workspace/install/setup.bash'
@@ -117,7 +117,7 @@ alias use_cpu='source /docker_dev/scripts/gpu_setup.sh cpu && __gpu_status_impl'
 
 # =============================================================================
 # One-step Workspace Initialization (uvs + sync_deps + build)
-alias mksync='uvs && sync_deps --rosdep && { (command -v colcon >/dev/null && cb) || ([ -f /workspace/src/CMakeLists.txt ] && mbuild) || echo -e "${YELLOW}[mksync] No ROS or CMake project detected, skipping build step.${NC}"; }'
+alias mksync='uvs && sync_deps --rosdep && cb && s'
 
 # Help / Documentation
 # =============================================================================
@@ -125,8 +125,8 @@ function __print_help() {
     print_banner GUIDE
     echo -e ""
     echo -e "  ${BLUE}[ROS & Build]${NC}"
-    echo -e "    ${GREEN}cb${NC} / ${GREEN}cbm${NC} / ${GREEN}cbr${NC}  : colcon build (standard / metas / release)"
     echo -e "    ${GREEN}mksync${NC}           : One-step initialization (uvs + sync_deps + cb)"
+    echo -e "    ${GREEN}cb${NC} / ${GREEN}cbm${NC} / ${GREEN}cbr${NC}  : colcon build (standard / metas / release)"
     echo -e "    ${GREEN}s${NC} / ${GREEN}sb${NC}           : Source workspace / Source bashrc"
     echo -e "    ${GREEN}rt${NC} / ${GREEN}rn${NC} / ${GREEN}rl${NC}     : ros2 topic / node / launch list"
     echo -e "    ${GREEN}cw${NC} / ${GREEN}cs${NC}           : cd to /workspace or /workspace/src"
