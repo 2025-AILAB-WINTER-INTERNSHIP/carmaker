@@ -43,9 +43,9 @@ class KeyboardTeleop(object):
 
         # Common limits
         self.speed_step = float(rospy.get_param("~speed_step", 0.2))
-        self.steer_step = float(rospy.get_param("~steer_step", 0.05))
+        self.steer_step = float(rospy.get_param("~steer_step", 0.08))
         self.max_speed = float(rospy.get_param("~max_speed", 3.0))
-        self.max_steer = float(rospy.get_param("~max_steer", 0.5))
+        self.max_steer = float(rospy.get_param("~max_steer", 0.65))
         self.max_pedal = float(rospy.get_param("~max_pedal", 0.7))
         self.max_accel = float(rospy.get_param("~max_accel", 3.0))
         self.default_gear = int(rospy.get_param("~default_gear", 1))
@@ -61,7 +61,7 @@ class KeyboardTeleop(object):
         self.brake_step = float(rospy.get_param("~brake_step", 0.10))
         self.gas_decay_step = float(rospy.get_param("~gas_decay_step", 0.06))
         self.brake_decay_step = float(rospy.get_param("~brake_decay_step", 0.08))
-        self.steer_return_rate = float(rospy.get_param("~steer_return_rate", 0.15))
+        self.steer_return_rate = float(rospy.get_param("~steer_return_rate", 0.10))
         self.precision_gas_scale = float(rospy.get_param("~precision_gas_scale", 0.10))
         self.precision_steer_scale = float(
             rospy.get_param("~precision_steer_scale", 1.60)
@@ -116,7 +116,7 @@ class KeyboardTeleop(object):
             msg.brake = self._clamp(self.brake, 0.0, 1.0)
             direction = -1.0 if msg.gear == self.reverse_gear else 1.0
             msg.accel = self._clamp(
-                (direction * msg.gas - msg.brake) * self.max_accel,
+                direction * (msg.gas - msg.brake) * self.max_accel,
                 -self.max_accel,
                 self.max_accel,
             )
