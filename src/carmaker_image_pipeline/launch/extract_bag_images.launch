@@ -2,6 +2,8 @@
   <arg name="bag" default="/tmp/input.bag"/>
   <arg name="raw_out_dir" default="$(find carmaker_image_pipeline)/data/raw_images"/>
   <arg name="gt_out_dir" default="$(find carmaker_image_pipeline)/data/gt_images"/>
+  <arg name="csv_dir" default="$(find carmaker_image_pipeline)/data"/>
+  <arg name="csv_prefix" default=""/>
   <arg name="gt_topic_regex" default="(image_gt|_gt/.*/image_raw|_gt/image_raw|/gt/|ground_truth|seg)"/>
   <arg name="raw_topic_regex" default="(image_raw|/raw/)"/>
   <arg name="cameras" default="front,left,rear,right"/>
@@ -18,6 +20,8 @@
         args="--bag $(arg bag)
               --raw-out-dir $(arg raw_out_dir)
               --gt-out-dir $(arg gt_out_dir)
+              --csv-dir $(arg csv_dir)
+              --csv-prefix $(arg csv_prefix)
               --gt-topic-regex $(arg gt_topic_regex)
               --raw-topic-regex $(arg raw_topic_regex)
               --cameras $(arg cameras)

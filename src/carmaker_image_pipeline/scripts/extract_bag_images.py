@@ -1,18 +1,17 @@
 #!/usr/bin/python3
 import argparse
+import csv
 import re
 from pathlib import Path
 
 import cv2
 import numpy as np
-import rosbag
-import rospy
-from cv_bridge import CvBridge, CvBridgeError
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = PACKAGE_ROOT / "data"
 DEFAULT_RAW_DIR = DATA_ROOT / "raw_images"
 DEFAULT_GT_DIR = DATA_ROOT / "gt_images"
+DEFAULT_CSV_DIR = DATA_ROOT / "csv"
 
 
 def parse_args():
@@ -73,6 +72,16 @@ def parse_args():
         action="store_true",
         help="Overwrite output files when names collide.",
     )
+    parser.add_argument(
+        "--csv-dir",
+        default=str(DEFAULT_CSV_DIR),
+        help=f"Directory to save extraction CSV manifests (default: {DEFAULT_CSV_DIR}).",
+    )
+    parser.add_argument(
+        "--csv-prefix",
+        default="",
+        help="CSV filename prefix. If empty, bag filename stem is used.",
+    )
     return parser.parse_args()
 
 
@@ -102,7 +111,7 @@ def detect_kind(topic, gt_pattern, raw_pattern):
 def convert_ros_image_to_bgr_or_gray(msg, bridge):
     try:
         cv_img = bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
-    except CvBridgeError:
+    except Exception:
         return None
 
     encoding = (msg.encoding or "").lower()
@@ -122,6 +131,19 @@ def convert_compressed_image(msg):
     if arr.size == 0:
         return None
     return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+
+
+def extract_message_stamp(msg, fallback_time):
+    header = getattr(msg, "header", None)
+    stamp = getattr(header, "stamp", None) if header is not None else None
+    if stamp is not None:
+        try:
+            # Use header timestamp when it looks valid; otherwise fallback to bag time.
+            if stamp.to_sec() > 0.0:
+                return stamp
+        except Exception:
+            pass
+    return fallback_time
 
 
 def select_topics(bag, gt_pattern, raw_pattern, cameras, include_unknown_camera):
@@ -144,13 +166,108 @@ def select_topics(bag, gt_pattern, raw_pattern, cameras, include_unknown_camera)
     return topics
 
 
-def make_output_name(camera, kind, stamp_ns):
+def make_output_name(camera, kind, seq_idx):
     kind_token = "GT" if kind == "gt" else "raw"
-    return f"{camera}_{kind_token}_{stamp_ns}.png"
+    return f"{camera}_{kind_token}_{seq_idx}.png"
+
+
+def write_csv(path, fieldnames, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def build_pair_rows(records):
+    grouped = {}
+    for rec in records:
+        grouped.setdefault((rec["camera"], rec["kind"]), []).append(rec)
+
+    pair_rows = []
+    cameras = sorted({camera for camera, _ in grouped.keys()})
+    for camera in cameras:
+        # Camera-only pairing: pair by per-camera save order (no time-based matching).
+        raw_list = grouped.get((camera, "raw"), [])
+        gt_list = grouped.get((camera, "gt"), [])
+        if not raw_list or not gt_list:
+            continue
+
+        pair_count = min(len(raw_list), len(gt_list))
+        for idx in range(pair_count):
+            raw = raw_list[idx]
+            gt = gt_list[idx]
+            pair_rows.append(
+                {
+                    "camera": camera,
+                    "pair_index": idx,
+                    "raw_topic": raw["topic"],
+                    "gt_topic": gt["topic"],
+                    "raw_path": raw["output_path"],
+                    "gt_path": gt["output_path"],
+                }
+            )
+
+    pair_rows.sort(key=lambda x: (x["camera"], x["pair_index"]))
+    return pair_rows
+
+
+def write_manifest_csvs(csv_dir, csv_prefix, records):
+    common_fields = [
+        "bag",
+        "kind",
+        "camera",
+        "topic",
+        "msg_type",
+        "stamp_ns",
+        "stamp_sec",
+        "height",
+        "width",
+        "output_path",
+    ]
+    all_path = csv_dir / f"{csv_prefix}_images.csv"
+    raw_path = csv_dir / f"{csv_prefix}_raw_images.csv"
+    gt_path = csv_dir / f"{csv_prefix}_gt_images.csv"
+    pair_path = csv_dir / f"{csv_prefix}_raw_gt_pairs.csv"
+
+    raw_rows = [r for r in records if r["kind"] == "raw"]
+    gt_rows = [r for r in records if r["kind"] == "gt"]
+
+    write_csv(all_path, common_fields, records)
+    write_csv(raw_path, common_fields, raw_rows)
+    write_csv(gt_path, common_fields, gt_rows)
+
+    pair_rows = build_pair_rows(records)
+    pair_fields = [
+        "camera",
+        "pair_index",
+        "raw_topic",
+        "gt_topic",
+        "raw_path",
+        "gt_path",
+    ]
+    write_csv(pair_path, pair_fields, pair_rows)
+
+    return {
+        "all": all_path,
+        "raw": raw_path,
+        "gt": gt_path,
+        "pairs": pair_path,
+        "pair_count": len(pair_rows),
+    }
 
 
 def main():
     args = parse_args()
+    try:
+        import rosbag
+        import rospy
+        from cv_bridge import CvBridge
+    except ImportError as exc:
+        raise RuntimeError(
+            "ROS Python dependencies are missing. "
+            "Please source your ROS environment (setup.bash) and install rosbag/cv_bridge."
+        ) from exc
 
     bag_path = Path(args.bag)
     if not bag_path.exists():
@@ -158,8 +275,11 @@ def main():
 
     raw_out_dir = Path(args.raw_out_dir)
     gt_out_dir = Path(args.gt_out_dir)
+    csv_dir = Path(args.csv_dir)
+    csv_prefix = args.csv_prefix.strip() or bag_path.stem
     raw_out_dir.mkdir(parents=True, exist_ok=True)
     gt_out_dir.mkdir(parents=True, exist_ok=True)
+    csv_dir.mkdir(parents=True, exist_ok=True)
 
     cameras = [x.strip() for x in args.cameras.split(",") if x.strip()]
     if not cameras:
@@ -170,8 +290,10 @@ def main():
 
     bridge = CvBridge()
     topic_counts = {}
+    save_counts = {}
     total_saved = 0
     total_skipped = 0
+    saved_records = []
 
     with rosbag.Bag(str(bag_path), "r") as bag:
         selected = select_topics(
@@ -199,7 +321,7 @@ def main():
         for topic, info in selected.items():
             print(f"  - {topic} ({info['msg_type']}, kind={info['kind']}, camera={info['camera']})")
 
-        for topic, msg, t in bag.read_messages(
+        for topic, msg, bag_t in bag.read_messages(
             topics=list(selected.keys()),
             start_time=start_time,
             end_time=end_time,
@@ -219,7 +341,9 @@ def main():
                 continue
 
             out_dir = gt_out_dir if spec["kind"] == "gt" else raw_out_dir
-            out_name = make_output_name(spec["camera"], spec["kind"], t.to_nsec())
+            save_key = (spec["camera"], spec["kind"])
+            seq_idx = save_counts.get(save_key, 0) + 1
+            out_name = make_output_name(spec["camera"], spec["kind"], seq_idx)
             out_path = out_dir / out_name
 
             if (not args.overwrite) and out_path.exists():
@@ -231,12 +355,39 @@ def main():
                 total_skipped += 1
                 continue
 
+            msg_stamp = extract_message_stamp(msg, bag_t)
             topic_counts[topic] = count + 1
+            save_counts[save_key] = seq_idx
             total_saved += 1
+            saved_records.append(
+                {
+                    "bag": str(bag_path),
+                    "kind": spec["kind"],
+                    "camera": spec["camera"],
+                    "topic": topic,
+                    "msg_type": spec["msg_type"],
+                    "stamp_ns": msg_stamp.to_nsec(),
+                    "stamp_sec": round(msg_stamp.to_sec(), 9),
+                    "height": int(image.shape[0]),
+                    "width": int(image.shape[1]),
+                    "output_path": str(out_path),
+                }
+            )
 
     print(f"done. saved={total_saved}, skipped={total_skipped}")
     for topic, count in sorted(topic_counts.items()):
         print(f"  {topic}: {count}")
+
+    if saved_records:
+        manifest = write_manifest_csvs(
+            csv_dir=csv_dir,
+            csv_prefix=csv_prefix,
+            records=saved_records,
+        )
+        print(f"csv(all):   {manifest['all']}")
+        print(f"csv(raw):   {manifest['raw']}")
+        print(f"csv(gt):    {manifest['gt']}")
+        print(f"csv(pairs): {manifest['pairs']} (pairs={manifest['pair_count']})")
 
 
 if __name__ == "__main__":
