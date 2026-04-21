@@ -1,0 +1,35 @@
+<launch>
+  <arg name="input_dir" default="$(find carmaker_image_pipeline)/data/gt_images"/>
+  <arg name="mask_dir" default="$(find carmaker_image_pipeline)/data/mask"/>
+  <arg name="output_dir" default="$(find carmaker_image_pipeline)/data/gt_post_processed"/>
+  <arg name="image_glob" default="*.png"/>
+  <arg name="cameras" default="front,left,rear,right"/>
+  <arg name="json_pattern" default="{camera}_GT.json"/>
+  <arg name="mask_pattern" default="{camera}_mask.png"/>
+  <arg name="refresh_masks" default="false"/>
+  <arg name="label" default="car_body"/>
+  <arg name="suffix" default="_post"/>
+  <arg name="lane_threshold" default="40"/>
+  <arg name="yellow_r_min" default="200"/>
+  <arg name="yellow_g_min" default="100"/>
+  <arg name="yellow_b_max" default="80"/>
+
+  <node pkg="carmaker_image_pipeline"
+        type="auto_mask_gt.py"
+        name="auto_mask_gt"
+        output="screen"
+        args="--input-dir $(arg input_dir)
+              --mask-dir $(arg mask_dir)
+              --output-dir $(arg output_dir)
+              --image-glob $(arg image_glob)
+              --cameras $(arg cameras)
+              --json-pattern $(arg json_pattern)
+              --mask-pattern $(arg mask_pattern)
+              --label $(arg label)
+              --suffix $(arg suffix)
+              --lane-threshold $(arg lane_threshold)
+              --yellow-r-min $(arg yellow_r_min)
+              --yellow-g-min $(arg yellow_g_min)
+              --yellow-b-max $(arg yellow_b_max)
+              $(eval '--refresh-masks' if arg('refresh_masks') == 'true' else '')"/>
+</launch>
