@@ -8,7 +8,6 @@ catkin_package()
 catkin_install_python(PROGRAMS
   scripts/make_mask.py
   scripts/apply_mask.py
-  scripts/auto_mask_gt.py
   scripts/extract_bag_images.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

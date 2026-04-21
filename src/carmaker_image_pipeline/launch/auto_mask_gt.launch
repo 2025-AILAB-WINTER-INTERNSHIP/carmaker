@@ -10,13 +10,12 @@
   <arg name="label" default="car_body"/>
   <arg name="suffix" default="_post"/>
   <arg name="lane_threshold" default="40"/>
-  <arg name="yellow_r_min" default="200"/>
-  <arg name="yellow_g_min" default="100"/>
-  <arg name="yellow_b_max" default="80"/>
+  <arg name="landmark_gray_min" default="160"/>
+  <arg name="landmark_gray_max" default="165"/>
 
   <node pkg="carmaker_image_pipeline"
-        type="auto_mask_gt.py"
-        name="auto_mask_gt"
+        type="apply_mask.py"
+        name="apply_mask"
         output="screen"
         args="--input-dir $(arg input_dir)
               --mask-dir $(arg mask_dir)
@@ -28,8 +27,7 @@
               --label $(arg label)
               --suffix $(arg suffix)
               --lane-threshold $(arg lane_threshold)
-              --yellow-r-min $(arg yellow_r_min)
-              --yellow-g-min $(arg yellow_g_min)
-              --yellow-b-max $(arg yellow_b_max)
+              --landmark-gray-min $(arg landmark_gray_min)
+              --landmark-gray-max $(arg landmark_gray_max)
               $(eval '--refresh-masks' if arg('refresh_masks') == 'true' else '')"/>
 </launch>

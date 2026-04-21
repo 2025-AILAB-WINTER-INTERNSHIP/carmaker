@@ -7,7 +7,7 @@ CarMaker GT 이미지 후처리 파이프라인 패키지입니다.
 1. rosbag에서 raw/GT 이미지를 먼저 추출
 2. 추출된 GT 이미지를 후처리해서 최종 `*_post.png` 생성
 
-즉, **항상 `extract_bag_images.py` -> `auto_mask_gt.py` 순서**로 진행합니다.
+즉, **항상 `extract_bag_images.py` -> `apply_mask.py` 순서**로 진행합니다.
 
 ## 1) 폴더 구조
 
@@ -52,7 +52,7 @@ roslaunch carmaker_image_pipeline extract_bag_images.launch \
 - `--start-offset-sec`, `--duration-sec`: bag 구간 추출
 - `--overwrite`: 기존 파일 덮어쓰기
 
-## 3) 2단계: GT 후처리 (`auto_mask_gt.py`)
+## 3) 2단계: GT 후처리 (`apply_mask.py`)
 
 입력 규칙:
 
@@ -78,13 +78,13 @@ roslaunch carmaker_image_pipeline extract_bag_images.launch \
 기본 실행:
 
 ```bash
-rosrun carmaker_image_pipeline auto_mask_gt.py --suffix _post
+rosrun carmaker_image_pipeline apply_mask.py --suffix _post
 ```
 
 launch 실행:
 
 ```bash
-roslaunch carmaker_image_pipeline auto_mask_gt.launch
+roslaunch carmaker_image_pipeline apply_mask.launch
 ```
 
 주요 옵션:
