@@ -247,7 +247,7 @@ check-host:
 	fi
 
 xauth:
-	@if [ "$(DISPLAY_TYPE)" = "X11" ] && [ -n "$(DISPLAY)" ]; then \
+	@if [ -n "$(DISPLAY)" ]; then \
 		if command -v xauth >/dev/null 2>&1; then \
 			touch $(HOST_XAUTHORITY) 2>/dev/null || true; \
 			xauth nlist $(DISPLAY) | sed -e 's/^..../ffff/' | xauth -f $(HOST_XAUTHORITY) nmerge - 2>/dev/null || true; \
@@ -255,6 +255,8 @@ xauth:
 	fi
 	@if [ -n "$(DISPLAY)" ] && command -v xhost >/dev/null 2>&1; then \
 		xhost +local:root > /dev/null 2>&1 || true; \
+		xhost +si:localuser:root > /dev/null 2>&1 || true; \
+		xhost +si:localuser:$(shell whoami) > /dev/null 2>&1 || true; \
 	fi
 
 check: check-host
