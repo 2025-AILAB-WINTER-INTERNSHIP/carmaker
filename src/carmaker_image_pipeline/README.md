@@ -35,6 +35,18 @@ rosrun carmaker_image_pipeline extract_bag_images.py \
   --cameras front,left,rear,right
 ```
 
+직접 Python 실행:
+
+```bash
+python3 scripts/extract_bag_images.py \
+  --bag /path/to/recorded.bag \
+  --cameras front,left,rear,right
+```
+
+주의:
+
+- `extract_bag_images.py`는 `rosbag`, `rospy`, `cv_bridge` 의존성이 있으므로 ROS 환경에서 실행해야 합니다.
+
 launch 실행:
 
 ```bash
@@ -51,6 +63,15 @@ roslaunch carmaker_image_pipeline extract_bag_images.launch \
 - `--max-frames-per-topic`: 토픽별 최대 저장 프레임
 - `--start-offset-sec`, `--duration-sec`: bag 구간 추출
 - `--overwrite`: 기존 파일 덮어쓰기
+- `--csv-dir`: CSV 저장 폴더 (스크립트 기본: `data/csv`, launch 기본: `data`)
+- `--csv-prefix`: CSV 파일명 prefix (빈 문자열이면 bag 파일명 stem 사용)
+
+CSV 출력 파일:
+
+- `{prefix}_images.csv`: 전체(raw+GT)
+- `{prefix}_raw_images.csv`: raw만
+- `{prefix}_gt_images.csv`: GT만
+- `{prefix}_raw_gt_pairs.csv`: 카메라별 저장 순서 기준 pair 목록
 
 ## 3) 2단계: GT 후처리 (`apply_mask.py`)
 
@@ -72,13 +93,20 @@ roslaunch carmaker_image_pipeline extract_bag_images.launch \
 
 중요:
 
-- 중간 마스킹 이미지 저장 없음
+- 후처리 중간 결과 이미지는 저장하지 않음
+- 단, `data/mask/{camera}_mask.png`가 없으면 JSON에서 생성하여 저장(재사용)함
 - 최종 결과 1장(`*_post.png`)만 저장
 
 기본 실행:
 
 ```bash
 rosrun carmaker_image_pipeline apply_mask.py --suffix _post
+```
+
+직접 Python 실행:
+
+```bash
+python3 scripts/apply_mask.py --suffix _post
 ```
 
 launch 실행:
@@ -96,7 +124,7 @@ roslaunch carmaker_image_pipeline apply_mask.launch
 - `--refresh-masks`: JSON 기준 마스크 재생성
 - `--recursive`: 하위 폴더 재귀 스캔
 - `--lane-threshold`: 차선 분류 임계값
-- `--yellow-r-min`, `--yellow-g-min`, `--yellow-b-max`: 랜드마크 분류 임계값
+- `--landmark-gray-min`, `--landmark-gray-max`: 랜드마크 grayscale 분류 임계값
 
 호환성:
 
@@ -106,15 +134,16 @@ roslaunch carmaker_image_pipeline apply_mask.launch
 
 내부 클래스 ID:
 
+- `2`: lane
+- `1`: yellow landmark
 - `0`: background
-- `1`: lane
-- `2`: yellow landmark
 
 최종 `*_post.png` 값:
 
-- `0` -> background
 - `255` -> lane
 - `127` -> yellow landmark
+- `0` -> background
+
 
 요약:
 
