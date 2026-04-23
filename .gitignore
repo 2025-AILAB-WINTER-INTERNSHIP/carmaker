@@ -3,6 +3,9 @@
 # Universal ignore template for ROS / C++ / Python / Docker
 # =============================================================================
 
+# --- Project Artifacts -------------------------------
+data/
+
 # --- Build Artifacts ---------------------------------
 build/
 install/

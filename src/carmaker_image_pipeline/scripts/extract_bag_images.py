@@ -12,6 +12,8 @@ DATA_ROOT = "/workspace/src/carmaker_image_pipeline/data"
 DEFAULT_RAW_DIR = DATA_ROOT + "/raw_images"
 DEFAULT_GT_DIR = DATA_ROOT + "/gt_images"
 DEFAULT_CSV_DIR = DATA_ROOT + "/csv"
+DEFAULT_GT_POST_DIR = DATA_ROOT + "/gt_post_processed"
+DEFAULT_GT_POST_SUFFIX = "_post"
 
 
 def parse_args():
@@ -81,6 +83,22 @@ def parse_args():
         "--csv-prefix",
         default="",
         help="CSV filename prefix. If empty, bag filename stem is used.",
+    )
+    parser.add_argument(
+        "--gt-post-dir",
+        default=str(DEFAULT_GT_POST_DIR),
+        help=(
+            "Directory used to populate gt_post column "
+            f"(default: {DEFAULT_GT_POST_DIR})."
+        ),
+    )
+    parser.add_argument(
+        "--gt-post-suffix",
+        default=DEFAULT_GT_POST_SUFFIX,
+        help=(
+            "Suffix used to build gt_post filename from GT filename "
+            f"(default: {DEFAULT_GT_POST_SUFFIX})."
+        ),
     )
     return parser.parse_args()
 
@@ -179,81 +197,67 @@ def write_csv(path, fieldnames, rows):
         writer.writerows(rows)
 
 
-def build_pair_rows(records):
+def build_minimal_rows(records, gt_post_dir, gt_post_suffix):
     grouped = {}
     for rec in records:
         grouped.setdefault((rec["camera"], rec["kind"]), []).append(rec)
 
-    pair_rows = []
+    rows = []
+    gt_post_dir = Path(gt_post_dir)
     cameras = sorted({camera for camera, _ in grouped.keys()})
+
     for camera in cameras:
         # Camera-only pairing: pair by per-camera save order (no time-based matching).
         raw_list = grouped.get((camera, "raw"), [])
         gt_list = grouped.get((camera, "gt"), [])
-        if not raw_list or not gt_list:
-            continue
+        pair_count = max(len(raw_list), len(gt_list))
 
-        pair_count = min(len(raw_list), len(gt_list))
         for idx in range(pair_count):
-            raw = raw_list[idx]
-            gt = gt_list[idx]
-            pair_rows.append(
+            raw = raw_list[idx] if idx < len(raw_list) else None
+            gt = gt_list[idx] if idx < len(gt_list) else None
+
+            raw_path = raw["output_path"] if raw is not None else ""
+            gt_path = gt["output_path"] if gt is not None else ""
+            gt_post_path = ""
+            if gt_path:
+                gt_file = Path(gt_path)
+                gt_post_name = f"{gt_file.stem}{gt_post_suffix}{gt_file.suffix}"
+                gt_post_path = str(gt_post_dir / gt_post_name)
+
+            if raw is not None:
+                timestamp = raw["stamp_sec"]
+            elif gt is not None:
+                timestamp = gt["stamp_sec"]
+            else:
+                timestamp = 0.0
+
+            rows.append(
                 {
-                    "camera": camera,
-                    "pair_index": idx,
-                    "raw_topic": raw["topic"],
-                    "gt_topic": gt["topic"],
-                    "raw_path": raw["output_path"],
-                    "gt_path": gt["output_path"],
+                    "timestamp": timestamp,
+                    "kind": camera,
+                    "raw": raw_path,
+                    "gt": gt_path,
+                    "gt_post": gt_post_path,
                 }
             )
 
-    pair_rows.sort(key=lambda x: (x["camera"], x["pair_index"]))
-    return pair_rows
+    rows.sort(key=lambda x: (x["timestamp"], x["kind"]))
+    return rows
 
 
-def write_manifest_csvs(csv_dir, csv_prefix, records):
-    common_fields = [
-        "bag",
-        "kind",
-        "camera",
-        "topic",
-        "msg_type",
-        "stamp_ns",
-        "stamp_sec",
-        "height",
-        "width",
-        "output_path",
-    ]
+def write_manifest_csv(csv_dir, csv_prefix, records, gt_post_dir, gt_post_suffix):
+    fields = ["timestamp", "kind", "raw", "gt", "gt_post"]
     all_path = csv_dir / f"{csv_prefix}_images.csv"
-    raw_path = csv_dir / f"{csv_prefix}_raw_images.csv"
-    gt_path = csv_dir / f"{csv_prefix}_gt_images.csv"
-    pair_path = csv_dir / f"{csv_prefix}_raw_gt_pairs.csv"
-
-    raw_rows = [r for r in records if r["kind"] == "raw"]
-    gt_rows = [r for r in records if r["kind"] == "gt"]
-
-    write_csv(all_path, common_fields, records)
-    write_csv(raw_path, common_fields, raw_rows)
-    write_csv(gt_path, common_fields, gt_rows)
-
-    pair_rows = build_pair_rows(records)
-    pair_fields = [
-        "camera",
-        "pair_index",
-        "raw_topic",
-        "gt_topic",
-        "raw_path",
-        "gt_path",
-    ]
-    write_csv(pair_path, pair_fields, pair_rows)
+    rows = build_minimal_rows(
+        records=records,
+        gt_post_dir=gt_post_dir,
+        gt_post_suffix=gt_post_suffix,
+    )
+    write_csv(all_path, fields, rows)
 
     return {
         "all": all_path,
-        "raw": raw_path,
-        "gt": gt_path,
-        "pairs": pair_path,
-        "pair_count": len(pair_rows),
+        "row_count": len(rows),
     }
 
 
@@ -276,6 +280,8 @@ def main():
     raw_out_dir = Path(args.raw_out_dir)
     gt_out_dir = Path(args.gt_out_dir)
     csv_dir = Path(args.csv_dir)
+    gt_post_dir = Path(args.gt_post_dir)
+    gt_post_suffix = args.gt_post_suffix
     csv_prefix = args.csv_prefix.strip() or bag_path.stem
     raw_out_dir.mkdir(parents=True, exist_ok=True)
     gt_out_dir.mkdir(parents=True, exist_ok=True)
@@ -381,15 +387,15 @@ def main():
         print(f"  {topic}: {count}")
 
     if saved_records:
-        manifest = write_manifest_csvs(
+        manifest = write_manifest_csv(
             csv_dir=csv_dir,
             csv_prefix=csv_prefix,
             records=saved_records,
+            gt_post_dir=gt_post_dir,
+            gt_post_suffix=gt_post_suffix,
         )
         print(f"csv(all):   {manifest['all']}")
-        print(f"csv(raw):   {manifest['raw']}")
-        print(f"csv(gt):    {manifest['gt']}")
-        print(f"csv(pairs): {manifest['pairs']} (pairs={manifest['pair_count']})")
+        print(f"csv(rows):  {manifest['row_count']}")
 
 
 if __name__ == "__main__":

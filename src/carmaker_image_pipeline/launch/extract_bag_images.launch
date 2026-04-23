@@ -4,6 +4,8 @@
   <arg name="gt_out_dir" default="$(find carmaker_image_pipeline)/data/gt_images" />
   <arg name="csv_dir" default="$(find carmaker_image_pipeline)/data" />
   <arg name="csv_prefix" default="" />
+  <arg name="gt_post_dir" default="$(find carmaker_image_pipeline)/data/gt_post_processed" />
+  <arg name="gt_post_suffix" default="_post" />
   <arg name="gt_topic_regex"
     default="(image_gt|_gt/.*/image_raw|_gt/image_raw|/gt/|ground_truth|seg)" />
   <arg name="raw_topic_regex" default="(image_raw|/raw/)" />
@@ -28,6 +30,8 @@
               --gt-out-dir $(arg gt_out_dir)
               --csv-dir $(arg csv_dir)
               --csv-prefix $(arg csv_prefix)
+              --gt-post-dir $(arg gt_post_dir)
+              --gt-post-suffix $(arg gt_post_suffix)
               --gt-topic-regex $(arg gt_topic_regex)
               --raw-topic-regex $(arg raw_topic_regex)
               --cameras $(arg cameras)
