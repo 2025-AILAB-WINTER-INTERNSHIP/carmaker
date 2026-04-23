@@ -7,10 +7,11 @@ import cv2
 import numpy as np
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = PACKAGE_ROOT / "data"
-DEFAULT_MASK_DIR = DATA_ROOT / "mask"
-DEFAULT_GT_DIR = DATA_ROOT / "gt_images"
-DEFAULT_GT_POST_DIR = DATA_ROOT / "gt_post_processed"
+DATA_ROOT = "/workspace/src/carmaker_image_pipeline/data"
+DEFAULT_MASK_DIR = DATA_ROOT + "/mask"
+DEFAULT_GT_DIR = DATA_ROOT + "/gt_images"
+DEFAULT_GT_POST_DIR = DATA_ROOT + "/gt_post_processed"
+
 CLASS_BACKGROUND = 0
 CLASS_LANE_BLACK = 1
 CLASS_LANDMARK_YELLOW = 2
@@ -160,9 +161,8 @@ def classify_post_processed_image(
     class_map = np.zeros(image_gray.shape[:2], dtype=np.uint8)
 
     lane_mask = image_gray <= lane_threshold
-    landmark_mask = (
-        (image_gray >= landmark_gray_min)
-        & (image_gray <= landmark_gray_max)
+    landmark_mask = (image_gray >= landmark_gray_min) & (
+        image_gray <= landmark_gray_max
     )
 
     if car_mask is not None:
@@ -184,7 +184,7 @@ def encode_class_map_to_output(class_map):
     """
     output = np.zeros(class_map.shape, dtype=np.uint8)
     output[class_map == CLASS_LANE_BLACK] = 255
-    output[class_map == CLASS_LANDMARK_YELLOW] = 127
+    output[class_map == CLASS_LANDMARK_YELLOW] = 255
     return output
 
 
@@ -236,7 +236,9 @@ def create_or_load_camera_mask(
         source = "generated_from_json"
 
     if mask.shape[:2] != image_shape[:2]:
-        mask = cv2.resize(mask, (image_shape[1], image_shape[0]), interpolation=cv2.INTER_NEAREST)
+        mask = cv2.resize(
+            mask, (image_shape[1], image_shape[0]), interpolation=cv2.INTER_NEAREST
+        )
 
     return mask, polygons, source
 
@@ -259,7 +261,9 @@ def main():
 
     images = find_images(input_dir, args.image_glob, args.recursive)
     if not images:
-        print(f"No images found: dir={input_dir}, glob={args.image_glob}, recursive={args.recursive}")
+        print(
+            f"No images found: dir={input_dir}, glob={args.image_glob}, recursive={args.recursive}"
+        )
         return
 
     json_cache = {}

@@ -8,10 +8,10 @@ import cv2
 import numpy as np
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = PACKAGE_ROOT / "data"
-DEFAULT_RAW_DIR = DATA_ROOT / "raw_images"
-DEFAULT_GT_DIR = DATA_ROOT / "gt_images"
-DEFAULT_CSV_DIR = DATA_ROOT / "csv"
+DATA_ROOT = "/workspace/src/carmaker_image_pipeline/data"
+DEFAULT_RAW_DIR = DATA_ROOT + "/raw_images"
+DEFAULT_GT_DIR = DATA_ROOT + "/gt_images"
+DEFAULT_CSV_DIR = DATA_ROOT + "/csv"
 
 
 def parse_args():
@@ -319,7 +319,9 @@ def main():
 
         print("Selected topics:")
         for topic, info in selected.items():
-            print(f"  - {topic} ({info['msg_type']}, kind={info['kind']}, camera={info['camera']})")
+            print(
+                f"  - {topic} ({info['msg_type']}, kind={info['kind']}, camera={info['camera']})"
+            )
 
         for topic, msg, bag_t in bag.read_messages(
             topics=list(selected.keys()),
