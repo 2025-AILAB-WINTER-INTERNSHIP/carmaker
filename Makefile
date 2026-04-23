@@ -320,13 +320,13 @@ dev-restart: dev-stop dev
 ROS_FILTER := ^$(COMPOSE_PROJECT_NAME)[-_]ros-(cpu|igpu|nvidia)
 DEV_FILTER := ^$(COMPOSE_PROJECT_NAME)[-_]basic-(cpu|igpu|nvidia)
 
-ros-shell: check
+ros-shell: check xauth
 	$(call EXEC_CONTAINER,$(ROS_FILTER),bash,ROS)
 
 ros-term: check xauth
 	$(call EXEC_DETACHED,$(ROS_FILTER),$(TERMINAL),ROS)
 
-dev-shell: check
+dev-shell: check xauth
 	$(call EXEC_CONTAINER,$(DEV_FILTER),bash,Development)
 
 dev-term: check xauth
