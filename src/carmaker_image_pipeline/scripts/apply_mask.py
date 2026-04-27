@@ -178,13 +178,13 @@ def classify_post_processed_image(
 def encode_class_map_to_output(class_map):
     """
     Map class ids to output grayscale values:
-      class 0 -> 0
-      class 1 -> 255  (lane)
-      class 2 -> 127  (landmark)
+        class 0 -> other
+        class 1 -> lane
+        class 2 -> landmark
     """
     output = np.zeros(class_map.shape, dtype=np.uint8)
-    output[class_map == CLASS_LANE_BLACK] = 255
-    output[class_map == CLASS_LANDMARK_YELLOW] = 255
+    output[class_map == CLASS_LANE_BLACK] = CLASS_LANE_BLACK
+    output[class_map == CLASS_LANDMARK_YELLOW] = CLASS_LANDMARK_YELLOW
     return output
 
 
