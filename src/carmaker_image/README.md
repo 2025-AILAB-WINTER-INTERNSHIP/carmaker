@@ -19,7 +19,7 @@ data/raw_images/scenario_001/      data/gt_images/scenario_001/
   front_raw_1.png  ...               front_GT_1.png  ...
 data/csv/
   scenario_001_images.csv
-  batch_manifest.csv
+  manifest.csv
           │
           │  [2단계] GT 이미지 후처리
           │  apply_mask.launch  (--recursive)
@@ -106,10 +106,15 @@ roslaunch carmaker_image extract_bag_images.launch \
 
 | 컬럼 | 설명 |
 |------|------|
-| `timestamp` | 메시지 헤더 타임스탬프 (초, float) |
-| `kind` | 카메라 이름 (예: `front`) |
-| `raw` | 추출된 raw 이미지 절대 경로 |
-| `gt` | 추출된 GT 이미지 절대 경로 |
+| `bag` | 원본 bag 파일명 |
+| `timestamp` | raw/gt 페어의 대표 타임스탬프 (초, float) |
+| `raw_timestamp` | raw 이미지의 실제 타임스탬프 (초, float) |
+| `gt_timestamp` | GT 이미지의 실제 타임스탬프 (초, float) |
+| `raw_stamp_ns` | raw 이미지의 실제 타임스탬프 (ns) |
+| `gt_stamp_ns` | GT 이미지의 실제 타임스탬프 (ns) |
+| `camera` | 카메라 이름 (예: `front`) |
+| `raw` | 추출된 raw 이미지 상대 경로 |
+| `gt` | 추출된 GT 이미지 상대 경로 |
 | `gt_post` | 후처리 결과 예상 경로 (`apply_mask.py` 실행 후 생성됨) |
 
 ### 배치 추출 (`batch_extract.py`)
@@ -170,8 +175,10 @@ data/
 └── csv/
     ├── scenario_001_images.csv
     ├── scenario_002_images.csv
-    └── batch_manifest.csv      ← 전체 bag 통합 CSV
+    └── manifest.csv            ← 전체 bag 통합 CSV
 ```
+
+  `manifest.csv`는 현재 디렉토리의 각 `*_images.csv`를 다시 읽어서 생성합니다. 따라서 일부 bag가 이번 실행에서 `SKIP`되더라도, 기존 per-bag CSV가 남아 있으면 통합 매니페스트에 자동으로 포함됩니다.
 
 ---
 

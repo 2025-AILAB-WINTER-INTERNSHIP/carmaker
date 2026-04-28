@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import csv
 import sys
 import time
 from pathlib import Path
@@ -170,8 +171,38 @@ def make_unique_stem(bag_path, all_bags):
     return f"{bag_path.parent.name}_{stem}"
 
 
+def _read_per_bag_csv_rows(csv_dir):
+    """Read per-bag *_images.csv files and return normalized manifest rows."""
+    rows = []
+    csv_dir = Path(csv_dir)
+    for csv_path in sorted(csv_dir.glob("*_images.csv")):
+        if csv_path.name in {"manifest.csv", "batch_manifest.csv"}:
+            continue
+
+        bag_name = csv_path.stem
+        if bag_name.endswith("_images"):
+            bag_name = bag_name[: -len("_images")]
+
+        with csv_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                row = dict(row)
+                row["bag"] = row.get("bag") or f"{bag_name}.bag"
+                rows.append(row)
+
+    def sort_key(row):
+        try:
+            timestamp = float(row.get("timestamp", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            timestamp = 0.0
+        return (row.get("bag", ""), timestamp, row.get("camera", ""))
+
+    rows.sort(key=sort_key)
+    return rows
+
+
 def write_batch_manifest(csv_dir, all_records, gt_out_dir, gt_post_dir, gt_post_suffix):
-    """Merge all per-bag records into a single batch_manifest.csv.
+    """Merge all per-bag records into a single manifest.csv.
 
     Args:
         csv_dir: Directory to write the manifest CSV.
@@ -180,8 +211,6 @@ def write_batch_manifest(csv_dir, all_records, gt_out_dir, gt_post_dir, gt_post_
         gt_post_dir: Base directory for post-processed GT images.
         gt_post_suffix: Suffix appended to post-processed GT filenames.
     """
-    if not all_records:
-        return None
     fields = [
         "bag",
         "timestamp",
@@ -194,31 +223,40 @@ def write_batch_manifest(csv_dir, all_records, gt_out_dir, gt_post_dir, gt_post_
         "gt",
         "gt_post",
     ]
-    # Build rows per bag to avoid cross-bag timestamp collision.
-    # If multiple bags share the same timestamp values, pairing over all_records
-    # at once would collapse rows unexpectedly.
-    rows = []
-    records_by_bag = {}
-    for rec in all_records:
-        bag_name = rec.get("bag", "")
-        records_by_bag.setdefault(bag_name, []).append(rec)
+    rows = _read_per_bag_csv_rows(csv_dir)
 
-    for bag_name in sorted(records_by_bag.keys()):
-        bag_rows = build_minimal_rows(
-            records_by_bag[bag_name],
-            gt_out_dir,
-            gt_post_dir,
-            gt_post_suffix,
-            match_on_timestamp_only=True,
+    # Fallback for older runs or empty csv directories: reconstruct from the
+    # in-memory extraction results.
+    if not rows and all_records:
+        records_by_bag = {}
+        for rec in all_records:
+            bag_name = rec.get("bag", "")
+            records_by_bag.setdefault(bag_name, []).append(rec)
+
+        for bag_name in sorted(records_by_bag.keys()):
+            bag_rows = build_minimal_rows(
+                records_by_bag[bag_name],
+                gt_out_dir,
+                gt_post_dir,
+                gt_post_suffix,
+                match_on_timestamp_only=True,
+            )
+            for row in bag_rows:
+                row["bag"] = bag_name
+            rows.extend(bag_rows)
+
+        rows.sort(
+            key=lambda x: (
+                x.get("bag", ""),
+                x.get("timestamp", 0.0),
+                x.get("camera", ""),
+            )
         )
-        for row in bag_rows:
-            row["bag"] = bag_name
-        rows.extend(bag_rows)
 
-    rows.sort(
-        key=lambda x: (x.get("bag", ""), x.get("timestamp", 0.0), x.get("camera", ""))
-    )
-    path = Path(csv_dir) / "batch_manifest.csv"
+    if not rows:
+        return None
+
+    path = Path(csv_dir) / "manifest.csv"
     write_csv(path, fields, rows)
     return path
 

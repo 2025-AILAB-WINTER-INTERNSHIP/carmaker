@@ -315,6 +315,7 @@ def write_manifest_csv(
     csv_dir, csv_prefix, records, gt_out_dir, gt_post_dir, gt_post_suffix
 ):
     fields = [
+        "bag",
         "timestamp",
         "raw_timestamp",
         "gt_timestamp",
@@ -330,6 +331,9 @@ def write_manifest_csv(
     rows = build_minimal_rows(
         records, gt_out_dir, gt_post_dir, gt_post_suffix, match_on_timestamp_only=True
     )
+    bag_name = records[0]["bag"] if records else csv_prefix
+    for row in rows:
+        row["bag"] = bag_name
     write_csv(path, fields, rows)
     return {"all": path, "row_count": len(rows)}
 
