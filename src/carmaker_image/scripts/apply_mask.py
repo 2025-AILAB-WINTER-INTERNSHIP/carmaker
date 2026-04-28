@@ -19,8 +19,10 @@
     # 재귀 탐색 (batch_extract 이후)
     python3 apply_mask.py --suffix _post --recursive
 """
+
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import cv2
@@ -37,11 +39,30 @@ CLASS_LANE_BLACK = 1
 CLASS_LANDMARK_YELLOW = 2
 
 
-# ---------------------------------------------------------------------------
-# Argument parsing
-# ---------------------------------------------------------------------------
+def _get_argv_for_rospy():
+    """Get command-line arguments, accounting for ROS node initialization.
 
-def parse_args():
+    When running as a ROS node, rospy.myargv() strips ROS-specific args.
+    When running standalone, fall back to sys.argv.
+
+    Returns:
+        list: Arguments suitable for argparse (excludes script name)
+    """
+    try:
+        import rospy
+
+        return rospy.myargv()[1:]
+    except Exception:
+        return sys.argv[1:]
+
+
+def parse_args(argv=None):
+    """Parse apply_mask arguments.
+
+    Args:
+        argv: Command-line arguments. If None, uses ROS-aware argument detection.
+              Pass explicit list to override (e.g., for testing).
+    """
     parser = argparse.ArgumentParser(
         description=(
             "GT 이미지 후처리 및 카메라 마스크 생성.\n"
@@ -165,12 +186,18 @@ def parse_args():
         action="store_true",
         help="input-dir 하위 폴더를 재귀 탐색 (batch_extract 이후 사용).",
     )
-    return parser.parse_args()
+
+    # Use ROS-aware argv detection if not explicitly provided
+    if argv is None:
+        argv = _get_argv_for_rospy()
+
+    return parser.parse_args(argv)
 
 
 # ---------------------------------------------------------------------------
 # 공통 헬퍼
 # ---------------------------------------------------------------------------
+
 
 def load_json(json_path):
     with json_path.open("r", encoding="utf-8") as f:
@@ -216,6 +243,7 @@ def resolve_image_size(image_path_str, json_data):
 # generate-only 모드
 # ---------------------------------------------------------------------------
 
+
 def run_generate_only(args):
     """마스크 생성만 수행 (구 make_mask.py 대체)."""
     mask_dir = Path(args.mask_dir)
@@ -231,7 +259,11 @@ def run_generate_only(args):
         h, w = resolve_image_size(args.image, data)
         mask, count = create_mask_from_labelme(data, h, w, args.label)
 
-        out_path = Path(args.output) if args.output else mask_dir / f"{json_path.stem}_mask.png"
+        out_path = (
+            Path(args.output)
+            if args.output
+            else mask_dir / f"{json_path.stem}_mask.png"
+        )
         out_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(out_path), mask)
         print(f"[ok] 마스크 저장: {out_path}")
@@ -261,7 +293,9 @@ def run_generate_only(args):
 
         mask_path = mask_dir / mask_pattern.format(camera=camera)
         if mask_path.exists() and not args.refresh_masks:
-            print(f"[skip] 마스크 이미 존재 (--refresh-masks 로 재생성): {mask_path.name}")
+            print(
+                f"[skip] 마스크 이미 존재 (--refresh-masks 로 재생성): {mask_path.name}"
+            )
             skip_count += 1
             continue
 
@@ -291,6 +325,7 @@ def run_generate_only(args):
 # ---------------------------------------------------------------------------
 # 일반 GT 후처리 모드
 # ---------------------------------------------------------------------------
+
 
 def detect_camera(stem_name, cameras):
     name = stem_name.lower()
@@ -350,8 +385,14 @@ def encode_class_map_to_output(class_map):
 
 
 def create_or_load_camera_mask(
-    camera, image_shape, mask_dir, json_pattern, label, mask_pattern,
-    refresh_masks, json_cache,
+    camera,
+    image_shape,
+    mask_dir,
+    json_pattern,
+    label,
+    mask_pattern,
+    refresh_masks,
+    json_cache,
 ):
     mask_path = mask_dir / mask_pattern.format(camera=camera)
     mask = None
@@ -377,7 +418,10 @@ def create_or_load_camera_mask(
             json_cache[cache_key] = load_json(json_path)
 
         mask, polygons = create_mask_from_labelme(
-            json_cache[cache_key], image_shape[0], image_shape[1], label,
+            json_cache[cache_key],
+            image_shape[0],
+            image_shape[1],
+            label,
         )
         if polygons == 0:
             return None, polygons, f"no '{label}' polygon in {json_path.name}"
@@ -387,7 +431,9 @@ def create_or_load_camera_mask(
         source = "generated_from_json"
 
     if mask.shape[:2] != image_shape[:2]:
-        mask = cv2.resize(mask, (image_shape[1], image_shape[0]), interpolation=cv2.INTER_NEAREST)
+        mask = cv2.resize(
+            mask, (image_shape[1], image_shape[0]), interpolation=cv2.INTER_NEAREST
+        )
 
     return mask, polygons, source
 
@@ -410,7 +456,9 @@ def run_gt_processing(args):
     images = find_images(input_dir, args.image_glob, args.recursive)
 
     if not images:
-        print(f"이미지를 찾을 수 없습니다: dir={input_dir}, glob={args.image_glob}, recursive={args.recursive}")
+        print(
+            f"이미지를 찾을 수 없습니다: dir={input_dir}, glob={args.image_glob}, recursive={args.recursive}"
+        )
         return
 
     json_cache = {}
@@ -453,7 +501,8 @@ def run_gt_processing(args):
             mask = base_mask
             if mask.shape[:2] != image.shape[:2]:
                 mask = cv2.resize(
-                    mask, (image.shape[1], image.shape[0]),
+                    mask,
+                    (image.shape[1], image.shape[0]),
                     interpolation=cv2.INTER_NEAREST,
                 )
 
@@ -471,7 +520,9 @@ def run_gt_processing(args):
         )
 
         output_name = f"{image_path.stem}{args.suffix}{image_path.suffix}"
-        output_path = output_dir / output_name
+        output_rel_dir = image_path.parent.relative_to(input_dir)
+        output_path = output_dir / output_rel_dir / output_name
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         encoded_output = encode_class_map_to_output(class_map)
         cv2.imwrite(str(output_path), encoded_output)
 
@@ -487,6 +538,7 @@ def run_gt_processing(args):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = parse_args()

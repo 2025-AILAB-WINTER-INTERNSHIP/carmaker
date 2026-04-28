@@ -22,8 +22,8 @@ Usage:
     # Force re-extraction even when output already exists
     python3 batch_extract.py --bag-dirs /path/to/bags --force
 """
+
 import argparse
-import csv
 import sys
 import time
 from pathlib import Path
@@ -45,7 +45,30 @@ from extract_bag_images import (  # noqa: E402
 DEFAULT_BAGS_DIR = DATA_ROOT / "bags"
 
 
+def _get_argv_for_rospy():
+    """Get command-line arguments, accounting for ROS node initialization.
+
+    When running as a ROS node, rospy.myargv() strips ROS-specific args.
+    When running standalone, fall back to sys.argv.
+
+    Returns:
+        list: Arguments suitable for argparse (excludes script name)
+    """
+    try:
+        import rospy
+
+        return rospy.myargv()[1:]
+    except Exception:
+        return sys.argv[1:]
+
+
 def parse_args(argv=None):
+    """Parse batch_extract arguments.
+
+    Args:
+        argv: Command-line arguments. If None, uses ROS-aware argument detection.
+              Pass explicit list to override (e.g., for testing).
+    """
     p = argparse.ArgumentParser(
         description="Batch-extract images from multiple ROS bag files."
     )
@@ -53,29 +76,43 @@ def parse_args(argv=None):
     # --- Bag source (mutually exclusive) ---
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument(
-        "--bag-dirs", nargs="+", type=str,
+        "--bag-dirs",
+        nargs="+",
+        type=str,
         help="Directories containing .bag files.",
     )
     src.add_argument(
-        "--bag-files", nargs="+", type=str,
+        "--bag-files",
+        nargs="+",
+        type=str,
         help="Explicit list of .bag file paths.",
     )
 
     # --- Discovery options ---
     p.add_argument(
-        "--no-recursive", dest="recursive", action="store_false", default=True,
+        "--no-recursive",
+        dest="recursive",
+        action="store_false",
+        default=True,
         help="Do not search subdirectories (default: recursive).",
     )
     p.add_argument(
-        "--pattern", default="*.bag",
+        "--pattern",
+        default="*.bag",
         help="Glob pattern for bag files (default: *.bag).",
     )
 
     # --- Batch behaviour ---
-    p.add_argument("--dry-run", action="store_true",
-                    help="List discovered bags without extracting.")
-    p.add_argument("--force", action="store_true",
-                    help="Re-extract even when output subdirectory exists.")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List discovered bags without extracting.",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-extract even when output subdirectory exists.",
+    )
 
     # --- Output roots ---
     p.add_argument("--raw-out-dir", default=str(DEFAULT_RAW_DIR))
@@ -96,6 +133,10 @@ def parse_args(argv=None):
     p.add_argument("--start-offset-sec", type=float, default=0.0)
     p.add_argument("--duration-sec", type=float, default=0.0)
     p.add_argument("--overwrite", action="store_true")
+
+    # Use ROS-aware argv detection if not explicitly provided
+    if argv is None:
+        argv = _get_argv_for_rospy()
 
     return p.parse_args(argv)
 
@@ -201,7 +242,7 @@ def main():
             gt_exists = gt_sub.exists() and any(gt_sub.iterdir())
             if raw_exists or gt_exists:
                 print(f"[{i}/{total}] SKIP (already exists): {bag.name}")
-                print(f"         Use --force to re-extract.\n")
+                print("         Use --force to re-extract.\n")
                 summary.append({"bag": bag.name, "status": "skipped"})
                 continue
 
@@ -226,10 +267,14 @@ def main():
                 log_prefix=prefix,
             )
             all_records.extend(result["records"])
-            summary.append({
-                "bag": bag.name, "status": "ok",
-                "saved": result["saved"], "skipped": result["skipped"],
-            })
+            summary.append(
+                {
+                    "bag": bag.name,
+                    "status": "ok",
+                    "saved": result["saved"],
+                    "skipped": result["skipped"],
+                }
+            )
         except Exception as exc:
             print(f"{prefix}ERROR processing {bag.name}: {exc}\n")
             summary.append({"bag": bag.name, "status": f"error: {exc}"})
@@ -240,7 +285,8 @@ def main():
 
     # --- Batch manifest ---
     manifest_path = write_batch_manifest(
-        csv_dir, all_records, gt_post_dir, args.gt_post_suffix)
+        csv_dir, all_records, gt_post_dir, args.gt_post_suffix
+    )
 
     # --- Summary ---
     print("=" * 60)

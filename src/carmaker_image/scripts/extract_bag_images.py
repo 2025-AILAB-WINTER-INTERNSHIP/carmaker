@@ -5,6 +5,7 @@ Usage:
     1. CLI:     python3 extract_bag_images.py --bag <path>
     2. Import:  from extract_bag_images import extract_single_bag
 """
+
 import argparse
 import csv
 import re
@@ -23,10 +24,31 @@ DEFAULT_GT_POST_DIR = DATA_ROOT / "gt_post_processed"
 DEFAULT_GT_POST_SUFFIX = "_post"
 
 
+def _get_argv_for_rospy():
+    """Get command-line arguments, accounting for ROS node initialization.
+
+    When running as a ROS node, rospy.myargv() strips ROS-specific args.
+    When running standalone, fall back to sys.argv.
+
+    Returns:
+        list: Arguments suitable for argparse (excludes script name)
+    """
+    try:
+        import rospy
+
+        return rospy.myargv()[1:]
+    except Exception:
+        return sys.argv[1:]
+
+
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(
-        description="Extract raw/GT images from ROS bag."
-    )
+    """Parse extract_bag_images arguments.
+
+    Args:
+        argv: Command-line arguments. If None, uses ROS-aware argument detection.
+              Pass explicit list to override (e.g., for testing).
+    """
+    p = argparse.ArgumentParser(description="Extract raw/GT images from ROS bag.")
     p.add_argument("--bag", required=True, help="Input ROS bag path.")
     p.add_argument("--raw-out-dir", default=str(DEFAULT_RAW_DIR))
     p.add_argument("--gt-out-dir", default=str(DEFAULT_GT_DIR))
@@ -45,6 +67,11 @@ def parse_args(argv=None):
     p.add_argument("--csv-prefix", default="")
     p.add_argument("--gt-post-dir", default=str(DEFAULT_GT_POST_DIR))
     p.add_argument("--gt-post-suffix", default=DEFAULT_GT_POST_SUFFIX)
+
+    # Use ROS-aware argv detection if not explicitly provided
+    if argv is None:
+        argv = _get_argv_for_rospy()
+
     return p.parse_args(argv)
 
 
@@ -114,6 +141,11 @@ def select_topics(bag, gt_pattern, raw_pattern, cameras, include_unknown):
             continue
         if meta.msg_type not in ("sensor_msgs/Image", "sensor_msgs/CompressedImage"):
             continue
+        if meta.msg_type == "sensor_msgs/CompressedImage":
+            sibling_topic = topic[:-11]
+            sibling_meta = topic_info.get(sibling_topic)
+            if sibling_meta and sibling_meta.msg_type == "sensor_msgs/Image":
+                continue
         camera = detect_camera_name(topic, cameras, include_unknown)
         if camera is None:
             continue
@@ -140,7 +172,37 @@ def write_csv(path, fieldnames, rows):
         w.writerows(rows)
 
 
-def build_minimal_rows(records, gt_post_dir, gt_post_suffix):
+def compute_gt_post_path(gt_image_path, gt_out_dir, gt_post_dir, gt_post_suffix):
+    """Compute GT post-processed image path preserving directory structure.
+
+    Args:
+        gt_image_path: Full path to GT image (e.g., /path/to/gt_images/front/image.png)
+        gt_out_dir: Base GT output directory where images were saved
+        gt_post_dir: Base directory for post-processed GT images
+        gt_post_suffix: Suffix to append to filename
+
+    Returns:
+        str: Full path to post-processed image preserving subdirectory structure
+    """
+    if not gt_image_path:
+        return ""
+
+    gt_p = Path(gt_image_path)
+    gt_out_dir = Path(gt_out_dir)
+
+    try:
+        # Get relative path from gt_out_dir (preserves camera/timestamp dirs)
+        relative_path = gt_p.parent.relative_to(gt_out_dir)
+    except ValueError:
+        # If gt_out_dir not in path, use parent dir name
+        relative_path = gt_p.parent.name
+
+    return str(
+        Path(gt_post_dir) / relative_path / f"{gt_p.stem}{gt_post_suffix}{gt_p.suffix}"
+    )
+
+
+def build_minimal_rows(records, gt_out_dir, gt_post_dir, gt_post_suffix):
     grouped = {}
     for rec in records:
         grouped.setdefault((rec["camera"], rec["kind"]), []).append(rec)
@@ -150,7 +212,8 @@ def build_minimal_rows(records, gt_post_dir, gt_post_suffix):
     cameras = sorted({cam for cam, _ in grouped.keys()})
 
     def make_rel(p):
-        if not p: return ""
+        if not p:
+            return ""
         try:
             return str(Path(p).relative_to(DATA_ROOT))
         except ValueError:
@@ -167,20 +230,30 @@ def build_minimal_rows(records, gt_post_dir, gt_post_suffix):
             gt_path = gt["output_path"] if gt else ""
             gt_post_path = ""
             if gt_path:
-                gf = Path(gt_path)
-                gt_post_path = str(gt_post_dir / f"{gf.stem}{gt_post_suffix}{gf.suffix}")
+                gt_post_path = compute_gt_post_path(
+                    gt_path, gt_out_dir, gt_post_dir, gt_post_suffix
+                )
             ts = (raw or gt or {}).get("stamp_sec", 0.0)
-            rows.append({"timestamp": ts, "camera": camera,
-                         "raw": make_rel(raw_path), "gt": make_rel(gt_path), "gt_post": make_rel(gt_post_path)})
+            rows.append(
+                {
+                    "timestamp": ts,
+                    "camera": camera,
+                    "raw": make_rel(raw_path),
+                    "gt": make_rel(gt_path),
+                    "gt_post": make_rel(gt_post_path),
+                }
+            )
 
     rows.sort(key=lambda x: (x["timestamp"], x["camera"]))
     return rows
 
 
-def write_manifest_csv(csv_dir, csv_prefix, records, gt_post_dir, gt_post_suffix):
+def write_manifest_csv(
+    csv_dir, csv_prefix, records, gt_out_dir, gt_post_dir, gt_post_suffix
+):
     fields = ["timestamp", "camera", "raw", "gt", "gt_post"]
     path = csv_dir / f"{csv_prefix}_images.csv"
-    rows = build_minimal_rows(records, gt_post_dir, gt_post_suffix)
+    rows = build_minimal_rows(records, gt_out_dir, gt_post_dir, gt_post_suffix)
     write_csv(path, fields, rows)
     return {"all": path, "row_count": len(rows)}
 
@@ -274,7 +347,9 @@ def extract_single_bag(
         ):
             processed += 1
             if total_msgs > 0 and processed % progress_step == 0:
-                _log(f"  progress: {processed}/{total_msgs} ({processed*100//total_msgs}%)")
+                _log(
+                    f"  progress: {processed}/{total_msgs} ({processed * 100 // total_msgs}%)"
+                )
 
             spec = selected[topic]
             count = topic_counts.get(topic, 0)
@@ -290,7 +365,9 @@ def extract_single_bag(
                 total_skipped += 1
                 continue
 
-            out_dir = gt_out_dir if spec["kind"] == "gt" else raw_out_dir
+            base_out_dir = gt_out_dir if spec["kind"] == "gt" else raw_out_dir
+            out_dir = base_out_dir / spec["camera"]
+            out_dir.mkdir(parents=True, exist_ok=True)
             save_key = (spec["camera"], spec["kind"])
             seq_idx = save_counts.get(save_key, 0) + 1
             out_name = make_output_name(spec["camera"], spec["kind"], seq_idx)
@@ -308,18 +385,20 @@ def extract_single_bag(
             topic_counts[topic] = count + 1
             save_counts[save_key] = seq_idx
             total_saved += 1
-            saved_records.append({
-                "bag": bag_path.name,
-                "kind": spec["kind"],
-                "camera": spec["camera"],
-                "topic": topic,
-                "msg_type": spec["msg_type"],
-                "stamp_ns": msg_stamp.to_nsec(),
-                "stamp_sec": round(msg_stamp.to_sec(), 9),
-                "height": int(image.shape[0]),
-                "width": int(image.shape[1]),
-                "output_path": str(out_path),
-            })
+            saved_records.append(
+                {
+                    "bag": bag_path.name,
+                    "kind": spec["kind"],
+                    "camera": spec["camera"],
+                    "topic": topic,
+                    "msg_type": spec["msg_type"],
+                    "stamp_ns": msg_stamp.to_nsec(),
+                    "stamp_sec": round(msg_stamp.to_sec(), 9),
+                    "height": int(image.shape[0]),
+                    "width": int(image.shape[1]),
+                    "output_path": str(out_path),
+                }
+            )
 
     _log(f"Done. saved={total_saved}, skipped={total_skipped}")
     for t, c in sorted(topic_counts.items()):
@@ -328,11 +407,16 @@ def extract_single_bag(
     manifest = None
     if saved_records:
         manifest = write_manifest_csv(
-            csv_dir, csv_prefix, saved_records, gt_post_dir, gt_post_suffix)
+            csv_dir, csv_prefix, saved_records, gt_out_dir, gt_post_dir, gt_post_suffix
+        )
         _log(f"CSV: {manifest['all']}  ({manifest['row_count']} rows)")
 
-    return {"saved": total_saved, "skipped": total_skipped,
-            "records": saved_records, "manifest": manifest}
+    return {
+        "saved": total_saved,
+        "skipped": total_skipped,
+        "records": saved_records,
+        "manifest": manifest,
+    }
 
 
 def main():

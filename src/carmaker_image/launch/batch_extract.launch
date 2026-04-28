@@ -1,7 +1,7 @@
 <launch>
   <!-- ===== Bag source ===== -->
   <arg name="bag_dirs"
-    default="$(find carmaker_image)/data/bags"
+    default="$(optenv CARMAKER_IMAGE_BAGS_DIR /workspace/src/carmaker_image/data/bags)"
     doc="Space-separated directories containing .bag files." />
   <arg name="recursive" default="true" />
   <arg name="pattern" default="*.bag" />
@@ -9,10 +9,14 @@
   <arg name="force" default="false" />
 
   <!-- ===== Output dirs ===== -->
-  <arg name="raw_out_dir" default="$(find carmaker_image)/data/raw_images" />
-  <arg name="gt_out_dir" default="$(find carmaker_image)/data/gt_images" />
-  <arg name="csv_dir" default="$(find carmaker_image)/data/csv" />
-  <arg name="gt_post_dir" default="$(find carmaker_image)/data/gt_post_processed" />
+  <arg name="raw_out_dir"
+    default="$(optenv CARMAKER_IMAGE_RAW_OUT_DIR /workspace/src/carmaker_image/data/raw_images)" />
+  <arg name="gt_out_dir"
+    default="$(optenv CARMAKER_IMAGE_GT_OUT_DIR /workspace/src/carmaker_image/data/gt_images)" />
+  <arg name="csv_dir"
+    default="$(optenv CARMAKER_IMAGE_CSV_DIR /workspace/src/carmaker_image/data/csv)" />
+  <arg name="gt_post_dir"
+    default="$(optenv CARMAKER_IMAGE_GT_POST_DIR /workspace/src/carmaker_image/data/gt_post_processed)" />
   <arg name="gt_post_suffix" default="_post" />
 
   <!-- ===== Extract options ===== -->

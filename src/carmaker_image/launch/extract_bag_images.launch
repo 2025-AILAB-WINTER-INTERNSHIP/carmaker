@@ -1,44 +1,66 @@
 <launch>
+  <!-- ===== Input ===== -->
   <arg name="bag" default="/tmp/input.bag" />
-  <arg name="raw_out_dir" default="$(find carmaker_image)/data/raw_images" />
-  <arg name="gt_out_dir" default="$(find carmaker_image)/data/gt_images" />
-  <arg name="csv_dir" default="$(find carmaker_image)/data/csv" />
-  <arg name="csv_prefix" default="" />
-  <arg name="gt_post_dir" default="$(find carmaker_image)/data/gt_post_processed" />
+
+  <!-- ===== Output directories ===== -->
+  <arg name="raw_out_dir"
+    default="$(optenv CARMAKER_IMAGE_RAW_OUT_DIR /workspace/src/carmaker_image/data/raw_images)" />
+  <arg name="gt_out_dir"
+    default="$(optenv CARMAKER_IMAGE_GT_OUT_DIR /workspace/src/carmaker_image/data/gt_images)" />
+  <arg name="csv_dir"
+    default="$(optenv CARMAKER_IMAGE_CSV_DIR /workspace/src/carmaker_image/data/csv)" />
+  <arg name="gt_post_dir"
+    default="$(optenv CARMAKER_IMAGE_GT_POST_DIR /workspace/src/carmaker_image/data/gt_post_processed)" />
+
+  <!-- ===== Output options ===== -->
+  <arg name="csv_prefix" default="" doc="Optional prefix for CSV manifest (e.g., 'session_01')." />
   <arg name="gt_post_suffix" default="_post" />
+
+  <!-- ===== Topic patterns ===== -->
   <arg name="gt_topic_regex"
     default="(image_gt|_gt/.*/image_raw|_gt/image_raw|/gt/|ground_truth|seg)" />
   <arg name="raw_topic_regex" default="(image_raw|/raw/)" />
+
+  <!-- ===== Camera & extraction settings ===== -->
   <arg name="cameras" default="front,left,rear,right" />
   <arg name="include_unknown_camera" default="false" />
   <arg name="max_frames_per_topic" default="0" />
   <arg name="start_offset_sec" default="0.0" />
   <arg name="duration_sec" default="0.0" />
-  <arg name="overwrite" default="false" />
+  <arg name="overwrite" default="false" doc="Re-extract even if output exists." />
 
+  <!-- ===== Conditional flags (constructed from args above) ===== -->
   <arg if="$(arg include_unknown_camera)" name="include_unknown_camera_flag"
     value="--include-unknown-camera" />
   <arg unless="$(arg include_unknown_camera)" name="include_unknown_camera_flag" value="" />
+
   <arg if="$(arg overwrite)" name="overwrite_flag" value="--overwrite" />
   <arg unless="$(arg overwrite)" name="overwrite_flag" value="" />
+
+  <!-- CSV prefix only passed if non-empty -->
+  <arg if="$(eval arg('csv_prefix') != '')" name="csv_prefix_flag"
+    value="--csv-prefix $(arg csv_prefix)" />
+  <arg unless="$(eval arg('csv_prefix') != '')" name="csv_prefix_flag" value="" />
+
+  <!-- ===== Extract node ===== -->
 
   <node pkg="carmaker_image"
     type="extract_bag_images.py"
     name="extract_bag_images"
     output="screen"
     args="--bag $(arg bag)
-              --raw-out-dir $(arg raw_out_dir)
-              --gt-out-dir $(arg gt_out_dir)
-              --csv-dir $(arg csv_dir)
-              --csv-prefix $(arg csv_prefix)
-              --gt-post-dir $(arg gt_post_dir)
-              --gt-post-suffix $(arg gt_post_suffix)
-              --gt-topic-regex $(arg gt_topic_regex)
-              --raw-topic-regex $(arg raw_topic_regex)
-              --cameras $(arg cameras)
-              --max-frames-per-topic $(arg max_frames_per_topic)
-              --start-offset-sec $(arg start_offset_sec)
-              --duration-sec $(arg duration_sec)
-              $(arg include_unknown_camera_flag)
-              $(arg overwrite_flag)" />
+            --raw-out-dir $(arg raw_out_dir)
+            --gt-out-dir $(arg gt_out_dir)
+            --csv-dir $(arg csv_dir)
+            $(arg csv_prefix_flag)
+            --gt-post-dir $(arg gt_post_dir)
+            --gt-post-suffix $(arg gt_post_suffix)
+            --gt-topic-regex $(arg gt_topic_regex)
+            --raw-topic-regex $(arg raw_topic_regex)
+            --cameras $(arg cameras)
+            --max-frames-per-topic $(arg max_frames_per_topic)
+            --start-offset-sec $(arg start_offset_sec)
+            --duration-sec $(arg duration_sec)
+            $(arg include_unknown_camera_flag)
+            $(arg overwrite_flag)" />
 </launch>

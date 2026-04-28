@@ -156,13 +156,16 @@ python3 scripts/batch_extract.py --bag-dirs data/bags --dry-run
 data/
 ├── raw_images/
 │   ├── scenario_001/       ← bag stem 이름으로 자동 격리
-│   │   ├── front_raw_1.png
-│   │   └── left_raw_1.png
+│   │   ├── front/
+│   │   │   └── front_raw_1.png
+│   │   └── left/
+│   │       └── left_raw_1.png
 │   └── scenario_002/
 │       └── ...
 ├── gt_images/
 │   ├── scenario_001/
-│   │   └── front_GT_1.png
+│   │   └── front/
+│   │       └── front_GT_1.png
 │   └── ...
 └── csv/
     ├── scenario_001_images.csv
@@ -183,7 +186,7 @@ GT 이미지에 차체 마스크를 적용하여 픽셀을 lane / landmark / bac
 # 기본 실행
 roslaunch carmaker_image apply_mask.launch
 
-# 배치 추출 이후: 서브디렉토리 재귀 탐색
+# 배치 추출 이후: 서브디렉토리 재귀 탐색 (기본값)
 roslaunch carmaker_image apply_mask.launch recursive:=true
 
 # 마스크 강제 재생성
@@ -202,7 +205,7 @@ rosrun carmaker_image apply_mask.py --suffix _post --recursive
 | `--output-dir` | `data/gt_post_processed` | 결과 저장 디렉토리 |
 | `--suffix` | `_post` | 출력 파일명 접미사 |
 | `--cameras` | `front,left,rear,right` | 카메라 이름 목록 |
-| `--recursive` | `false` | 하위 디렉토리 재귀 탐색 (배치 추출 후 필수) |
+| `--recursive` | `true` | 하위 디렉토리 재귀 탐색 (배치 추출 후 기본 동작) |
 | `--refresh-masks` | `false` | 기존 마스크 무시하고 JSON에서 강제 재생성 |
 | `--lane-threshold` | `40` | 차선(검정) 감지 임계값 (0~255) |
 | `--landmark-gray-min` | `160` | 랜드마크 grayscale 범위 최솟값 |
