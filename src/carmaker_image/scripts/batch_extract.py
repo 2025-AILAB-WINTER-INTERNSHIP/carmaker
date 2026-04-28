@@ -170,23 +170,54 @@ def make_unique_stem(bag_path, all_bags):
     return f"{bag_path.parent.name}_{stem}"
 
 
-def write_batch_manifest(csv_dir, all_records, gt_post_dir, gt_post_suffix):
-    """Merge all per-bag records into a single batch_manifest.csv."""
+def write_batch_manifest(csv_dir, all_records, gt_out_dir, gt_post_dir, gt_post_suffix):
+    """Merge all per-bag records into a single batch_manifest.csv.
+
+    Args:
+        csv_dir: Directory to write the manifest CSV.
+        all_records: List of per-image record dicts (from extract_single_bag).
+        gt_out_dir: Base GT output directory where GT images were saved for this batch.
+        gt_post_dir: Base directory for post-processed GT images.
+        gt_post_suffix: Suffix appended to post-processed GT filenames.
+    """
     if not all_records:
         return None
-    fields = ["bag", "timestamp", "camera", "raw", "gt", "gt_post"]
-    rows = build_minimal_rows(all_records, gt_post_dir, gt_post_suffix)
-    # Inject bag source into rows.
-    bag_map = {}
+    fields = [
+        "bag",
+        "timestamp",
+        "raw_timestamp",
+        "gt_timestamp",
+        "raw_stamp_ns",
+        "gt_stamp_ns",
+        "camera",
+        "raw",
+        "gt",
+        "gt_post",
+    ]
+    # Build rows per bag to avoid cross-bag timestamp collision.
+    # If multiple bags share the same timestamp values, pairing over all_records
+    # at once would collapse rows unexpectedly.
+    rows = []
+    records_by_bag = {}
     for rec in all_records:
-        try:
-            rel_path = str(Path(rec["output_path"]).relative_to(DATA_ROOT))
-        except ValueError:
-            rel_path = str(rec["output_path"])
-        bag_map[rel_path] = rec["bag"]
-    for row in rows:
-        key = row.get("raw") or row.get("gt") or ""
-        row["bag"] = bag_map.get(key, "")
+        bag_name = rec.get("bag", "")
+        records_by_bag.setdefault(bag_name, []).append(rec)
+
+    for bag_name in sorted(records_by_bag.keys()):
+        bag_rows = build_minimal_rows(
+            records_by_bag[bag_name],
+            gt_out_dir,
+            gt_post_dir,
+            gt_post_suffix,
+            match_on_timestamp_only=True,
+        )
+        for row in bag_rows:
+            row["bag"] = bag_name
+        rows.extend(bag_rows)
+
+    rows.sort(
+        key=lambda x: (x.get("bag", ""), x.get("timestamp", 0.0), x.get("camera", ""))
+    )
     path = Path(csv_dir) / "batch_manifest.csv"
     write_csv(path, fields, rows)
     return path
@@ -285,7 +316,7 @@ def main():
 
     # --- Batch manifest ---
     manifest_path = write_batch_manifest(
-        csv_dir, all_records, gt_post_dir, args.gt_post_suffix
+        csv_dir, all_records, gt_root, gt_post_dir, args.gt_post_suffix
     )
 
     # --- Summary ---

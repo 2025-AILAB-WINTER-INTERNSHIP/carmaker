@@ -114,7 +114,7 @@ def convert_ros_image_to_bgr_or_gray(msg, bridge):
 
 
 def convert_compressed_image(msg):
-    arr = np.frombuffer(msg.data, dtype=np.uint8)
+    arr = np.frombuffer(msg.data, dtype="uint8")
     if arr.size == 0:
         return None
     return cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
@@ -202,7 +202,15 @@ def compute_gt_post_path(gt_image_path, gt_out_dir, gt_post_dir, gt_post_suffix)
     )
 
 
-def build_minimal_rows(records, gt_out_dir, gt_post_dir, gt_post_suffix):
+def build_minimal_rows(
+    records, gt_out_dir, gt_post_dir, gt_post_suffix, match_on_timestamp_only=False
+):
+    """Build CSV rows pairing raw/gt images.
+
+    By default pairs by index (preserves saved order). If
+    ``match_on_timestamp_only`` is True, only produce rows where both raw and
+    gt images exist with exactly the same ``stamp_sec`` value for a camera.
+    """
     grouped = {}
     for rec in records:
         grouped.setdefault((rec["camera"], rec["kind"]), []).append(rec)
@@ -222,27 +230,82 @@ def build_minimal_rows(records, gt_out_dir, gt_post_dir, gt_post_suffix):
     for camera in cameras:
         raw_list = grouped.get((camera, "raw"), [])
         gt_list = grouped.get((camera, "gt"), [])
-        pair_count = max(len(raw_list), len(gt_list))
-        for idx in range(pair_count):
-            raw = raw_list[idx] if idx < len(raw_list) else None
-            gt = gt_list[idx] if idx < len(gt_list) else None
-            raw_path = raw["output_path"] if raw else ""
-            gt_path = gt["output_path"] if gt else ""
-            gt_post_path = ""
-            if gt_path:
-                gt_post_path = compute_gt_post_path(
-                    gt_path, gt_out_dir, gt_post_dir, gt_post_suffix
+
+        if not match_on_timestamp_only:
+            # original index-based pairing
+            pair_count = max(len(raw_list), len(gt_list))
+            for idx in range(pair_count):
+                raw = raw_list[idx] if idx < len(raw_list) else None
+                gt = gt_list[idx] if idx < len(gt_list) else None
+                raw_path = raw["output_path"] if raw else ""
+                gt_path = gt["output_path"] if gt else ""
+                gt_post_path = ""
+                if gt_path:
+                    gt_post_path = compute_gt_post_path(
+                        gt_path, gt_out_dir, gt_post_dir, gt_post_suffix
+                    )
+                ts = (raw or gt or {}).get("stamp_sec", 0.0)
+                raw_stamp_sec = raw.get("stamp_sec", "") if raw else ""
+                gt_stamp_sec = gt.get("stamp_sec", "") if gt else ""
+                raw_stamp_ns = raw.get("stamp_ns", "") if raw else ""
+                gt_stamp_ns = gt.get("stamp_ns", "") if gt else ""
+                rows.append(
+                    {
+                        "timestamp": ts,
+                        "raw_timestamp": raw_stamp_sec,
+                        "gt_timestamp": gt_stamp_sec,
+                        "raw_stamp_ns": raw_stamp_ns,
+                        "gt_stamp_ns": gt_stamp_ns,
+                        "camera": camera,
+                        "raw": make_rel(raw_path),
+                        "gt": make_rel(gt_path),
+                        "gt_post": make_rel(gt_post_path),
+                    }
                 )
-            ts = (raw or gt or {}).get("stamp_sec", 0.0)
-            rows.append(
-                {
-                    "timestamp": ts,
-                    "camera": camera,
-                    "raw": make_rel(raw_path),
-                    "gt": make_rel(gt_path),
-                    "gt_post": make_rel(gt_post_path),
-                }
-            )
+        else:
+            # timestamp-exact matching: only include stamps present in both
+            # lists. stamp_sec is expected to be rounded consistently when
+            # records were written.
+            raw_map = {}
+            for r in raw_list:
+                ts = r.get("stamp_sec")
+                if ts is None:
+                    continue
+                raw_map.setdefault(ts, []).append(r)
+
+            gt_map = {}
+            for g in gt_list:
+                ts = g.get("stamp_sec")
+                if ts is None:
+                    continue
+                gt_map.setdefault(ts, []).append(g)
+
+            common_stamps = sorted(set(raw_map.keys()) & set(gt_map.keys()))
+            for ts in common_stamps:
+                # if multiple records share the same timestamp, take the
+                # first saved one from each side.
+                raw = raw_map[ts][0]
+                gt = gt_map[ts][0]
+                raw_path = raw["output_path"] if raw else ""
+                gt_path = gt["output_path"] if gt else ""
+                gt_post_path = ""
+                if gt_path:
+                    gt_post_path = compute_gt_post_path(
+                        gt_path, gt_out_dir, gt_post_dir, gt_post_suffix
+                    )
+                rows.append(
+                    {
+                        "timestamp": ts,
+                        "raw_timestamp": raw.get("stamp_sec", ""),
+                        "gt_timestamp": gt.get("stamp_sec", ""),
+                        "raw_stamp_ns": raw.get("stamp_ns", ""),
+                        "gt_stamp_ns": gt.get("stamp_ns", ""),
+                        "camera": camera,
+                        "raw": make_rel(raw_path),
+                        "gt": make_rel(gt_path),
+                        "gt_post": make_rel(gt_post_path),
+                    }
+                )
 
     rows.sort(key=lambda x: (x["timestamp"], x["camera"]))
     return rows
@@ -251,9 +314,22 @@ def build_minimal_rows(records, gt_out_dir, gt_post_dir, gt_post_suffix):
 def write_manifest_csv(
     csv_dir, csv_prefix, records, gt_out_dir, gt_post_dir, gt_post_suffix
 ):
-    fields = ["timestamp", "camera", "raw", "gt", "gt_post"]
+    fields = [
+        "timestamp",
+        "raw_timestamp",
+        "gt_timestamp",
+        "raw_stamp_ns",
+        "gt_stamp_ns",
+        "camera",
+        "raw",
+        "gt",
+        "gt_post",
+    ]
     path = csv_dir / f"{csv_prefix}_images.csv"
-    rows = build_minimal_rows(records, gt_out_dir, gt_post_dir, gt_post_suffix)
+    # Only include rows where raw and gt have identical timestamps.
+    rows = build_minimal_rows(
+        records, gt_out_dir, gt_post_dir, gt_post_suffix, match_on_timestamp_only=True
+    )
     write_csv(path, fields, rows)
     return {"all": path, "row_count": len(rows)}
 
@@ -317,7 +393,9 @@ def extract_single_bag(
     total_saved = 0
     total_skipped = 0
     saved_records = []
-    _log = lambda m: print(f"{log_prefix}{m}")
+
+    def _log(message):
+        print(f"{log_prefix}{message}")
 
     with rosbag.Bag(str(bag_path), "r") as bag:
         selected = select_topics(bag, gt_pat, raw_pat, cameras, include_unknown_camera)
@@ -337,23 +415,82 @@ def extract_single_bag(
         for t, info in selected.items():
             _log(f"  - {t} ({info['msg_type']}, {info['kind']}, {info['camera']})")
 
+        # Two-pass approach: first pass identifies (camera, stamp_sec)
+        # pairs that have both raw and gt messages (respecting
+        # max_frames_per_topic). Second pass writes images only for those
+        # exact-timestamp pairs.
         processed = 0
         progress_step = max(1, total_msgs // 20)
 
-        for topic, msg, bag_t in bag.read_messages(
+        seen = {}  # (camera, stamp_sec) -> set of kinds seen
+        topic_counts_first = {}
+
+        for entry in bag.read_messages(
             topics=list(selected.keys()),
             start_time=start_time,
             end_time=end_time,
         ):
+            topic, msg, bag_t = entry[0], entry[1], entry[2]
             processed += 1
             if total_msgs > 0 and processed % progress_step == 0:
                 _log(
-                    f"  progress: {processed}/{total_msgs} ({processed * 100 // total_msgs}%)"
+                    f"  scan progress: {processed}/{total_msgs} ({processed * 100 // total_msgs}%)"
+                )
+
+            spec = selected[topic]
+            count = topic_counts_first.get(topic, 0)
+            if max_frames_per_topic > 0 and count >= max_frames_per_topic:
+                continue
+
+            msg_stamp = extract_message_stamp(msg, bag_t)
+            stamp_sec = round(msg_stamp.to_sec(), 9)
+            key = (spec["camera"], stamp_sec)
+            seen.setdefault(key, set()).add(spec["kind"])
+            topic_counts_first[topic] = count + 1
+
+        # Determine which (camera, stamp) have both raw and gt
+        desired_pairs = {k for k, v in seen.items() if v >= {"raw", "gt"}}
+
+        # Reset for writing pass
+        topic_counts = {}
+        save_counts = {}
+        total_saved = 0
+        total_skipped = 0
+        saved_records = []
+        written_pairs = set()
+
+        # Second pass: write only messages that belong to desired_pairs
+        processed = 0
+        for entry in bag.read_messages(
+            topics=list(selected.keys()),
+            start_time=start_time,
+            end_time=end_time,
+        ):
+            topic, msg, bag_t = entry[0], entry[1], entry[2]
+            processed += 1
+            if total_msgs > 0 and processed % progress_step == 0:
+                _log(
+                    f"  write progress: {processed}/{total_msgs} ({processed * 100 // total_msgs}%)"
                 )
 
             spec = selected[topic]
             count = topic_counts.get(topic, 0)
             if max_frames_per_topic > 0 and count >= max_frames_per_topic:
+                continue
+
+            msg_stamp = extract_message_stamp(msg, bag_t)
+            stamp_sec = round(msg_stamp.to_sec(), 9)
+            pair_key = (spec["camera"], stamp_sec)
+            if pair_key not in desired_pairs:
+                # we only save when both raw and gt exist with same stamp
+                continue
+
+            # Avoid writing duplicate images if multiple messages for same
+            # (camera, kind, stamp) exist: allow each (camera,kind,stamp) once
+            written_key = (spec["camera"], spec["kind"], stamp_sec)
+            if written_key in written_pairs:
+                # mark topic count but skip writing
+                topic_counts[topic] = count + 1
                 continue
 
             if spec["msg_type"] == "sensor_msgs/Image":
@@ -363,6 +500,7 @@ def extract_single_bag(
 
             if image is None:
                 total_skipped += 1
+                topic_counts[topic] = count + 1
                 continue
 
             base_out_dir = gt_out_dir if spec["kind"] == "gt" else raw_out_dir
@@ -375,16 +513,19 @@ def extract_single_bag(
 
             if (not overwrite) and out_path.exists():
                 total_skipped += 1
+                topic_counts[topic] = count + 1
                 continue
 
             if not cv2.imwrite(str(out_path), image):
                 total_skipped += 1
+                topic_counts[topic] = count + 1
                 continue
 
-            msg_stamp = extract_message_stamp(msg, bag_t)
+            # successful write
             topic_counts[topic] = count + 1
             save_counts[save_key] = seq_idx
             total_saved += 1
+            written_pairs.add(written_key)
             saved_records.append(
                 {
                     "bag": bag_path.name,
@@ -393,7 +534,7 @@ def extract_single_bag(
                     "topic": topic,
                     "msg_type": spec["msg_type"],
                     "stamp_ns": msg_stamp.to_nsec(),
-                    "stamp_sec": round(msg_stamp.to_sec(), 9),
+                    "stamp_sec": stamp_sec,
                     "height": int(image.shape[0]),
                     "width": int(image.shape[1]),
                     "output_path": str(out_path),
