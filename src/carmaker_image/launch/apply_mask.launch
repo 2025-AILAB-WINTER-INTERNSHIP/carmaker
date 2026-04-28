@@ -1,0 +1,46 @@
+<launch>
+  <!-- ===== 공통 경로 ===== -->
+  <arg name="input_dir"  default="$(find carmaker_image)/data/gt_images" />
+  <arg name="mask_dir"   default="$(find carmaker_image)/data/mask" />
+  <arg name="output_dir" default="$(find carmaker_image)/data/gt_post_processed" />
+
+  <!-- ===== 처리 옵션 ===== -->
+  <arg name="image_glob"         default="*.png" />
+  <arg name="cameras"            default="front,left,rear,right" />
+  <arg name="json_pattern"       default="{camera}_GT.json" />
+  <arg name="mask_pattern"       default="{camera}_mask.png" />
+  <arg name="label"              default="car_body" />
+  <arg name="suffix"             default="_post" />
+  <arg name="lane_threshold"     default="40" />
+  <arg name="landmark_gray_min"  default="160" />
+  <arg name="landmark_gray_max"  default="165" />
+
+  <!-- ===== Boolean 플래그 ===== -->
+  <arg name="refresh_masks" default="false" />
+  <arg name="recursive"     default="false" />
+
+  <arg if="$(arg refresh_masks)" name="refresh_masks_flag" value="--refresh-masks" />
+  <arg unless="$(arg refresh_masks)" name="refresh_masks_flag" value="" />
+
+  <arg if="$(arg recursive)" name="recursive_flag" value="--recursive" />
+  <arg unless="$(arg recursive)" name="recursive_flag" value="" />
+
+  <node pkg="carmaker_image"
+        type="apply_mask.py"
+        name="apply_mask"
+        output="screen"
+        args="--input-dir $(arg input_dir)
+              --mask-dir $(arg mask_dir)
+              --output-dir $(arg output_dir)
+              --image-glob $(arg image_glob)
+              --cameras $(arg cameras)
+              --json-pattern $(arg json_pattern)
+              --mask-pattern $(arg mask_pattern)
+              --label $(arg label)
+              --suffix $(arg suffix)
+              --lane-threshold $(arg lane_threshold)
+              --landmark-gray-min $(arg landmark_gray_min)
+              --landmark-gray-max $(arg landmark_gray_max)
+              $(arg refresh_masks_flag)
+              $(arg recursive_flag)" />
+</launch>

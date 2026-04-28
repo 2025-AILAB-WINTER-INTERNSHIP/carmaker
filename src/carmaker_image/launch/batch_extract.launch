@@ -1,0 +1,64 @@
+<launch>
+  <!-- ===== Bag source ===== -->
+  <arg name="bag_dirs"
+    default="$(find carmaker_image)/data/bags"
+    doc="Space-separated directories containing .bag files." />
+  <arg name="recursive" default="true" />
+  <arg name="pattern" default="*.bag" />
+  <arg name="dry_run" default="false" />
+  <arg name="force" default="false" />
+
+  <!-- ===== Output dirs ===== -->
+  <arg name="raw_out_dir" default="$(find carmaker_image)/data/raw_images" />
+  <arg name="gt_out_dir" default="$(find carmaker_image)/data/gt_images" />
+  <arg name="csv_dir" default="$(find carmaker_image)/data/csv" />
+  <arg name="gt_post_dir" default="$(find carmaker_image)/data/gt_post_processed" />
+  <arg name="gt_post_suffix" default="_post" />
+
+  <!-- ===== Extract options ===== -->
+  <arg name="gt_topic_regex"
+    default="(image_gt|_gt/.*/image_raw|_gt/image_raw|/gt/|ground_truth|seg)" />
+  <arg name="raw_topic_regex" default="(image_raw|/raw/)" />
+  <arg name="cameras" default="front,left,rear,right" />
+  <arg name="include_unknown_camera" default="false" />
+  <arg name="max_frames_per_topic" default="0" />
+  <arg name="start_offset_sec" default="0.0" />
+  <arg name="duration_sec" default="0.0" />
+  <arg name="overwrite" default="false" />
+
+  <!-- ===== Boolean flags ===== -->
+  <arg if="$(arg recursive)" name="recursive_flag" value="" />
+  <arg unless="$(arg recursive)" name="recursive_flag" value="--no-recursive" />
+  <arg if="$(arg dry_run)" name="dry_run_flag" value="--dry-run" />
+  <arg unless="$(arg dry_run)" name="dry_run_flag" value="" />
+  <arg if="$(arg force)" name="force_flag" value="--force" />
+  <arg unless="$(arg force)" name="force_flag" value="" />
+  <arg if="$(arg include_unknown_camera)" name="include_unknown_camera_flag"
+    value="--include-unknown-camera" />
+  <arg unless="$(arg include_unknown_camera)" name="include_unknown_camera_flag" value="" />
+  <arg if="$(arg overwrite)" name="overwrite_flag" value="--overwrite" />
+  <arg unless="$(arg overwrite)" name="overwrite_flag" value="" />
+
+  <node pkg="carmaker_image"
+    type="batch_extract.py"
+    name="batch_extract"
+    output="screen"
+    args="--bag-dirs $(arg bag_dirs)
+              --pattern $(arg pattern)
+              --raw-out-dir $(arg raw_out_dir)
+              --gt-out-dir $(arg gt_out_dir)
+              --csv-dir $(arg csv_dir)
+              --gt-post-dir $(arg gt_post_dir)
+              --gt-post-suffix $(arg gt_post_suffix)
+              --gt-topic-regex $(arg gt_topic_regex)
+              --raw-topic-regex $(arg raw_topic_regex)
+              --cameras $(arg cameras)
+              --max-frames-per-topic $(arg max_frames_per_topic)
+              --start-offset-sec $(arg start_offset_sec)
+              --duration-sec $(arg duration_sec)
+              $(arg recursive_flag)
+              $(arg dry_run_flag)
+              $(arg force_flag)
+              $(arg include_unknown_camera_flag)
+              $(arg overwrite_flag)" />
+</launch>

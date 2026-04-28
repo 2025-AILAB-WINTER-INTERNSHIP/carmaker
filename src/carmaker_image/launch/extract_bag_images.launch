@@ -1,10 +1,10 @@
 <launch>
   <arg name="bag" default="/tmp/input.bag" />
-  <arg name="raw_out_dir" default="$(find carmaker_image_pipeline)/data/raw_images" />
-  <arg name="gt_out_dir" default="$(find carmaker_image_pipeline)/data/gt_images" />
-  <arg name="csv_dir" default="$(find carmaker_image_pipeline)/data" />
+  <arg name="raw_out_dir" default="$(find carmaker_image)/data/raw_images" />
+  <arg name="gt_out_dir" default="$(find carmaker_image)/data/gt_images" />
+  <arg name="csv_dir" default="$(find carmaker_image)/data/csv" />
   <arg name="csv_prefix" default="" />
-  <arg name="gt_post_dir" default="$(find carmaker_image_pipeline)/data/gt_post_processed" />
+  <arg name="gt_post_dir" default="$(find carmaker_image)/data/gt_post_processed" />
   <arg name="gt_post_suffix" default="_post" />
   <arg name="gt_topic_regex"
     default="(image_gt|_gt/.*/image_raw|_gt/image_raw|/gt/|ground_truth|seg)" />
@@ -15,13 +15,14 @@
   <arg name="start_offset_sec" default="0.0" />
   <arg name="duration_sec" default="0.0" />
   <arg name="overwrite" default="false" />
+
   <arg if="$(arg include_unknown_camera)" name="include_unknown_camera_flag"
     value="--include-unknown-camera" />
   <arg unless="$(arg include_unknown_camera)" name="include_unknown_camera_flag" value="" />
   <arg if="$(arg overwrite)" name="overwrite_flag" value="--overwrite" />
   <arg unless="$(arg overwrite)" name="overwrite_flag" value="" />
 
-  <node pkg="carmaker_image_pipeline"
+  <node pkg="carmaker_image"
     type="extract_bag_images.py"
     name="extract_bag_images"
     output="screen"
