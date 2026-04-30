@@ -5,6 +5,8 @@
   <!-- ===== Output directories ===== -->
   <arg name="raw_out_dir"
     default="$(optenv CARMAKER_IMAGE_RAW_OUT_DIR /workspace/src/carmaker_image/data/raw_images)" />
+  <arg name="raw_post_dir"
+    default="$(optenv CARMAKER_IMAGE_RAW_POST_DIR /workspace/src/carmaker_image/data/raw_post_processed)" />
   <arg name="gt_out_dir"
     default="$(optenv CARMAKER_IMAGE_GT_OUT_DIR /workspace/src/carmaker_image/data/gt_images)" />
   <arg name="csv_dir"
@@ -14,6 +16,7 @@
 
   <!-- ===== Output options ===== -->
   <arg name="csv_prefix" default="" doc="Optional prefix for CSV manifest (e.g., 'session_01')." />
+  <arg name="raw_post_suffix" default="_post" />
   <arg name="gt_post_suffix" default="_post" />
 
   <!-- ===== Topic patterns ===== -->
@@ -50,9 +53,11 @@
     output="screen"
     args="--bag $(arg bag)
             --raw-out-dir $(arg raw_out_dir)
+            --raw-post-dir $(arg raw_post_dir)
             --gt-out-dir $(arg gt_out_dir)
             --csv-dir $(arg csv_dir)
             $(arg csv_prefix_flag)
+            --raw-post-suffix $(arg raw_post_suffix)
             --gt-post-dir $(arg gt_post_dir)
             --gt-post-suffix $(arg gt_post_suffix)
             --gt-topic-regex $(arg gt_topic_regex)

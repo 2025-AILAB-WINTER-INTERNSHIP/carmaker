@@ -1,13 +1,12 @@
 #!/usr/bin/python3
-"""GT 이미지 후처리 및 마스크 생성 스크립트.
+"""GT/raw 이미지 후처리 및 마스크 생성 스크립트.
 
 주요 기능:
-    1. 일반 실행: GT 이미지에 차체 마스크를 적용하여 클래스맵(*_post.png) 생성
-    2. --generate-only: 마스크 생성만 수행 (GT 이미지 처리 없음)
-        make_mask.py의 기능을 완전히 대체합니다.
+    1. 일반 실행: GT 이미지에 차체 마스크를 적용하여 클래스맵(*_post.png) 생성, raw 이미지는 동일한 차체 마스크만 적용한 마스크 결과를 저장
+    2. --generate-only: 마스크 생성만 수행 (GT 이미지 처리 없음), make_mask.py의 기능을 완전히 대체합니다.
 
     사용 예:
-    # GT 후처리 (일반)
+    # GT + raw 후처리 (일반)
     python3 apply_mask.py --suffix _post
 
     # 단일 JSON → 마스크 생성만
@@ -31,6 +30,8 @@ import numpy as np
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = PACKAGE_ROOT / "data"
 DEFAULT_MASK_DIR = DATA_ROOT / "mask"
+DEFAULT_RAW_DIR = DATA_ROOT / "raw_images"
+DEFAULT_RAW_POST_DIR = DATA_ROOT / "raw_post_processed"
 DEFAULT_GT_DIR = DATA_ROOT / "gt_images"
 DEFAULT_GT_POST_DIR = DATA_ROOT / "gt_post_processed"
 
@@ -109,9 +110,16 @@ def parse_args(argv=None):
 
     # ── 공통 옵션 ──────────────────────────────────────────────────────────
     parser.add_argument(
+        "--gt-input-dir",
         "--input-dir",
+        dest="gt_input_dir",
         default=str(DEFAULT_GT_DIR),
         help=f"GT 이미지 디렉토리 (기본: {DEFAULT_GT_DIR}).",
+    )
+    parser.add_argument(
+        "--raw-input-dir",
+        default=str(DEFAULT_RAW_DIR),
+        help=f"raw 이미지 디렉토리 (기본: {DEFAULT_RAW_DIR}).",
     )
     parser.add_argument(
         "--mask-dir",
@@ -124,14 +132,21 @@ def parse_args(argv=None):
         help="--mask-dir 의 레거시 별칭. 설정 시 --mask-dir 을 대체.",
     )
     parser.add_argument(
+        "--gt-output-dir",
         "--output-dir",
+        dest="gt_output_dir",
         default=str(DEFAULT_GT_POST_DIR),
         help=f"후처리 결과 저장 디렉토리 (기본: {DEFAULT_GT_POST_DIR}).",
     )
     parser.add_argument(
+        "--raw-output-dir",
+        default=str(DEFAULT_RAW_POST_DIR),
+        help=f"raw 후처리 결과 저장 디렉토리 (기본: {DEFAULT_RAW_POST_DIR}).",
+    )
+    parser.add_argument(
         "--image-glob",
         default="*.png",
-        help="GT 이미지 glob 패턴 (기본: *.png).",
+        help="이미지 glob 패턴 (기본: *.png).",
     )
     parser.add_argument(
         "--cameras",
@@ -184,7 +199,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--recursive",
         action="store_true",
-        help="input-dir 하위 폴더를 재귀 탐색 (batch_extract 이후 사용).",
+        help="gt-input-dir 하위 폴더를 재귀 탐색 (batch_extract 이후 사용).",
     )
 
     # Use ROS-aware argv detection if not explicitly provided
@@ -206,15 +221,15 @@ def load_json(json_path):
 
 def create_mask_from_labelme(data, height, width, label):
     """Labelme JSON shapes에서 지정 레이블의 polygon을 255(제거 영역)로, 나머지를 0(유효 영역)으로 만듭니다."""
-    mask = np.zeros((height, width), dtype=np.uint8)
+    mask = np.zeros((height, width), dtype="uint8")
     polygon_count = 0
     for shape in data.get("shapes", []):
         if shape.get("label") != label:
             continue
-        points = np.array(shape.get("points", []), dtype=np.float32)
+        points = np.array(shape.get("points", []), dtype="float32")
         if points.shape[0] < 3:
             continue
-        polygon = np.round(points).astype(np.int32)
+        polygon = np.round(points).astype("int32")
         cv2.fillPoly(mask, [polygon], 255)
         polygon_count += 1
     return mask, polygon_count
@@ -365,10 +380,18 @@ def classify_post_processed_image(
         landmark_mask = cv2.bitwise_and(landmark_mask, inv_car_mask)
 
     # 3. 클래스 맵에 매핑
-    class_map = np.zeros(image_gray.shape[:2], dtype=np.uint8)
+    class_map = np.zeros(image_gray.shape[:2], dtype="uint8")
     class_map[lane_mask > 0] = CLASS_LANE_BLACK
     class_map[landmark_mask > 0] = CLASS_LANDMARK_YELLOW
     return class_map
+
+
+def apply_car_mask_only(image_bgr, car_mask):
+    """raw 이미지에 차체 마스크만 적용한다."""
+    if car_mask is None:
+        return image_bgr
+    inv_car_mask = cv2.bitwise_not(car_mask)
+    return cv2.bitwise_and(image_bgr, image_bgr, mask=inv_car_mask)
 
 
 def encode_class_map_to_output(class_map):
@@ -378,7 +401,7 @@ def encode_class_map_to_output(class_map):
     class 1 → lane
     class 2 → landmark
     """
-    output = np.zeros(class_map.shape, dtype=np.uint8)
+    output = np.zeros(class_map.shape, dtype="uint8")
     output[class_map == CLASS_LANE_BLACK] = CLASS_LANE_BLACK
     output[class_map == CLASS_LANDMARK_YELLOW] = CLASS_LANDMARK_YELLOW
     return output
@@ -438,16 +461,17 @@ def create_or_load_camera_mask(
     return mask, polygons, source
 
 
-def run_gt_processing(args):
-    """GT 이미지 후처리 (차체 마스킹 + 클래스 분류)."""
-    input_dir = Path(args.input_dir)
+def run_processing(args, input_dir, output_dir, input_kind):
+    """카메라 마스크를 적용해 GT 클래스맵 또는 raw 마스킹 결과를 생성한다."""
+    input_dir = Path(input_dir)
     mask_dir = Path(args.mask_dir)
     if args.json_dir:
         mask_dir = Path(args.json_dir)
-    output_dir = Path(args.output_dir)
+    output_dir = Path(output_dir)
 
     if not input_dir.exists():
-        raise FileNotFoundError(f"입력 디렉토리를 찾을 수 없습니다: {input_dir}")
+        print(f"[skip] {input_kind} 입력 디렉토리를 찾을 수 없습니다: {input_dir}")
+        return
     if not mask_dir.exists():
         raise FileNotFoundError(f"마스크 디렉토리를 찾을 수 없습니다: {mask_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -457,7 +481,7 @@ def run_gt_processing(args):
 
     if not images:
         print(
-            f"이미지를 찾을 수 없습니다: dir={input_dir}, glob={args.image_glob}, recursive={args.recursive}"
+            f"{input_kind} 이미지를 찾을 수 없습니다: dir={input_dir}, glob={args.image_glob}, recursive={args.recursive}"
         )
         return
 
@@ -469,14 +493,16 @@ def run_gt_processing(args):
     for image_path in images:
         image = cv2.imread(str(image_path))
         if image is None:
-            print(f"[skip] 이미지 읽기 실패: {image_path}")
+            print(f"[skip] {input_kind} 이미지 읽기 실패: {image_path}")
             skipped += 1
             continue
         image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         camera = detect_camera(image_path.stem, cameras)
         if camera is None:
-            print(f"[skip] 파일명에서 카메라를 감지할 수 없습니다: {image_path.name}")
+            print(
+                f"[skip] {input_kind} 파일명에서 카메라를 감지할 수 없습니다: {image_path.name}"
+            )
             skipped += 1
             continue
 
@@ -511,28 +537,44 @@ def run_gt_processing(args):
             skipped += 1
             continue
 
-        class_map = classify_post_processed_image(
-            image_gray,
-            car_mask=mask,
-            lane_threshold=args.lane_threshold,
-            landmark_gray_min=args.landmark_gray_min,
-            landmark_gray_max=args.landmark_gray_max,
-        )
-
         output_name = f"{image_path.stem}{args.suffix}{image_path.suffix}"
         output_rel_dir = image_path.parent.relative_to(input_dir)
         output_path = output_dir / output_rel_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        encoded_output = encode_class_map_to_output(class_map)
+
+        if input_kind == "gt":
+            class_map = classify_post_processed_image(
+                image_gray,
+                car_mask=mask,
+                lane_threshold=args.lane_threshold,
+                landmark_gray_min=args.landmark_gray_min,
+                landmark_gray_max=args.landmark_gray_max,
+            )
+            encoded_output = encode_class_map_to_output(class_map)
+        else:
+            encoded_output = apply_car_mask_only(image, mask)
+
         cv2.imwrite(str(output_path), encoded_output)
 
         print(
-            f"[ok] {image_path.name} → {output_path.name} "
+            f"[ok] {input_kind} {image_path.name} → {output_path.name} "
             f"(camera={camera}, mask={reason}, polygons={polygon_count})"
         )
         processed += 1
 
-    print(f"done. processed={processed}, skipped={skipped}, output_dir={output_dir}")
+    print(
+        f"done. kind={input_kind}, processed={processed}, skipped={skipped}, output_dir={output_dir}"
+    )
+
+
+def run_gt_processing(args):
+    """GT 이미지 후처리 (차체 마스킹 + 클래스 분류)."""
+    run_processing(args, args.gt_input_dir, args.gt_output_dir, "gt")
+
+
+def run_raw_processing(args):
+    """raw 이미지 후처리 (차체 마스킹만 적용)."""
+    run_processing(args, args.raw_input_dir, args.raw_output_dir, "raw")
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +588,7 @@ def main():
         run_generate_only(args)
     else:
         run_gt_processing(args)
+        run_raw_processing(args)
 
 
 if __name__ == "__main__":

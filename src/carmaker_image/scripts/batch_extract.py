@@ -38,6 +38,8 @@ from extract_bag_images import (  # noqa: E402
     DEFAULT_GT_POST_DIR,
     DEFAULT_GT_POST_SUFFIX,
     DEFAULT_RAW_DIR,
+    DEFAULT_RAW_POST_DIR,
+    DEFAULT_RAW_POST_SUFFIX,
     build_minimal_rows,
     extract_single_bag,
     write_csv,
@@ -117,6 +119,8 @@ def parse_args(argv=None):
 
     # --- Output roots ---
     p.add_argument("--raw-out-dir", default=str(DEFAULT_RAW_DIR))
+    p.add_argument("--raw-post-dir", default=str(DEFAULT_RAW_POST_DIR))
+    p.add_argument("--raw-post-suffix", default=DEFAULT_RAW_POST_SUFFIX)
     p.add_argument("--gt-out-dir", default=str(DEFAULT_GT_DIR))
     p.add_argument("--csv-dir", default=str(DEFAULT_CSV_DIR))
     p.add_argument("--gt-post-dir", default=str(DEFAULT_GT_POST_DIR))
@@ -201,7 +205,16 @@ def _read_per_bag_csv_rows(csv_dir):
     return rows
 
 
-def write_batch_manifest(csv_dir, all_records, gt_out_dir, gt_post_dir, gt_post_suffix):
+def write_batch_manifest(
+    csv_dir,
+    all_records,
+    raw_out_dir,
+    raw_post_dir,
+    raw_post_suffix,
+    gt_out_dir,
+    gt_post_dir,
+    gt_post_suffix,
+):
     """Merge all per-bag records into a single manifest.csv.
 
     Args:
@@ -220,6 +233,7 @@ def write_batch_manifest(csv_dir, all_records, gt_out_dir, gt_post_dir, gt_post_
         "gt_stamp_ns",
         "camera",
         "raw",
+        "raw_post",
         "gt",
         "gt_post",
     ]
@@ -236,6 +250,9 @@ def write_batch_manifest(csv_dir, all_records, gt_out_dir, gt_post_dir, gt_post_
         for bag_name in sorted(records_by_bag.keys()):
             bag_rows = build_minimal_rows(
                 records_by_bag[bag_name],
+                raw_out_dir,
+                raw_post_dir,
+                raw_post_suffix,
                 gt_out_dir,
                 gt_post_dir,
                 gt_post_suffix,
@@ -291,6 +308,7 @@ def main():
 
     cameras = [x.strip() for x in args.cameras.split(",") if x.strip()]
     raw_root = Path(args.raw_out_dir)
+    raw_post_root = Path(args.raw_post_dir)
     gt_root = Path(args.gt_out_dir)
     csv_dir = Path(args.csv_dir)
     gt_post_dir = Path(args.gt_post_dir)
@@ -303,6 +321,7 @@ def main():
         sub = make_unique_stem(bag, bags)
 
         raw_sub = raw_root / sub
+        raw_post_sub = raw_post_root / sub
         gt_sub = gt_root / sub
 
         # Skip check: if both raw and gt subdirs exist and are non-empty.
@@ -320,6 +339,8 @@ def main():
             result = extract_single_bag(
                 bag_path=bag,
                 raw_out_dir=str(raw_sub),
+                raw_post_dir=str(raw_post_sub),
+                raw_post_suffix=args.raw_post_suffix,
                 gt_out_dir=str(gt_sub),
                 csv_dir=str(csv_dir),
                 csv_prefix=sub,
@@ -354,7 +375,14 @@ def main():
 
     # --- Batch manifest ---
     manifest_path = write_batch_manifest(
-        csv_dir, all_records, gt_root, gt_post_dir, args.gt_post_suffix
+        csv_dir,
+        all_records,
+        raw_root,
+        raw_post_root,
+        args.raw_post_suffix,
+        gt_root,
+        gt_post_dir,
+        args.gt_post_suffix,
     )
 
     # --- Summary ---

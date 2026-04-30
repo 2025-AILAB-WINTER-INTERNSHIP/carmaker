@@ -17,6 +17,8 @@ data/bags/
           ▼
 data/raw_images/scenario_001/      data/gt_images/scenario_001/
   front_raw_1.png  ...               front_GT_1.png  ...
+data/raw_post_processed/scenario_001/ data/gt_post_processed/scenario_001/
+  front_raw_1_post.png ...            front_GT_1_post.png ...
 data/csv/
   scenario_001_images.csv
   manifest.csv
@@ -47,8 +49,9 @@ carmaker_image/
 │   │   └── 2026-04-15/
 │   │       └── highway_test.bag
 │   ├── raw_images/                # [1단계 출력] rosbag 추출 raw 이미지
+│   ├── raw_post_processed/        # [2단계 출력] raw 이미지 후처리 결과 (*_post.png)
 │   ├── gt_images/                 # [1단계 출력] rosbag 추출 GT 이미지
-│   ├── gt_post_processed/         # [2단계 출력] 최종 후처리 결과 (*_post.png)
+│   ├── gt_post_processed/         # [2단계 출력] GT 후처리 결과 (*_post.png)
 │   ├── mask/                      # 카메라별 Labelme JSON + 마스크 PNG
 │   └── csv/                       # 추출 CSV 매니페스트
 ├── launch/
@@ -114,6 +117,7 @@ roslaunch carmaker_image extract_bag_images.launch \
 | `gt_stamp_ns` | GT 이미지의 실제 타임스탬프 (ns) |
 | `camera` | 카메라 이름 (예: `front`) |
 | `raw` | 추출된 raw 이미지 상대 경로 |
+| `raw_post` | 후처리된 raw 이미지 상대 경로 (`apply_mask.py` 실행 후 생성됨) |
 | `gt` | 추출된 GT 이미지 상대 경로 |
 | `gt_post` | 후처리 결과 예상 경로 (`apply_mask.py` 실행 후 생성됨) |
 
@@ -173,6 +177,12 @@ data/
 │   │       └── front_GT_1.png
 │   └── ...
 └── csv/
+├── raw_post_processed/
+│   ├── scenario_001/
+│   │   ├── front/
+│   │   │   └── front_raw_1_post.png
+│   │   └── left/
+│   │       └── left_raw_1_post.png
     ├── scenario_001_images.csv
     ├── scenario_002_images.csv
     └── manifest.csv            ← 전체 bag 통합 CSV
@@ -207,9 +217,9 @@ rosrun carmaker_image apply_mask.py --suffix _post --recursive
 
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
-| `--input-dir` | `data/gt_images` | GT 입력 디렉토리 |
+| `--gt-input-dir` | `data/gt_images` | GT 입력 디렉토리 |
 | `--mask-dir` | `data/mask` | JSON/마스크 파일 디렉토리 |
-| `--output-dir` | `data/gt_post_processed` | 결과 저장 디렉토리 |
+| `--gt-output-dir` | `data/gt_post_processed` | 결과 저장 디렉토리 |
 | `--suffix` | `_post` | 출력 파일명 접미사 |
 | `--cameras` | `front,left,rear,right` | 카메라 이름 목록 |
 | `--recursive` | `true` | 하위 디렉토리 재귀 탐색 (배치 추출 후 기본 동작) |

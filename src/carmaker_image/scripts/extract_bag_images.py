@@ -18,6 +18,8 @@ import numpy as np
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = PACKAGE_ROOT / "data"
 DEFAULT_RAW_DIR = DATA_ROOT / "raw_images"
+DEFAULT_RAW_POST_DIR = DATA_ROOT / "raw_post_processed"
+DEFAULT_RAW_POST_SUFFIX = "_post"
 DEFAULT_GT_DIR = DATA_ROOT / "gt_images"
 DEFAULT_CSV_DIR = DATA_ROOT / "csv"
 DEFAULT_GT_POST_DIR = DATA_ROOT / "gt_post_processed"
@@ -51,6 +53,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Extract raw/GT images from ROS bag.")
     p.add_argument("--bag", required=True, help="Input ROS bag path.")
     p.add_argument("--raw-out-dir", default=str(DEFAULT_RAW_DIR))
+    p.add_argument("--raw-post-dir", default=str(DEFAULT_RAW_POST_DIR))
     p.add_argument("--gt-out-dir", default=str(DEFAULT_GT_DIR))
     p.add_argument(
         "--gt-topic-regex",
@@ -172,38 +175,53 @@ def write_csv(path, fieldnames, rows):
         w.writerows(rows)
 
 
-def compute_gt_post_path(gt_image_path, gt_out_dir, gt_post_dir, gt_post_suffix):
-    """Compute GT post-processed image path preserving directory structure.
+def compute_post_path(image_path, input_dir, post_dir, post_suffix):
+    """Compute post-processed image path preserving directory structure.
 
     Args:
-        gt_image_path: Full path to GT image (e.g., /path/to/gt_images/front/image.png)
-        gt_out_dir: Base GT output directory where images were saved
-        gt_post_dir: Base directory for post-processed GT images
-        gt_post_suffix: Suffix to append to filename
+        image_path: Full path to input image (e.g., /path/to/gt_images/front/image.png)
+        input_dir: Base input directory where images were saved
+        post_dir: Base directory for post-processed images
+        post_suffix: Suffix to append to filename
 
     Returns:
         str: Full path to post-processed image preserving subdirectory structure
     """
-    if not gt_image_path:
+    if not image_path:
         return ""
 
-    gt_p = Path(gt_image_path)
-    gt_out_dir = Path(gt_out_dir)
+    image_p = Path(image_path)
+    input_dir = Path(input_dir)
 
     try:
-        # Get relative path from gt_out_dir (preserves camera/timestamp dirs)
-        relative_path = gt_p.parent.relative_to(gt_out_dir)
+        # Get relative path from input_dir (preserves camera/timestamp dirs)
+        relative_path = image_p.parent.relative_to(input_dir)
     except ValueError:
-        # If gt_out_dir not in path, use parent dir name
-        relative_path = gt_p.parent.name
+        # If input_dir not in path, use parent dir name
+        relative_path = image_p.parent.name
 
     return str(
-        Path(gt_post_dir) / relative_path / f"{gt_p.stem}{gt_post_suffix}{gt_p.suffix}"
+        Path(post_dir) / relative_path / f"{image_p.stem}{post_suffix}{image_p.suffix}"
     )
 
 
+def compute_raw_post_path(raw_image_path, raw_out_dir, raw_post_dir, raw_post_suffix):
+    return compute_post_path(raw_image_path, raw_out_dir, raw_post_dir, raw_post_suffix)
+
+
+def compute_gt_post_path(gt_image_path, gt_out_dir, gt_post_dir, gt_post_suffix):
+    return compute_post_path(gt_image_path, gt_out_dir, gt_post_dir, gt_post_suffix)
+
+
 def build_minimal_rows(
-    records, gt_out_dir, gt_post_dir, gt_post_suffix, match_on_timestamp_only=False
+    records,
+    raw_out_dir,
+    raw_post_dir,
+    raw_post_suffix,
+    gt_out_dir,
+    gt_post_dir,
+    gt_post_suffix,
+    match_on_timestamp_only=False,
 ):
     """Build CSV rows pairing raw/gt images.
 
@@ -216,6 +234,7 @@ def build_minimal_rows(
         grouped.setdefault((rec["camera"], rec["kind"]), []).append(rec)
 
     rows = []
+    raw_post_dir = Path(raw_post_dir)
     gt_post_dir = Path(gt_post_dir)
     cameras = sorted({cam for cam, _ in grouped.keys()})
 
@@ -239,6 +258,11 @@ def build_minimal_rows(
                 gt = gt_list[idx] if idx < len(gt_list) else None
                 raw_path = raw["output_path"] if raw else ""
                 gt_path = gt["output_path"] if gt else ""
+                raw_post_path = ""
+                if raw_path:
+                    raw_post_path = compute_raw_post_path(
+                        raw_path, raw_out_dir, raw_post_dir, raw_post_suffix
+                    )
                 gt_post_path = ""
                 if gt_path:
                     gt_post_path = compute_gt_post_path(
@@ -258,6 +282,7 @@ def build_minimal_rows(
                         "gt_stamp_ns": gt_stamp_ns,
                         "camera": camera,
                         "raw": make_rel(raw_path),
+                        "raw_post": make_rel(raw_post_path),
                         "gt": make_rel(gt_path),
                         "gt_post": make_rel(gt_post_path),
                     }
@@ -288,6 +313,11 @@ def build_minimal_rows(
                 gt = gt_map[ts][0]
                 raw_path = raw["output_path"] if raw else ""
                 gt_path = gt["output_path"] if gt else ""
+                raw_post_path = ""
+                if raw_path:
+                    raw_post_path = compute_raw_post_path(
+                        raw_path, raw_out_dir, raw_post_dir, raw_post_suffix
+                    )
                 gt_post_path = ""
                 if gt_path:
                     gt_post_path = compute_gt_post_path(
@@ -302,6 +332,7 @@ def build_minimal_rows(
                         "gt_stamp_ns": gt.get("stamp_ns", ""),
                         "camera": camera,
                         "raw": make_rel(raw_path),
+                        "raw_post": make_rel(raw_post_path),
                         "gt": make_rel(gt_path),
                         "gt_post": make_rel(gt_post_path),
                     }
@@ -312,7 +343,15 @@ def build_minimal_rows(
 
 
 def write_manifest_csv(
-    csv_dir, csv_prefix, records, gt_out_dir, gt_post_dir, gt_post_suffix
+    csv_dir,
+    csv_prefix,
+    records,
+    raw_out_dir,
+    raw_post_dir,
+    raw_post_suffix,
+    gt_out_dir,
+    gt_post_dir,
+    gt_post_suffix,
 ):
     fields = [
         "bag",
@@ -323,13 +362,21 @@ def write_manifest_csv(
         "gt_stamp_ns",
         "camera",
         "raw",
+        "raw_post",
         "gt",
         "gt_post",
     ]
     path = csv_dir / f"{csv_prefix}_images.csv"
     # Only include rows where raw and gt have identical timestamps.
     rows = build_minimal_rows(
-        records, gt_out_dir, gt_post_dir, gt_post_suffix, match_on_timestamp_only=True
+        records,
+        raw_out_dir,
+        raw_post_dir,
+        raw_post_suffix,
+        gt_out_dir,
+        gt_post_dir,
+        gt_post_suffix,
+        match_on_timestamp_only=True,
     )
     bag_name = records[0]["bag"] if records else csv_prefix
     for row in rows:
@@ -344,6 +391,8 @@ def write_manifest_csv(
 def extract_single_bag(
     bag_path,
     raw_out_dir=None,
+    raw_post_dir=None,
+    raw_post_suffix=DEFAULT_RAW_POST_SUFFIX,
     gt_out_dir=None,
     csv_dir=None,
     csv_prefix="",
@@ -378,6 +427,7 @@ def extract_single_bag(
         raise FileNotFoundError(f"Bag not found: {bag_path}")
 
     raw_out_dir = Path(raw_out_dir) if raw_out_dir else DEFAULT_RAW_DIR
+    raw_post_dir = Path(raw_post_dir) if raw_post_dir else DEFAULT_RAW_POST_DIR
     gt_out_dir = Path(gt_out_dir) if gt_out_dir else DEFAULT_GT_DIR
     csv_dir = Path(csv_dir) if csv_dir else DEFAULT_CSV_DIR
     gt_post_dir = Path(gt_post_dir) if gt_post_dir else DEFAULT_GT_POST_DIR
@@ -552,7 +602,15 @@ def extract_single_bag(
     manifest = None
     if saved_records:
         manifest = write_manifest_csv(
-            csv_dir, csv_prefix, saved_records, gt_out_dir, gt_post_dir, gt_post_suffix
+            csv_dir,
+            csv_prefix,
+            saved_records,
+            raw_out_dir,
+            raw_post_dir,
+            raw_post_suffix,
+            gt_out_dir,
+            gt_post_dir,
+            gt_post_suffix,
         )
         _log(f"CSV: {manifest['all']}  ({manifest['row_count']} rows)")
 
@@ -570,6 +628,7 @@ def main():
     extract_single_bag(
         bag_path=args.bag,
         raw_out_dir=args.raw_out_dir,
+        raw_post_dir=args.raw_post_dir,
         gt_out_dir=args.gt_out_dir,
         csv_dir=args.csv_dir,
         csv_prefix=args.csv_prefix,
