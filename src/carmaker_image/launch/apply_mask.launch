@@ -1,0 +1,55 @@
+<launch>
+  <!-- ===== 공통 경로 ===== -->
+  <arg name="gt_input_dir"
+    default="$(optenv CARMAKER_IMAGE_GT_DIR /workspace/src/carmaker_image/data/gt_images)" />
+  <arg name="raw_input_dir"
+    default="$(optenv CARMAKER_IMAGE_RAW_DIR /workspace/src/carmaker_image/data/raw_images)" />
+  <arg name="mask_dir"
+    default="$(optenv CARMAKER_IMAGE_MASK_DIR /workspace/src/carmaker_image/data/mask)" />
+  <arg name="gt_output_dir"
+    default="$(optenv CARMAKER_IMAGE_GT_POST_DIR /workspace/src/carmaker_image/data/gt_post_processed)" />
+  <arg name="raw_output_dir"
+    default="$(optenv CARMAKER_IMAGE_RAW_POST_DIR /workspace/src/carmaker_image/data/raw_post_processed)" />
+
+  <!-- ===== 처리 옵션 ===== -->
+  <arg name="image_glob" default="*.png" />
+  <arg name="cameras" default="front,left,rear,right" />
+  <arg name="json_pattern" default="{camera}_GT.json" />
+  <arg name="mask_pattern" default="{camera}_mask.png" />
+  <arg name="label" default="car_body" />
+  <arg name="suffix" default="_post" />
+  <arg name="lane_threshold" default="40" />
+  <arg name="landmark_gray_min" default="160" />
+  <arg name="landmark_gray_max" default="165" />
+
+  <!-- ===== Boolean 플래그 ===== -->
+  <arg name="refresh_masks" default="false" />
+  <arg name="recursive" default="true" />
+
+  <arg if="$(arg refresh_masks)" name="refresh_masks_flag" value="--refresh-masks" />
+  <arg unless="$(arg refresh_masks)" name="refresh_masks_flag" value="" />
+
+  <arg if="$(arg recursive)" name="recursive_flag" value="--recursive" />
+  <arg unless="$(arg recursive)" name="recursive_flag" value="" />
+
+  <node pkg="carmaker_image"
+    type="apply_mask.py"
+    name="apply_mask"
+    output="screen"
+    args="--gt-input-dir $(arg gt_input_dir)
+              --raw-input-dir $(arg raw_input_dir)
+              --mask-dir $(arg mask_dir)
+              --gt-output-dir $(arg gt_output_dir)
+              --raw-output-dir $(arg raw_output_dir)
+              --image-glob $(arg image_glob)
+              --cameras $(arg cameras)
+              --json-pattern $(arg json_pattern)
+              --mask-pattern $(arg mask_pattern)
+              --label $(arg label)
+              --suffix $(arg suffix)
+              --lane-threshold $(arg lane_threshold)
+              --landmark-gray-min $(arg landmark_gray_min)
+              --landmark-gray-max $(arg landmark_gray_max)
+              $(arg refresh_masks_flag)
+              $(arg recursive_flag)" />
+</launch>

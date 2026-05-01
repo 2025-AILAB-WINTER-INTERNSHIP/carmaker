@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>carmaker_image_pipeline</name>
+  <name>carmaker_image</name>
   <version>0.1.0</version>
-  <description>CarMaker image pipeline package for raw image/GT data handling and GT post-processing.</description>
+  <description>CarMaker image pipeline package for raw image/GT data extraction and post-processing.</description>
 
   <maintainer email="admin@example.com">admin</maintainer>
   <license>MIT</license>
@@ -12,6 +12,8 @@
   <exec_depend>python3</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
   <exec_depend>rosbag</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
