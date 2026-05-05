@@ -158,8 +158,8 @@ else
 fi
 
 # WSL2 D3D12 Graphics Driver Mount Path (Prevent crash on Native Linux)
-if [ "${IS_WSL}" = "true" ] && [ -d "/usr/lib/wsl/lib" ]; then
-    WSL_LIB_DIR_MOUNT="/usr/lib/wsl/lib"
+if [ "${IS_WSL}" = "true" ] && [ -d "/usr/lib/wsl" ]; then
+    WSL_LIB_DIR_MOUNT="/usr/lib/wsl"
 else
     WSL_LIB_DIR_DUMMY="${HOST_CACHE_DIR}/dummy_wsl_lib"
     mkdir -p "$WSL_LIB_DIR_DUMMY"
