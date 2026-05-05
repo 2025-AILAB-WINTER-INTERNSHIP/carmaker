@@ -9,18 +9,36 @@ set -e
 # Load logging utilities
 source "$(dirname "${BASH_SOURCE[0]}")/utils_logging.sh" 2>/dev/null || true
 
-# Check if we are actually in WSL 2.
-# Uses composite check: WSL2-specific kernel signature OR WSLg directory presence.
-# This avoids false positives from Azure VMs and Hyper-V guests that also expose
-# "Microsoft" in /proc/version but lack WSL2-specific artifacts.
-_is_wsl2() {
-    grep -qi "microsoft" /proc/version 2>/dev/null || return 1
-    grep -qiE "WSL2|microsoft-standard" /proc/version 2>/dev/null && return 0
-    { [ -d "/mnt/wslg" ] || [ -d "/run/WSL" ]; } && return 0
-    return 1
+# Section-aware INI value checker (local utility).
+# Usage: _ini_has <file> <section> <key> <value>
+# Returns 0 if [section] contains an uncommented key=value pair, 1 otherwise.
+# Handles: leading whitespace, case-insensitive matching, and comment rejection.
+_ini_has() {
+    local file="$1" section="$2" key="$3" value="$4"
+    [ -f "$file" ] || return 1
+    awk -v s="$section" -v k="$key" -v v="$value" '
+        BEGIN { IGNORECASE = 1 }
+        { sub(/\r$/, "", $0) }
+        /^[ \t]*\[/ {
+            gsub(/[\[\]]/, "", $0)
+            gsub(/^[ \t]+|[ \t]+$/, "", $0)
+            in_sect = ($0 == s)
+            next
+        }
+        in_sect && /^[^#;]/ {
+            split($0, kv, /[ \t]*=[ \t]*/)
+            gsub(/^[ \t]+|[ \t]+$/, "", kv[1])
+            gsub(/^[ \t]+|[ \t]+$/, "", kv[2])
+            if (tolower(kv[1]) == tolower(k) && tolower(kv[2]) == tolower(v)) { found=1; exit }
+        }
+        END { exit !found }
+    ' "$file" 2>/dev/null
 }
 
-if ! _is_wsl2; then
+# Guard: IS_WSL is the authoritative source (set by env_detector.sh → Makefile export).
+# This script is only invoked from `make check` after IS_WSL=true is confirmed.
+# When run standalone without IS_WSL set, exits cleanly (safe fallback).
+if [ "${IS_WSL}" != "true" ]; then
     exit 0
 fi
 
@@ -51,25 +69,23 @@ HAS_SYSTEMD="false"
 HAS_MIRRORED="false"
 
 # 2. Audit Systemd (Check both /etc/wsl.conf and .wslconfig)
-# Anchored extended regex rejects commented lines and tolerates surrounding whitespace.
-# Check local distro config first
-if [ -f "${LOCAL_WSL_CONF}" ] && grep -qiE '^\s*systemd\s*=\s*true' "${LOCAL_WSL_CONF}"; then
+# _ini_has() validates section context, rejecting commented lines and other-section keys.
+# Check local distro config first ([boot] section)
+if _ini_has "${LOCAL_WSL_CONF}" "boot" "systemd" "true"; then
     HAS_SYSTEMD="true"
 fi
 
 # Check global .wslconfig if not found locally
-if [ "${HAS_SYSTEMD}" = "false" ] && [ -f "${WSL_CONFIG_PATH}" ] && \
-    grep -qiE '^\s*systemd\s*=\s*true' "${WSL_CONFIG_PATH}"; then
+if [ "${HAS_SYSTEMD}" = "false" ] && _ini_has "${WSL_CONFIG_PATH}" "boot" "systemd" "true"; then
     HAS_SYSTEMD="true"
 fi
 
-# 3. Audit Mirrored Networking
-if [ -f "${WSL_CONFIG_PATH}" ] && grep -qiE '^\s*networkingMode\s*=\s*mirrored' "${WSL_CONFIG_PATH}"; then
+# 3. Audit Mirrored Networking ([wsl2] section)
+if _ini_has "${WSL_CONFIG_PATH}" "wsl2" "networkingMode" "mirrored"; then
     HAS_MIRRORED="true"
 fi
 
-# 4. Reporting
-# We only print warnings if something is missing
+# 4. Reporting (System Configuration)
 if [ "${HAS_SYSTEMD}" = "false" ] || [ "${HAS_MIRRORED}" = "false" ]; then
     print_section "WSL Environment Audit"
 
@@ -85,9 +101,49 @@ if [ "${HAS_SYSTEMD}" = "false" ] || [ "${HAS_MIRRORED}" = "false" ]; then
         echo -e "  ${INFO} Path: ${WSL_CONFIG_PATH}"
         echo -e "  ${INFO} Fix: Add 'networkingMode=mirrored' under [wsl2] section."
     fi
-
     echo ""
-    echo -e "  ${INFO} Reference: See 'Windows (WSL 2) User Guide' in README.ko.md for details."
+fi
+
+# 5. GPU Acceleration Audit (Intelligent Hardware Alignment)
+# Runs independently to ensure graphics health regardless of other system settings.
+# Load shared GPU detection helpers
+SOURCE_GPU="$(dirname "${BASH_SOURCE[0]}")/utils_gpu_detect.sh"
+if [ -f "$SOURCE_GPU" ]; then
+    source "$SOURCE_GPU"
+else
+    exit 0 # Silent exit if helper is missing in auditor context
+fi
+
+if [ "${IS_WSL}" = "true" ] && command -v glxinfo &>/dev/null; then
+    # Capture renderer name (handling potential multi-line output)
+    host_renderer=$(glxinfo -B 2>/dev/null | grep -Ei "OpenGL renderer string" | head -n 1 | sed -E 's/.*:[[:space:]]*(.*)/\1/' | xargs || true)
+    
+    if [ -n "$host_renderer" ]; then
+        # Scenario A: Software Rendering Fallback (Critical performance impact)
+        if [[ "$host_renderer" == *"llvmpipe"* ]]; then
+            print_section "WSL GPU Acceleration Audit"
+            echo -e "  ${WARN} Host OpenGL is stuck on Software Rendering (llvmpipe)."
+            echo -e "  ${INFO} Rationale: WSL 2 found hardware but Mesa is not utilizing it."
+            
+            if has_nvidia; then
+                echo -e "  ${INFO} Fix (NVIDIA): Add the following to your HOST(WSL) ~/.bashrc:"
+                get_gpu_prescription "nvidia_wsl" "    "
+            elif has_dxg || has_any_dri; then
+                echo -e "  ${INFO} Fix (iGPU): Add the following to your HOST(WSL) ~/.bashrc:"
+                get_gpu_prescription "igpu_wsl" "    "
+            fi
+            echo ""
+        
+        # Scenario B: Sub-optimal GPU selection (e.g. using iGPU while NVIDIA dGPU is available)
+        elif [[ "$host_renderer" == *"D3D12"* ]] && has_nvidia && [[ "$host_renderer" != *"NVIDIA"* ]]; then
+            print_section "WSL GPU Acceleration Audit"
+            echo -e "  ${INFO} Current Renderer: ${host_renderer} (iGPU)"
+            echo -e "  ${INFO} Optimization: High-performance NVIDIA dGPU is available but idle."
+            echo -e "  ${INFO} Fix: Add the following to your HOST(WSL) ~/.bashrc:"
+            get_gpu_prescription "nvidia_optimize_wsl" "    "
+            echo ""
+        fi
+    fi
 fi
 
 exit 0
