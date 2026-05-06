@@ -55,3 +55,15 @@ input_topics:
 
 # output_topic: The topic name for publishing synchronized sensor data.
 output_topic: "/gateway/synced_data"
+
+# status_topic: The topic name for publishing diagnostics.
+status_topic: "/gateway/status"
+
+# ==============================================================================
+# 5. Performance & Threshold Tuning
+# ==============================================================================
+# time_jump_threshold: Seconds to detect simulation reset or large time jump.
+time_jump_threshold: 1.0
+
+# diag_hit_rate_warn: Threshold (0.0 to 1.0) to trigger a WARN level in diagnostics.
+diag_hit_rate_warn: 0.5

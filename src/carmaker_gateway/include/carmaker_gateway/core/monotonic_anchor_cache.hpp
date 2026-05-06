@@ -42,6 +42,7 @@ public:
         // 2. Enforce Monotonicity (Discard out-of-order packets)
         double last_time = latest_processed_timestamp_.load(std::memory_order_relaxed);
         if (current_packet_time <= last_time) {
+            drop_count_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
 
@@ -56,6 +57,13 @@ public:
      */
     std::shared_ptr<const T> GetBestMatch(double anchor_timestamp) const {
         return ring_buffer_.GetBestMatch(anchor_timestamp);
+    }
+
+    /**
+     * @brief Get the number of dropped (out-of-order) packets since last call.
+     */
+    uint64_t GetAndResetDropCount() {
+        return drop_count_.exchange(0, std::memory_order_relaxed);
     }
 
     /**
@@ -88,6 +96,7 @@ private:
     // downstream consumers without the overhead of condition variables or polling.
     std::atomic<double> latest_processed_timestamp_{0.0};
     std::atomic<bool> is_in_virtual_heartbeat_{false};
+    std::atomic<uint64_t> drop_count_{0};
     LockFreeTimeRingBuffer<T, 20, Extractor> ring_buffer_;
 };
 

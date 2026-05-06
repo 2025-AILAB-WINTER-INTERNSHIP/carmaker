@@ -11,6 +11,7 @@
 #include <carmaker_msgs/SyncedData.h>
 #include <carmaker_gateway/core/lock_free_time_ring_buffer.hpp>
 #include <carmaker_gateway/core/monotonic_anchor_cache.hpp>
+#include <diagnostic_msgs/DiagnosticArray.h>
 
 #include <string>
 #include <vector>
@@ -36,6 +37,11 @@ private:
      * @brief Periodic timer callback to publish synchronized data.
      */
     void timerCallback(const ros::TimerEvent& event);
+
+    /**
+     * @brief Periodic timer callback to publish diagnostics.
+     */
+    void diagnosticsCallback(const ros::TimerEvent& event);
 
     // Topic subscription callbacks
     void DynamicsInfoCallback(const carmaker_msgs::DynamicsInfo::ConstPtr& msg);
@@ -74,7 +80,9 @@ private:
     ros::NodeHandle pnh_;
 
     ros::Timer sync_timer_;
+    ros::Timer diag_timer_;
     ros::Publisher synced_pub_;
+    ros::Publisher diag_pub_;
 
     // ROS Subscribers
     ros::Subscriber anchor_sub_;
@@ -93,6 +101,13 @@ private:
     std::string anchor_topic_;
     std::vector<std::string> input_topics_;
     std::string output_topic_;
+    std::string status_topic_;
+
+    // Performance & Threshold Parameters
+    double time_jump_threshold_;
+    double diag_hit_rate_warn_;
+    int num_sync_targets_() const; // num sync targets excluding anchor
+    int cached_sync_targets_ = 0;
 
     // Core synchronization logic instances
     carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicsInfo, carmaker_gateway::TimestampExtractor<carmaker_msgs::DynamicsInfo>> anchor_cache_;
@@ -104,11 +119,16 @@ private:
     std::vector<CameraContext*> fast_camera_list_;
 
     // Enterprise state tracking
-    double last_valid_anchor_time_ = 0.0;
-    double last_anchor_arrival_time_ = 0.0;
+    std::atomic<double> last_valid_anchor_time_{0.0};
+    std::atomic<double> last_anchor_arrival_time_{0.0};
     double time_slop_sec_ = 0.0;
     double base_virtual_time_ = 0.0;
-    int heartbeat_counter_ = 0;
+    std::atomic<int> heartbeat_counter_{0};
+
+    // Diagnostics Counters (Atomic for lock-free multi-threaded tracking)
+    std::atomic<uint64_t> total_sync_attempts_{0};
+    std::atomic<uint64_t> cache_hits_{0};
+    std::atomic<uint64_t> slop_violations_{0};
 };
 
 } // namespace carmaker_gateway
