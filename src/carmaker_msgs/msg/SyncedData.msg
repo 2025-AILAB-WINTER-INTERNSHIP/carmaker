@@ -7,6 +7,6 @@ bool[]   sensor_status        # [true, true, false, true, true] : sensor valid s
 
 # CarMaker Specific Payloads
 sensor_msgs/Image[]        images
-carmaker_msgs/DynamicInfo  dynamic_info
+carmaker_msgs/DynamicsInfo  dynamic_info
 carmaker_msgs/Objects      objects
 carmaker_msgs/UAQ_Out      uaq_out

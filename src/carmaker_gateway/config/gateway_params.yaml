@@ -5,14 +5,14 @@
 sync_rate_hz: 30.0
 
 # time_slop_ms: Maximum acceptable time difference (in milliseconds) between the anchor
-#               timestamp and the current time. If the difference exceeds this value, 
+#               timestamp and the current time. If the difference exceeds this value,
 #               the anchor is considered missing/invalid, dropping the ghost data.
-time_slop_ms: 15.0
+time_slop_ms: 50.0
 
 # ==============================================================================
 # 2. Fault-Tolerance & Troubleshooting Parameters
 # ==============================================================================
-# enable_virtual_heartbeat: If true, the system will trigger a virtual heartbeat 
+# enable_virtual_heartbeat: If true, the system will trigger a virtual heartbeat
 #                           and synthesize a clock when the anchor topic drops,
 #                           preventing downstream algorithms from deadlocking.
 enable_virtual_heartbeat: true
@@ -22,7 +22,7 @@ enable_virtual_heartbeat: true
 max_heartbeat_cycles: -1
 
 # watchdog_timeout: Time (in ms) before the watchdog triggers an error for stagnant data.
-watchdog_timeout: 100.0
+watchdog_timeout: 500.0
 
 # ==============================================================================
 # 3. Quality of Service (QoS) & Diagnostics

@@ -58,6 +58,13 @@ public:
         return ring_buffer_.GetBestMatch(anchor_timestamp);
     }
 
+    /**
+     * @brief Get the latest data sample regardless of timestamp (used for state monitoring).
+     */
+    std::shared_ptr<const T> GetMostRecent() const {
+        return ring_buffer_.GetLatest();
+    }
+
 private:
     /**
      * @brief Forcibly reset the internal clock to a new physical time.

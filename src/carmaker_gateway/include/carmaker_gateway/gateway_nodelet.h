@@ -4,7 +4,7 @@
 #include <nodelet/nodelet.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
-#include <carmaker_msgs/DynamicInfo.h>
+#include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/Objects.h>
 #include <carmaker_msgs/UAQ_Out.h>
 #include <carmaker_msgs/SyncedData.h>
@@ -34,7 +34,7 @@ private:
     void timerCallback(const ros::TimerEvent& event);
 
     // Topic subscription callbacks
-    void dynamicInfoCallback(const carmaker_msgs::DynamicInfo::ConstPtr& msg);
+    void DynamicsInfoCallback(const carmaker_msgs::DynamicsInfo::ConstPtr& msg);
     void objectsCallback(const carmaker_msgs::Objects::ConstPtr& msg);
     void uaqCallback(const carmaker_msgs::UAQ_Out::ConstPtr& msg);
     void imageCallback(const sensor_msgs::Image::ConstPtr& msg, const std::string& topic_name);
@@ -61,11 +61,14 @@ private:
     std::vector<std::string> input_topics_;
 
     // Core synchronization logic instances
-    carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicInfo> anchor_cache_;
-    std::map<std::string, std::shared_ptr<carmaker_gateway::LockFreeSensorCache<sensor_msgs::Image>>> image_caches_;
-    carmaker_gateway::LockFreeSensorCache<carmaker_msgs::Objects> objects_cache_;
-    carmaker_gateway::LockFreeSensorCache<carmaker_msgs::UAQ_Out> uaq_cache_;
+    carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicsInfo> anchor_cache_;
+    std::map<std::string, std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image>>> image_caches_;
+    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::Objects> objects_cache_;
+    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::UAQ_Out> uaq_cache_;
 
+    // Enterprise state tracking
+    double last_valid_anchor_time_ = 0.0;
+    carmaker_msgs::SyncedDataPtr out_msg_; // Persistent pre-allocated message
     int heartbeat_counter_ = 0;
 };
 

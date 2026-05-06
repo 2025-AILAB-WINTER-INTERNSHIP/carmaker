@@ -1,5 +1,9 @@
 <launch>
   <arg name="foxglove" default="false" />
+  <arg name="use_sim_time" default="false" />
+
+  <!-- Global parameter for sim time (e.g., rosbag playback) -->
+  <param name="use_sim_time" value="$(arg use_sim_time)" />
 
   <node pkg="nodelet" type="nodelet" name="gateway_nodelet_manager" args="manager" output="screen"/>
 
@@ -9,8 +13,8 @@
 
   <!-- Foxglove Bridge for Visualization (Optional) -->
   <group if="$(arg foxglove)">
-    <node name="foxglove_bridge" pkg="foxglove_bridge" type="foxglove_bridge_node" output="screen">
-      <param name="port" value="8765" />
-    </node>
+    <include file="$(find foxglove_bridge)/launch/foxglove_bridge.launch" >
+      <arg name="port" value="8765" />
+    </include>
   </group>
 </launch>

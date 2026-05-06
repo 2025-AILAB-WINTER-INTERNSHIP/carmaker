@@ -84,6 +84,15 @@ public:
         return best_match;
     }
 
+    /**
+     * @brief Get the latest pushed sample (O(1)).
+     */
+    std::shared_ptr<const T> GetLatest() const {
+        uint64_t latest_idx = write_index_.load(std::memory_order_relaxed);
+        if (latest_idx == 0) return nullptr;
+        return std::atomic_load_explicit(&buffer_[(latest_idx - 1) % Size], std::memory_order_acquire);
+    }
+
 private:
     std::atomic<uint64_t> write_index_;
 

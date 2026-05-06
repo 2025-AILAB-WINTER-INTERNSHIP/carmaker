@@ -10,7 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   Control_Signal.msg
-  DynamicInfo.msg
+  DynamicsInfo.msg
   Object.msg
   ObjectState.msg
   Objects.msg
