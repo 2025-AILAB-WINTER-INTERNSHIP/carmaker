@@ -1,0 +1,48 @@
+# ==============================================================================
+# 1. Scheduling Configuration
+# ==============================================================================
+# sync_rate_hz: The target frequency (in Hz) for the Gateway to publish synchronized data.
+sync_rate_hz: 30.0
+
+# time_slop_ms: Maximum acceptable time difference (in milliseconds) between the anchor
+#               timestamp and the current time. If the difference exceeds this value, 
+#               the anchor is considered missing/invalid, dropping the ghost data.
+time_slop_ms: 15.0
+
+# ==============================================================================
+# 2. Fault-Tolerance & Troubleshooting Parameters
+# ==============================================================================
+# enable_virtual_heartbeat: If true, the system will trigger a virtual heartbeat 
+#                           and synthesize a clock when the anchor topic drops,
+#                           preventing downstream algorithms from deadlocking.
+enable_virtual_heartbeat: true
+
+# max_heartbeat_cycles: Maximum consecutive cycles allowed for the virtual heartbeat.
+#                       Set to -1 for infinite virtual heartbeats.
+max_heartbeat_cycles: -1
+
+# watchdog_timeout: Time (in ms) before the watchdog triggers an error for stagnant data.
+watchdog_timeout: 100.0
+
+# ==============================================================================
+# 3. Quality of Service (QoS) & Diagnostics
+# ==============================================================================
+# qos_reliability: The reliability policy for subscriptions. (e.g., "BEST_EFFORT", "RELIABLE")
+qos_reliability: "BEST_EFFORT"
+
+# ==============================================================================
+# 4. Time Sync & Data Extraction Configuration
+# ==============================================================================
+# anchor_topic: The primary topic used as the absolute clock reference for synchronization.
+#               Typically, this is the ego vehicle dynamics.
+anchor_topic: "/carmaker/dynamic_info"
+
+# input_topics: A list of asynchronous sensor topics to extract, cache, and synchronize
+#               against the anchor topic.
+input_topics:
+  - "/mono/fisheye/front/image_raw"
+  - "/mono/fisheye/rear/image_raw"
+  - "/mono/fisheye/left/image_raw"
+  - "/mono/fisheye/right/image_raw"
+  - "/carmaker/objects"
+  - "/carmaker/uaq_out"

@@ -1,0 +1,7 @@
+<library path="lib/libcarmaker_gateway_nodelet">
+  <class name="carmaker_gateway/GatewayNodelet" type="carmaker_gateway::GatewayNodelet" base_class_type="nodelet::Nodelet">
+    <description>
+      Carmaker Gateway Nodelet (Data Extraction & Wrapping + Time Sync)
+    </description>
+  </class>
+</library>
