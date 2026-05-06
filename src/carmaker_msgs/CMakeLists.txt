@@ -4,16 +4,24 @@ project(carmaker_msgs)
 find_package(catkin REQUIRED COMPONENTS
   message_generation
   std_msgs
+  sensor_msgs
 )
 
 add_message_files(
   FILES
   Control_Signal.msg
+  DynamicInfo.msg
+  Object.msg
+  ObjectState.msg
+  Objects.msg
+  UAQ_Out.msg
+  SyncedData.msg
 )
 
 generate_messages(
   DEPENDENCIES
   std_msgs
+  sensor_msgs
 )
 
 catkin_package(
