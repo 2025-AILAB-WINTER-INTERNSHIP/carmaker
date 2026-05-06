@@ -1,7 +1,10 @@
 # ==============================================================================
 # 1. Scheduling Configuration
 # ==============================================================================
-# sync_rate_hz: The target frequency (in Hz) for the Gateway to publish synchronized data.
+# Event-driven sync (Anchor-triggered)
+use_anchor_trigger: true
+
+# if use_anchor_trigger is false, use periodic sync (in Hz)
 sync_rate_hz: 30.0
 
 # time_slop_ms: Maximum acceptable time difference (in milliseconds) between the anchor
@@ -23,6 +26,9 @@ max_heartbeat_cycles: -1
 
 # watchdog_timeout: Time (in ms) before the watchdog triggers an error for stagnant data.
 watchdog_timeout: 500.0
+
+# watchdog_ratio: The multiplier for sync_rate_hz to define the watchdog window.
+watchdog_ratio: 1.5
 
 # ==============================================================================
 # 3. Quality of Service (QoS) & Diagnostics
@@ -46,3 +52,6 @@ input_topics:
   - "/mono/fisheye/right/image_raw"
   - "/carmaker/objects"
   - "/carmaker/uaq_out"
+
+# output_topic: The topic name for publishing synchronized sensor data.
+output_topic: "/gateway/synced_data"

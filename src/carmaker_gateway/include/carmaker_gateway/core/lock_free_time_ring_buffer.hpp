@@ -11,7 +11,7 @@
 namespace carmaker_gateway {
 
 /**
- * @brief Default extractor to retrieve timestamp from ROS message headers.
+ * @brief Extractor to retrieve Timestamp from ROS message headers.
  */
 template <typename T>
 struct TimestampExtractor {
@@ -21,10 +21,10 @@ struct TimestampExtractor {
 };
 
 /**
- * @brief Extractor to retrieve SimTime from CarMaker custom messages.
+ * @brief Extractor to retrieve WallTime from CarMaker messages.
  */
 template <typename T>
-struct SimTimeExtractor {
+struct WallTimeExtractor {
     double operator()(const T& data) const {
         return data.time.toSec();
     }
@@ -62,32 +62,26 @@ public:
 
     /**
      * @brief Find the sample closest to the target timestamp (called from Sync thread).
+     * This implementation is zero-allocation and avoids heap overhead in the hot path.
      * @param anchor_timestamp The reference time for synchronization.
      * @return Best matching sample found in the current buffer snapshot.
      */
     std::shared_ptr<const T> GetBestMatch(double anchor_timestamp) const {
-        std::vector<std::shared_ptr<const T>> local_snapshot;
-        local_snapshot.reserve(Size);
-
-        // 1. Generate a consistent local snapshot of the current buffer state (O(N))
-        for (size_t i = 0; i < Size; ++i) {
-            auto ptr = std::atomic_load_explicit(&buffer_[i], std::memory_order_acquire);
-            if (ptr) {
-                local_snapshot.push_back(ptr);
-            }
-        }
-
-        // 2. Search for the sample with the minimum absolute time difference
         std::shared_ptr<const T> best_match = nullptr;
         double min_diff = std::numeric_limits<double>::max();
         Extractor extract_ts;
 
-        for (const auto& data : local_snapshot) {
-            double ts = extract_ts(*data);
+        // Iterate through the buffer slots and atomically load pointers.
+        // We find the one with the minimum absolute time difference.
+        for (size_t i = 0; i < Size; ++i) {
+            auto ptr = std::atomic_load_explicit(&buffer_[i], std::memory_order_acquire);
+            if (!ptr) continue;
+
+            double ts = extract_ts(*ptr);
             double diff = std::abs(ts - anchor_timestamp);
             if (diff < min_diff) {
                 min_diff = diff;
-                best_match = data;
+                best_match = std::move(ptr);
             }
         }
 
@@ -100,13 +94,15 @@ public:
     std::shared_ptr<const T> GetLatest() const {
         uint64_t latest_idx = write_index_.load(std::memory_order_relaxed);
         if (latest_idx == 0) return nullptr;
+        // Ensure index is within bounds and use acquire memory order for visibility.
         return std::atomic_load_explicit(&buffer_[(latest_idx - 1) % Size], std::memory_order_acquire);
     }
 
 private:
-    std::atomic<uint64_t> write_index_;
+    std::atomic<uint64_t> write_index_{0};
 
-    // Buffer of shared pointers. Atomic load/store are used for thread safety across C++11/14/17.
+    // Buffer of shared pointers. Atomic load/store are used for thread safety.
+    // In C++17, std::atomic_load/store on shared_ptr are the standard way.
     mutable std::array<std::shared_ptr<const T>, Size> buffer_;
 };
 

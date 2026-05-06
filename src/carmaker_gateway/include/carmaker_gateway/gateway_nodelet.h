@@ -41,6 +41,32 @@ private:
     void cameraImageCallback(const sensor_msgs::Image::ConstPtr& msg, const std::string& topic_name);
     void cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& msg, const std::string& topic_name);
 
+    struct CameraContext {
+        std::string name;
+        std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 10>> image_cache;
+        std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 10>> info_cache;
+        ros::Subscriber image_sub;
+        ros::Subscriber info_sub;
+        std::atomic<double> last_published_stamp;
+
+        CameraContext() : 
+            image_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 10>>()),
+            info_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 10>>()),
+            last_published_stamp(0.0) {}
+    };
+
+    /**
+     * @brief Core synchronization and publication logic.
+     * @param target_time The timestamp to sync towards.
+     * @param anchor The anchor data if available (optional).
+     */
+    void processSynchronization(double target_time, const std::shared_ptr<const carmaker_msgs::DynamicsInfo>& anchor);
+    
+    /**
+     * @brief Perform a shallow copy of Image metadata, excluding the heavy data field.
+     */
+    void shallowCopyImageMetadata(const sensor_msgs::Image& src, sensor_msgs::Image& dst);
+
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
 
@@ -49,8 +75,6 @@ private:
 
     // ROS Subscribers
     ros::Subscriber anchor_sub_;
-    std::vector<ros::Subscriber> camera_image_subs_;
-    std::vector<ros::Subscriber> camera_info_subs_;
     ros::Subscriber objects_sub_;
     ros::Subscriber uaq_sub_;
 
@@ -58,21 +82,27 @@ private:
     double sync_rate_hz_;
     double time_slop_ms_;
     bool enable_virtual_heartbeat_;
+    bool use_anchor_trigger_;
     int max_heartbeat_cycles_;
     double watchdog_timeout_;
+    double watchdog_ratio_;
+    std::string qos_reliability_;
     std::string anchor_topic_;
     std::vector<std::string> input_topics_;
+    std::string output_topic_;
 
     // Core synchronization logic instances
-    carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicsInfo, carmaker_gateway::SimTimeExtractor<carmaker_msgs::DynamicsInfo>> anchor_cache_;
-    std::map<std::string, std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 5, carmaker_gateway::TimestampExtractor<sensor_msgs::Image>>>> camera_image_caches_;
-    std::map<std::string, std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 5, carmaker_gateway::TimestampExtractor<sensor_msgs::CameraInfo>>>> camera_info_caches_;
-    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::Objects, 5, carmaker_gateway::SimTimeExtractor<carmaker_msgs::Objects>> objects_cache_;
-    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::UAQ_Out, 5, carmaker_gateway::SimTimeExtractor<carmaker_msgs::UAQ_Out>> uaq_cache_;
+    carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicsInfo, carmaker_gateway::TimestampExtractor<carmaker_msgs::DynamicsInfo>> anchor_cache_;
+    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::Objects, 20, carmaker_gateway::TimestampExtractor<carmaker_msgs::Objects>> objects_cache_;
+    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::UAQ_Out, 20, carmaker_gateway::TimestampExtractor<carmaker_msgs::UAQ_Out>> uaq_cache_;
+    
+    // Grouped Camera Management
+    std::map<std::string, std::unique_ptr<CameraContext>> camera_contexts_;
+    std::vector<CameraContext*> fast_camera_list_;
 
     // Enterprise state tracking
     double last_valid_anchor_time_ = 0.0;
-    carmaker_msgs::SyncedDataPtr out_msg_; // Persistent pre-allocated message
+    double last_anchor_arrival_time_ = 0.0;
     int heartbeat_counter_ = 0;
 };
 

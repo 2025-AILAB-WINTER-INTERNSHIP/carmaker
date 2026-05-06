@@ -85,7 +85,7 @@ private:
 
     std::atomic<double> latest_processed_timestamp_{0.0};
     std::atomic<bool> is_in_virtual_heartbeat_{false};
-    LockFreeTimeRingBuffer<T, 5, Extractor> ring_buffer_;
+    LockFreeTimeRingBuffer<T, 20, Extractor> ring_buffer_;
 };
 
 } // namespace carmaker_gateway
