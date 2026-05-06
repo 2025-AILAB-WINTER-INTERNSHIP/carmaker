@@ -20,6 +20,7 @@ void GatewayNodelet::onInit() {
     pnh_.param("use_anchor_trigger", use_anchor_trigger_, true); // Default to Event-driven (100Hz)
     pnh_.param("sync_rate_hz", sync_rate_hz_, 30.0);
     pnh_.param("time_slop_ms", time_slop_ms_, 15.0);
+    time_slop_sec_ = time_slop_ms_ / 1000.0;
     pnh_.param("enable_virtual_heartbeat", enable_virtual_heartbeat_, true);
     pnh_.param("max_heartbeat_cycles", max_heartbeat_cycles_, -1);
     pnh_.param("watchdog_timeout", watchdog_timeout_, 100.0);
@@ -128,6 +129,7 @@ void GatewayNodelet::timerCallback(const ros::TimerEvent& event) {
         double wall_now = ros::WallTime::now().toSec();
         if (std::abs(anchor->time.toSec() - wall_now) <= (watchdog_timeout_ / 1000.0)) {
             last_valid_anchor_time_ = target_time;
+            base_virtual_time_ = target_time; // Update sync base
             heartbeat_counter_ = 0;
             is_valid = true;
         }
@@ -136,7 +138,8 @@ void GatewayNodelet::timerCallback(const ros::TimerEvent& event) {
     if (!is_valid && enable_virtual_heartbeat_) {
         heartbeat_counter_++;
         if (max_heartbeat_cycles_ == -1 || heartbeat_counter_ <= max_heartbeat_cycles_) {
-            target_time = last_valid_anchor_time_ + (1.0 / sync_rate_hz_);
+            // [TIME SYNC] Using multiplication to prevent floating-point drift
+            target_time = base_virtual_time_ + (static_cast<double>(heartbeat_counter_) / sync_rate_hz_);
             last_valid_anchor_time_ = target_time;
             anchor_cache_.NotifyVirtualHeartbeatTriggered();
             processSynchronization(target_time, nullptr);
@@ -155,64 +158,44 @@ void GatewayNodelet::processSynchronization(double target_time, const std::share
     out_msg->header.stamp = ros::Time(target_time);
     out_msg->is_valid = (anchor != nullptr);
 
-    // 2. Dynamics Info
-    carmaker_msgs::SensorStatus dyn_status;
-    dyn_status.name = "dynamics";
-    if (anchor) {
-        out_msg->dynamic_info = *anchor;
-        dyn_status.status = true;
-    } else {
-        dyn_status.status = false;
-    }
-    out_msg->sensors.push_back(dyn_status);
+    // [SENSOR FUSION HELPER] Generic lambda for unified matching logic
+    auto sync_sensor = [&](const std::string& name, auto match_ptr, auto& out_field) {
+        carmaker_msgs::SensorStatus status;
+        status.name = name;
+        if (match_ptr && std::abs(match_ptr->header.stamp.toSec() - target_time) <= time_slop_sec_) {
+            out_field = *match_ptr;
+            status.status = true;
+        } else {
+            status.status = false;
+        }
+        out_msg->sensors.push_back(std::move(status));
+    };
 
-    // 3. Objects Match
-    auto objects = objects_cache_.GetBestMatch(target_time);
-    carmaker_msgs::SensorStatus obj_status;
-    obj_status.name = "objects";
-    if (objects && std::abs(objects->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
-        out_msg->objects = *objects;
-        obj_status.status = true;
-    } else {
-        obj_status.status = false;
-    }
-    out_msg->sensors.push_back(obj_status);
+    // 2. Perform Fusion across all modes
+    sync_sensor("dynamics", anchor, out_msg->dynamic_info);
+    sync_sensor("objects", objects_cache_.GetBestMatch(target_time), out_msg->objects);
+    sync_sensor("uaq", uaq_cache_.GetBestMatch(target_time), out_msg->uaq_out);
 
-    // 4. UAQ Match
-    auto uaq = uaq_cache_.GetBestMatch(target_time);
-    carmaker_msgs::SensorStatus uaq_status;
-    uaq_status.name = "uaq";
-    if (uaq && std::abs(uaq->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
-        out_msg->uaq_out = *uaq;
-        uaq_status.status = true;
-    } else {
-        uaq_status.status = false;
-    }
-    out_msg->sensors.push_back(uaq_status);
-
-    // 5. Sparse Camera Match (High performance O(1) iteration)
-    for (auto* ctx : fast_camera_list_) {
+    // [CAMERA FUSION HELPER] Specialized lambda for camera matching and sparse payload logic
+    auto sync_camera = [&](CameraContext* ctx) {
         auto img = ctx->image_cache->GetBestMatch(target_time);
         auto info = ctx->info_cache->GetBestMatch(target_time);
 
         carmaker_msgs::CameraData cam_data;
         cam_data.name = ctx->name;
 
-        if (img && std::abs(img->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
+        if (img && std::abs(img->header.stamp.toSec() - target_time) <= time_slop_sec_) {
             double current_stamp = img->header.stamp.toSec();
             double last_stamp = ctx->last_published_stamp.load(std::memory_order_relaxed);
             
-            // [METADATA ALWAYS] Using helper for elegant copy
             shallowCopyImageMetadata(*img, cam_data.image);
 
-            if (info && std::abs(info->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
+            if (info && std::abs(info->header.stamp.toSec() - target_time) <= time_slop_sec_) {
                 cam_data.info = *info;
             }
 
             // [SPARSE PAYLOAD] Thread-safe check with Time-Jump resilience
-            // Trigger on progression OR significant backward jump (Sim reset)
             bool is_new_frame = (current_stamp > last_stamp) || (current_stamp < (last_stamp - 1.0));
-            
             if (is_new_frame) {
                 cam_data.image.data = img->data; 
                 cam_data.status = true;          
@@ -224,6 +207,10 @@ void GatewayNodelet::processSynchronization(double target_time, const std::share
             cam_data.status = false;
         }
         out_msg->cameras.push_back(std::move(cam_data));
+    };
+
+    for (auto* ctx : fast_camera_list_) {
+        sync_camera(ctx);
     }
 
     synced_pub_.publish(out_msg);

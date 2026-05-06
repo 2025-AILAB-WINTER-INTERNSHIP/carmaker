@@ -103,6 +103,8 @@ private:
     // Enterprise state tracking
     double last_valid_anchor_time_ = 0.0;
     double last_anchor_arrival_time_ = 0.0;
+    double time_slop_sec_ = 0.0;
+    double base_virtual_time_ = 0.0;
     int heartbeat_counter_ = 0;
 };
 
