@@ -83,6 +83,9 @@ private:
         }
     }
 
+    // [Future Work] In C++20, consider using std::atomic::wait() and notify_one() on 
+    // latest_processed_timestamp_ to enable efficient event-driven wakeups for 
+    // downstream consumers without the overhead of condition variables or polling.
     std::atomic<double> latest_processed_timestamp_{0.0};
     std::atomic<bool> is_in_virtual_heartbeat_{false};
     LockFreeTimeRingBuffer<T, 20, Extractor> ring_buffer_;

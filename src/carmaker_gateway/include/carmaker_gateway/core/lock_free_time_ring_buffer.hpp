@@ -102,7 +102,9 @@ private:
     std::atomic<uint64_t> write_index_{0};
 
     // Buffer of shared pointers. Atomic load/store are used for thread safety.
-    // In C++17, std::atomic_load/store on shared_ptr are the standard way.
+    // In C++17, std::atomic_load/store free functions are the standard way to handle shared_ptr.
+    // [Future Work] If targeting C++20 or later, migrate to std::atomic<std::shared_ptr<const T>>
+    // for improved thread-safety semantics, better performance, and standard compliance.
     mutable std::array<std::shared_ptr<const T>, Size> buffer_;
 };
 

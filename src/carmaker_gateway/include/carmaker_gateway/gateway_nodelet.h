@@ -18,6 +18,9 @@
 #include <map>
 
 namespace carmaker_gateway {
+// [Future Work] In C++20, define 'Message' and 'Extractor' Concepts to enforce 
+// compile-time constraints on template arguments for better type safety and 
+// clearer error messages during cache instantiation.
 
 /**
  * @brief ROS Nodelet wrapper for the CarMaker Gateway.
