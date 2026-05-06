@@ -33,9 +33,13 @@ void GatewayNodelet::onInit() {
     anchor_sub_ = nh_.subscribe(anchor_topic_, 10, &GatewayNodelet::DynamicsInfoCallback, this);
 
     for (const auto& topic : input_topics_) {
+        NODELET_INFO("Registering input topic: %s", topic.c_str());
         if (topic.find("image_raw") != std::string::npos) {
-            image_caches_[topic] = std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image>>();
-            image_subs_.push_back(nh_.subscribe<sensor_msgs::Image>(topic, 2, boost::bind(&GatewayNodelet::imageCallback, this, _1, topic)));
+            camera_image_caches_[topic] = std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 5, carmaker_gateway::TimestampExtractor<sensor_msgs::Image>>>();
+            camera_image_subs_.push_back(nh_.subscribe<sensor_msgs::Image>(topic, 2, boost::bind(&GatewayNodelet::cameraImageCallback, this, _1, topic)));
+        } else if (topic.find("camera_info") != std::string::npos) {
+            camera_info_caches_[topic] = std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 5, carmaker_gateway::TimestampExtractor<sensor_msgs::CameraInfo>>>();
+            camera_info_subs_.push_back(nh_.subscribe<sensor_msgs::CameraInfo>(topic, 2, boost::bind(&GatewayNodelet::cameraInfoCallback, this, _1, topic)));
         } else if (topic.find("objects") != std::string::npos) {
             objects_sub_ = nh_.subscribe(topic, 10, &GatewayNodelet::objectsCallback, this);
         } else if (topic.find("uaq_out") != std::string::npos) {
@@ -47,9 +51,8 @@ void GatewayNodelet::onInit() {
 
     // Pre-allocate message to prevent heap fragmentation
     out_msg_ = boost::make_shared<carmaker_msgs::SyncedData>();
-    out_msg_->sensor_names.reserve(input_topics_.size() + 2);
-    out_msg_->sensor_status.reserve(input_topics_.size() + 2);
-    out_msg_->images.reserve(4);
+    out_msg_->sensors.reserve(3); // dynamics, objects, uaq
+    out_msg_->cameras.reserve(4);
 
     // Fixed-rate synchronization timer
     sync_timer_ = nh_.createTimer(ros::Duration(1.0 / sync_rate_hz_), &GatewayNodelet::timerCallback, this);
@@ -69,9 +72,16 @@ void GatewayNodelet::uaqCallback(const carmaker_msgs::UAQ_Out::ConstPtr& msg) {
     uaq_cache_.Push(toStdPtr(msg));
 }
 
-void GatewayNodelet::imageCallback(const sensor_msgs::Image::ConstPtr& msg, const std::string& topic_name) {
-    auto it = image_caches_.find(topic_name);
-    if (it != image_caches_.end()) {
+void GatewayNodelet::cameraImageCallback(const sensor_msgs::Image::ConstPtr& msg, const std::string& topic_name) {
+    auto it = camera_image_caches_.find(topic_name);
+    if (it != camera_image_caches_.end()) {
+        it->second->Push(toStdPtr(msg));
+    }
+}
+
+void GatewayNodelet::cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& msg, const std::string& topic_name) {
+    auto it = camera_info_caches_.find(topic_name);
+    if (it != camera_info_caches_.end()) {
         it->second->Push(toStdPtr(msg));
     }
 }
@@ -82,23 +92,30 @@ void GatewayNodelet::timerCallback(const ros::TimerEvent& event) {
 
     // 1. Anchor check (Deterministic clock reference)
     auto anchor = anchor_cache_.GetMostRecent();
-    double wall_now = ros::Time::now().toSec();
 
-    if (anchor && std::abs(anchor->header.stamp.toSec() - wall_now) <= (watchdog_timeout_ / 1000.0)) {
-        // Normal operation: Use anchor's own timestamp for synchronization
-        target_time = anchor->header.stamp.toSec();
-        last_valid_anchor_time_ = target_time;
-        heartbeat_counter_ = 0;
-    } else {
+    if (anchor) {
+        target_time = anchor->time.toSec(); // Use SimTime for logic
+        double wall_now = ros::WallTime::now().toSec();
+        double anchor_wall = anchor->header.stamp.toSec(); // header.stamp is WallTime
+
+        // Watchdog: Check if anchor's WallTime is within timeout of current system WallTime
+        if (std::abs(anchor_wall - wall_now) <= (watchdog_timeout_ / 1000.0)) {
+            last_valid_anchor_time_ = target_time;
+            heartbeat_counter_ = 0;
+            is_valid = true;
+        } else {
+            is_valid = false;
+        }
+    }
+
+    if (!is_valid) {
         // 2. Extrapolation: Calculate target time based on system cycle
-        is_valid = false;
         if (enable_virtual_heartbeat_) {
             heartbeat_counter_++;
             if (max_heartbeat_cycles_ != -1 && heartbeat_counter_ > max_heartbeat_cycles_) {
                 NODELET_ERROR_THROTTLE(1.0, "Enterprise Gateway: System stalled. Stale anchor.");
                 return;
             }
-            // Extrapolate target time (last_time + dt)
             target_time = last_valid_anchor_time_ + (1.0 / sync_rate_hz_);
             last_valid_anchor_time_ = target_time;
             anchor_cache_.NotifyVirtualHeartbeatTriggered();
@@ -109,51 +126,87 @@ void GatewayNodelet::timerCallback(const ros::TimerEvent& event) {
     }
 
     // 3. Clear and Reset pre-allocated message
-    out_msg_->sensor_names.clear();
-    out_msg_->sensor_status.clear();
-    out_msg_->images.clear();
+    out_msg_->sensors.clear();
+    out_msg_->cameras.clear();
     out_msg_->header.stamp = ros::Time(target_time);
     out_msg_->is_valid = is_valid;
 
     // 4. Deterministic Time Sweep (Lookback across all sensor history)
-    out_msg_->sensor_names.push_back("dynamics");
+    carmaker_msgs::SensorStatus dyn_status;
+    dyn_status.name = "dynamics";
     if (anchor) {
         out_msg_->dynamic_info = *anchor;
-        out_msg_->sensor_status.push_back(true);
+        dyn_status.status = true;
     } else {
-        out_msg_->sensor_status.push_back(false);
+        dyn_status.status = false;
     }
+    out_msg_->sensors.push_back(dyn_status);
 
     // Objects Match
     auto objects = objects_cache_.GetBestMatch(target_time);
-    out_msg_->sensor_names.push_back("objects");
-    if (objects && std::abs(objects->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
+    carmaker_msgs::SensorStatus obj_status;
+    obj_status.name = "objects";
+    if (objects && std::abs(objects->time.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
         out_msg_->objects = *objects;
-        out_msg_->sensor_status.push_back(true);
+        obj_status.status = true;
     } else {
-        out_msg_->sensor_status.push_back(false);
+        obj_status.status = false;
     }
+    out_msg_->sensors.push_back(obj_status);
 
     // UAQ Match
     auto uaq = uaq_cache_.GetBestMatch(target_time);
-    out_msg_->sensor_names.push_back("uaq");
-    if (uaq && std::abs(uaq->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
-        out_msg_->uaq_out = *uaq;
-        out_msg_->sensor_status.push_back(true);
-    } else {
-        out_msg_->sensor_status.push_back(false);
-    }
-
-    // Multi-camera Lookback Sweep
-    for (const auto& kv : image_caches_) {
-        auto img = kv.second->GetBestMatch(target_time);
-        out_msg_->sensor_names.push_back(kv.first);
-        if (img && std::abs(img->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
-            out_msg_->images.push_back(*img);
-            out_msg_->sensor_status.push_back(true);
+    carmaker_msgs::SensorStatus uaq_status;
+    uaq_status.name = "uaq";
+    if (uaq) {
+        double slop = std::abs(uaq->time.toSec() - target_time);
+        if (slop <= (time_slop_ms_ / 1000.0)) {
+            out_msg_->uaq_out = *uaq;
+            uaq_status.status = true;
         } else {
-            out_msg_->sensor_status.push_back(false);
+            uaq_status.status = false;
         }
+    } else {
+        uaq_status.status = false;
+    }
+    out_msg_->sensors.push_back(uaq_status);
+
+    for (const auto& kv : camera_image_caches_) {
+        const std::string& img_topic = kv.first;
+        auto img = kv.second->GetBestMatch(target_time);
+
+        carmaker_msgs::CameraData cam_data;
+        cam_data.name = img_topic;
+
+        // Prepare corresponding CameraInfo topic name
+        std::string info_topic = img_topic;
+        size_t pos = info_topic.find("image_raw");
+        if (pos != std::string::npos) {
+            info_topic.replace(pos, 9, "camera_info");
+        }
+
+        if (img && std::abs(img->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
+            cam_data.image = *img;
+
+            auto it_info = camera_info_caches_.find(info_topic);
+            if (it_info != camera_info_caches_.end()) {
+                auto info = it_info->second->GetBestMatch(target_time);
+                if (info && std::abs(info->header.stamp.toSec() - target_time) <= (time_slop_ms_ / 1000.0)) {
+                    cam_data.info = *info;
+                } else {
+                    cam_data.info = sensor_msgs::CameraInfo();
+                }
+            } else {
+                cam_data.info = sensor_msgs::CameraInfo();
+            }
+            cam_data.status = true;
+        } else {
+            // PADDING: Maintain fixed index even on failure
+            cam_data.image = sensor_msgs::Image();
+            cam_data.info = sensor_msgs::CameraInfo();
+            cam_data.status = false;
+        }
+        out_msg_->cameras.push_back(cam_data);
     }
 
     synced_pub_.publish(out_msg_);

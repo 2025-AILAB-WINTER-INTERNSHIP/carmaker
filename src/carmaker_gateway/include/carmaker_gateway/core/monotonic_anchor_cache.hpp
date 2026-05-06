@@ -12,7 +12,7 @@ namespace carmaker_gateway {
  * Enforces monotonicity of incoming timestamps to prevent out-of-order
  * data processing and manages state resets during virtual heartbeats.
  */
-template <typename T, typename Extractor = DefaultTimestampExtractor<T>>
+template <typename T, typename Extractor = TimestampExtractor<T>>
 class MonotonicAnchorCache {
 public:
     MonotonicAnchorCache() {}

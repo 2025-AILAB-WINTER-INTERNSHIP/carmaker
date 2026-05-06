@@ -3,12 +3,13 @@
 
 #include <nodelet/nodelet.h>
 #include <ros/ros.h>
-#include <sensor_msgs/Image.h>
 #include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/Objects.h>
 #include <carmaker_msgs/UAQ_Out.h>
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
 #include <carmaker_msgs/SyncedData.h>
-#include <carmaker_gateway/core/lock_free_sensor_cache.hpp>
+#include <carmaker_gateway/core/lock_free_time_ring_buffer.hpp>
 #include <carmaker_gateway/core/monotonic_anchor_cache.hpp>
 
 #include <string>
@@ -37,7 +38,8 @@ private:
     void DynamicsInfoCallback(const carmaker_msgs::DynamicsInfo::ConstPtr& msg);
     void objectsCallback(const carmaker_msgs::Objects::ConstPtr& msg);
     void uaqCallback(const carmaker_msgs::UAQ_Out::ConstPtr& msg);
-    void imageCallback(const sensor_msgs::Image::ConstPtr& msg, const std::string& topic_name);
+    void cameraImageCallback(const sensor_msgs::Image::ConstPtr& msg, const std::string& topic_name);
+    void cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& msg, const std::string& topic_name);
 
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
@@ -47,7 +49,8 @@ private:
 
     // ROS Subscribers
     ros::Subscriber anchor_sub_;
-    std::vector<ros::Subscriber> image_subs_;
+    std::vector<ros::Subscriber> camera_image_subs_;
+    std::vector<ros::Subscriber> camera_info_subs_;
     ros::Subscriber objects_sub_;
     ros::Subscriber uaq_sub_;
 
@@ -61,10 +64,11 @@ private:
     std::vector<std::string> input_topics_;
 
     // Core synchronization logic instances
-    carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicsInfo> anchor_cache_;
-    std::map<std::string, std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image>>> image_caches_;
-    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::Objects> objects_cache_;
-    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::UAQ_Out> uaq_cache_;
+    carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicsInfo, carmaker_gateway::SimTimeExtractor<carmaker_msgs::DynamicsInfo>> anchor_cache_;
+    std::map<std::string, std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 5, carmaker_gateway::TimestampExtractor<sensor_msgs::Image>>>> camera_image_caches_;
+    std::map<std::string, std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 5, carmaker_gateway::TimestampExtractor<sensor_msgs::CameraInfo>>>> camera_info_caches_;
+    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::Objects, 5, carmaker_gateway::SimTimeExtractor<carmaker_msgs::Objects>> objects_cache_;
+    carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::UAQ_Out, 5, carmaker_gateway::SimTimeExtractor<carmaker_msgs::UAQ_Out>> uaq_cache_;
 
     // Enterprise state tracking
     double last_valid_anchor_time_ = 0.0;

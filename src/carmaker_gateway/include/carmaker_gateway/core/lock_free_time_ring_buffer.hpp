@@ -14,9 +14,19 @@ namespace carmaker_gateway {
  * @brief Default extractor to retrieve timestamp from ROS message headers.
  */
 template <typename T>
-struct DefaultTimestampExtractor {
+struct TimestampExtractor {
     double operator()(const T& data) const {
         return data.header.stamp.toSec();
+    }
+};
+
+/**
+ * @brief Extractor to retrieve SimTime from CarMaker custom messages.
+ */
+template <typename T>
+struct SimTimeExtractor {
+    double operator()(const T& data) const {
+        return data.time.toSec();
     }
 };
 
@@ -25,7 +35,7 @@ struct DefaultTimestampExtractor {
  * Maintains a fixed-size history of data samples, allowing readers to
  * find the best match for a given timestamp without blocking writers.
  */
-template <typename T, size_t Size = 5, typename Extractor = DefaultTimestampExtractor<T>>
+template <typename T, size_t Size = 5, typename Extractor = TimestampExtractor<T>>
 class LockFreeTimeRingBuffer {
 public:
     LockFreeTimeRingBuffer() : write_index_(0) {
