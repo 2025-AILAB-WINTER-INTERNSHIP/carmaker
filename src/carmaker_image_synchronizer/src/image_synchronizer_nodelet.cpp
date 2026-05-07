@@ -56,9 +56,7 @@ void ImageSynchronizerNodelet::onInit() {
         SyncPolicy(queue_size), *sub_front_, *sub_rear_, *sub_left_, *sub_right_
     );
     sync_->setInterMessageLowerBound(ros::Duration(slop));
-    sync_->registerCallback([this](const auto& f, const auto& r, const auto& l, const auto& ri) {
-        this->syncCallback(f, r, l, ri);
-    });
+    sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
 
     // 4. Setup Publishers (8-Channel)
     pub_front_img_  = nh_.advertise<sensor_msgs::Image>(out_front_img, 1);
