@@ -1,0 +1,7 @@
+<library path="lib/libcarmaker_image_synchronizer_nodelet">
+  <class name="carmaker_image_synchronizer/ImageSynchronizerNodelet" type="carmaker_image_synchronizer::ImageSynchronizerNodelet" base_class_type="nodelet::Nodelet">
+    <description>
+      Carmaker Image Synchronizer (4-Camera Time Sync)
+    </description>
+  </class>
+</library>

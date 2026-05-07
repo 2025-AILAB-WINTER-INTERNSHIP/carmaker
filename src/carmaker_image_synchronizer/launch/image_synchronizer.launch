@@ -7,8 +7,8 @@
 
   <node pkg="nodelet" type="nodelet" name="gateway_nodelet_manager" args="manager" output="screen"/>
 
-  <node pkg="nodelet" type="nodelet" name="GatewayNodelet" args="load carmaker_gateway/GatewayNodelet gateway_nodelet_manager" output="screen">
-    <rosparam command="load" file="$(find carmaker_gateway)/config/gateway_params.yaml" />
+  <node pkg="nodelet" type="nodelet" name="ImageSynchronizerNodelet" args="load carmaker_image_synchronizer/ImageSynchronizerNodelet gateway_nodelet_manager" output="screen">
+    <rosparam command="load" file="$(find carmaker_image_synchronizer)/config/image_synchronizer_params.yaml" />
   </node>
 
   <!-- Foxglove Bridge for Visualization (Optional) -->

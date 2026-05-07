@@ -15,9 +15,6 @@ add_message_files(
   ObjectState.msg
   Objects.msg
   UAQ_Out.msg
-  SensorStatus.msg
-  CameraData.msg
-  SyncedData.msg
 )
 
 generate_messages(

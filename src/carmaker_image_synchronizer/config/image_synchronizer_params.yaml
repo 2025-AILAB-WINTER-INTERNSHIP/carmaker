@@ -1,0 +1,37 @@
+# ==============================================================================
+# Image Synchronizer Configuration
+# ==============================================================================
+
+# Input Topics
+input_topics:
+  front:
+    image: "/mono/fisheye/front/image_raw"
+    info:  "/mono/fisheye/front/camera_info"
+  rear:
+    image: "/mono/fisheye/rear/image_raw"
+    info:  "/mono/fisheye/rear/camera_info"
+  left:
+    image: "/mono/fisheye/left/image_raw"
+    info:  "/mono/fisheye/left/camera_info"
+  right:
+    image: "/mono/fisheye/right/image_raw"
+    info:  "/mono/fisheye/right/camera_info"
+
+# Output Topics
+output_topics:
+  front:
+    image: "/synced/front/image"
+    info:  "/synced/front/camera_info"
+  rear:
+    image: "/synced/rear/image"
+    info:  "/synced/rear/camera_info"
+  left:
+    image: "/synced/left/image"
+    info:  "/synced/left/camera_info"
+  right:
+    image: "/synced/right/image"
+    info:  "/synced/right/camera_info"
+
+# Sync Parameters
+sync_slop_sec: 0.05    # Maximum time difference between images (50ms)
+queue_size: 10         # Buffer size for incoming messages

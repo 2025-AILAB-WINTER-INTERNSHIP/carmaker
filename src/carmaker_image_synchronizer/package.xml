@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>carmaker_gateway</name>
+  <name>carmaker_image_synchronizer</name>
   <version>0.0.0</version>
-  <description>The carmaker_gateway package (Data Extraction &amp; Wrapping + Time Sync)</description>
+  <description>The carmaker image synchronizer package (4-Camera Time Sync)</description>
 
   <maintainer email="admin@example.com">admin</maintainer>
   <license>TODO</license>

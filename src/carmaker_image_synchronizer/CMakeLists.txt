@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(carmaker_gateway)
+project(carmaker_image_synchronizer)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,12 +10,13 @@ find_package(catkin REQUIRED COMPONENTS
   carmaker_msgs
   sensor_msgs
   diagnostic_msgs
+  message_filters
 )
 
 catkin_package(
   INCLUDE_DIRS include
-  LIBRARIES carmaker_gateway_nodelet
-  CATKIN_DEPENDS roscpp nodelet carmaker_msgs sensor_msgs diagnostic_msgs
+  LIBRARIES carmaker_image_synchronizer_nodelet
+  CATKIN_DEPENDS roscpp nodelet carmaker_msgs sensor_msgs diagnostic_msgs message_filters
 )
 
 include_directories(
@@ -23,14 +24,14 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
 )
 
-add_library(carmaker_gateway_nodelet src/gateway_nodelet.cpp)
-target_link_libraries(carmaker_gateway_nodelet ${catkin_LIBRARIES})
+add_library(carmaker_image_synchronizer_nodelet src/image_synchronizer_nodelet.cpp)
+target_link_libraries(carmaker_image_synchronizer_nodelet ${catkin_LIBRARIES})
 
 if(catkin_EXPORTED_TARGETS)
-  add_dependencies(carmaker_gateway_nodelet ${catkin_EXPORTED_TARGETS})
+  add_dependencies(carmaker_image_synchronizer_nodelet ${catkin_EXPORTED_TARGETS})
 endif()
 
-install(TARGETS carmaker_gateway_nodelet
+install(TARGETS carmaker_image_synchronizer_nodelet
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
