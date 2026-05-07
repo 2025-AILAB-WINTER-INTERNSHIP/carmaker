@@ -7,9 +7,11 @@ data_root: ../data
 manifest: ../data/csv/manifest.csv
 cameras: front,left,rear,right
 
-image_size: [512, 512]
+# Original CarMaker image size. This preserves the 16:9 geometry, but it is
+# much heavier than 512x512, so start with batch_size: 1.
+image_size: [1920, 1080]
 num_workers: 2
-batch_size: 4
+batch_size: 1
 val_ratio: 0.2
 seed: 42
 
