@@ -1,0 +1,25 @@
+<launch>
+  <arg name="data_root"
+    default="$(find carmaker_image)/data" />
+  <arg name="manifest"
+    default="$(find carmaker_image)/data/csv/manifest.csv" />
+  <arg name="cameras"
+    default="front,left,rear,right" />
+  <arg name="image_size"
+    default="512,512" />
+  <arg name="count"
+    default="8" />
+  <arg name="out_dir"
+    default="$(find carmaker_image)/runs/debug_dataset" />
+
+  <node pkg="carmaker_image"
+    type="segmentation_debug_dataset.py"
+    name="segmentation_debug_dataset"
+    output="screen"
+    args="--data-root $(arg data_root)
+          --manifest $(arg manifest)
+          --cameras $(arg cameras)
+          --image-size $(arg image_size)
+          --count $(arg count)
+          --out-dir $(arg out_dir)" />
+</launch>

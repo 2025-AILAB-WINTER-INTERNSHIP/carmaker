@@ -1,0 +1,33 @@
+# CarMaker fisheye semantic segmentation baseline.
+#
+# Input images are read from data/raw_post_processed and labels from
+# data/gt_post_processed through data/csv/manifest.csv when available.
+
+data_root: ../data
+manifest: ../data/csv/manifest.csv
+cameras: front,left,rear,right
+
+image_size: [512, 512]
+num_workers: 2
+batch_size: 4
+val_ratio: 0.2
+seed: 42
+
+epochs: 30
+learning_rate: 0.001
+weight_decay: 0.0001
+model:
+  name: unet
+  in_channels: 3
+  base_channels: 32
+
+# Current GT class ids from apply_mask.py:
+#   0 background
+#   1 lane
+#   2 landmark
+loss: cross_entropy
+# class_weights: [0.2, 2.0, 3.0]
+
+checkpoint_interval: 10
+image_log_interval: 5
+run_dir: ../runs/unet_carmaker

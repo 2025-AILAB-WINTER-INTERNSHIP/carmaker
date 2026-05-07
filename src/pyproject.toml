@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy", "opencv-python", "matplotlib", "scipy", "scikit-learn", "scikit-image", "pandas", "open3d", "pyre-check"]
+dependencies = ["numpy", "opencv-python", "matplotlib", "scipy", "scikit-learn", "scikit-image", "pandas", "open3d", "pyre-check", "pyyaml", "tensorboard"]
 
 [project.optional-dependencies]
 cpu = ["torch==2.11.0", "torchvision"]
