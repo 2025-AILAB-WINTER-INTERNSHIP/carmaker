@@ -8,13 +8,19 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .adapters import CarmakerSegmentationAdapter
-from .dataset import SegmentationDataset
-from .visualization import overlay_mask
+try:
+    from .adapters import CarmakerSegmentationAdapter
+    from .dataset import SegmentationDataset
+    from .visualization import overlay_mask
+except ImportError:
+    from adapters import CarmakerSegmentationAdapter
+    from dataset import SegmentationDataset
+    from visualization import overlay_mask
 
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_ROOT = PACKAGE_ROOT / "data"
+SEGMENTATION_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = SEGMENTATION_ROOT.parent
+DEFAULT_DATA_ROOT = SRC_ROOT / "carmaker_image" / "data"
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,9 +28,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT))
     parser.add_argument("--manifest", default="")
     parser.add_argument("--cameras", default="")
-    parser.add_argument("--image-size", default="512,512")
+    parser.add_argument("--image-size", default="1920,1080")
     parser.add_argument("--count", type=int, default=8)
-    parser.add_argument("--out-dir", default=str(PACKAGE_ROOT / "runs" / "debug_dataset"))
+    parser.add_argument("--out-dir", default=str(SEGMENTATION_ROOT / "runs" / "debug_dataset"))
     return parser.parse_args()
 
 
@@ -62,3 +68,6 @@ def _parse_size(value: str) -> tuple[int, int]:
         raise ValueError("--image-size must be WIDTH,HEIGHT")
     return parts[0], parts[1]
 
+
+if __name__ == "__main__":
+    main()

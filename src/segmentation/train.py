@@ -12,17 +12,26 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .adapters import CarmakerSegmentationAdapter
-from .dataset import SegmentationDataset, split_dataset
-from .losses import build_loss
-from .metrics import confusion_matrix, mask_psnr, segmentation_scores
-from .models import build_model
-from .visualization import overlay_mask
+try:
+    from .adapters import CarmakerSegmentationAdapter
+    from .dataset import SegmentationDataset, split_dataset
+    from .losses import build_loss
+    from .metrics import confusion_matrix, mask_psnr, segmentation_scores
+    from .models import build_model
+    from .visualization import overlay_mask
+except ImportError:
+    from adapters import CarmakerSegmentationAdapter
+    from dataset import SegmentationDataset, split_dataset
+    from losses import build_loss
+    from metrics import confusion_matrix, mask_psnr, segmentation_scores
+    from models import build_model
+    from visualization import overlay_mask
 
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATA_ROOT = PACKAGE_ROOT / "data"
-DEFAULT_CONFIG = PACKAGE_ROOT / "config" / "segmentation_unet.yaml"
+SEGMENTATION_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = SEGMENTATION_ROOT.parent
+DEFAULT_DATA_ROOT = SRC_ROOT / "carmaker_image" / "data"
+DEFAULT_CONFIG = SEGMENTATION_ROOT / "config" / "segmentation_unet.yaml"
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,7 +70,7 @@ def main() -> None:
     _set_seed(int(cfg.get("seed", 42)))
 
     device = torch.device(cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
-    run_dir = Path(cfg.get("run_dir", PACKAGE_ROOT / "runs" / "unet_carmaker")).expanduser().resolve()
+    run_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs" / "unet_carmaker")).expanduser().resolve()
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -283,3 +292,7 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+if __name__ == "__main__":
+    main()

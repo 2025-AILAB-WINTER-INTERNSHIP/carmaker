@@ -1,10 +1,11 @@
-# CarMaker fisheye semantic segmentation baseline.
+# Standalone CarMaker fisheye semantic segmentation baseline.
 #
-# Input images are read from data/raw_post_processed and labels from
-# data/gt_post_processed through data/csv/manifest.csv when available.
+# Run from /workspace:
+#   python3 src/segmentation/debug_dataset.py --count 10 --image-size 1920,1080
+#   python3 src/segmentation/train.py --overfit-count 10 --epochs 50
 
-data_root: ../data
-manifest: ../data/csv/manifest.csv
+data_root: ../../carmaker_image/data
+manifest: ../../carmaker_image/data/csv/manifest.csv
 cameras: front,left,rear,right
 
 # Original CarMaker image size. This preserves the 16:9 geometry, but it is
@@ -23,7 +24,7 @@ model:
   in_channels: 3
   base_channels: 32
 
-# Current GT class ids from apply_mask.py:
+# Current GT class ids from carmaker_image/scripts/apply_mask.py:
 #   0 background
 #   1 lane
 #   2 landmark

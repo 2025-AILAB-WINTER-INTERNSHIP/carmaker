@@ -9,7 +9,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .adapters import DatasetAdapter, SegmentationSample
+try:
+    from .adapters import DatasetAdapter, SegmentationSample
+except ImportError:
+    from adapters import DatasetAdapter, SegmentationSample
 
 
 ImageMaskTransform = Callable[[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]
@@ -81,4 +84,3 @@ def split_dataset(dataset: Dataset, val_ratio: float, seed: int) -> tuple[Datase
     train_count = total - val_count
     generator = torch.Generator().manual_seed(seed)
     return torch.utils.data.random_split(dataset, [train_count, val_count], generator=generator)
-
