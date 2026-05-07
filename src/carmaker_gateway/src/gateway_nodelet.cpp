@@ -56,7 +56,7 @@ void GatewayNodelet::onInit() {
             ctx->name = topic;
 
             auto img_cache = ctx->image_cache;
-            ctx->image_sub = nh_.subscribe<sensor_msgs::Image>(topic, 2, 
+            ctx->image_sub = nh_.subscribe<sensor_msgs::Image>(topic, 2,
                 [this, img_cache](const sensor_msgs::Image::ConstPtr& msg) {
                     img_cache->Push(toStdPtr(msg));
                 }, ros::VoidPtr(), hints);
@@ -89,7 +89,7 @@ void GatewayNodelet::onInit() {
     // Trigger Mode: Event-driven (Anchor) vs Periodic (Timer)
     sync_timer_ = nh_.createTimer(ros::Duration(1.0 / sync_rate_hz_), &GatewayNodelet::timerCallback, this);
     diag_timer_ = nh_.createTimer(ros::Duration(1.0), &GatewayNodelet::diagnosticsCallback, this);
-    
+
     if (use_anchor_trigger_) {
         NODELET_INFO("Gateway Mode: Event-Driven (Timer active as Watchdog)");
     } else {
@@ -123,7 +123,7 @@ void GatewayNodelet::timerCallback(const ros::TimerEvent& event) {
     if (use_anchor_trigger_) {
         double now = ros::WallTime::now().toSec();
         if ((now - last_anchor_arrival_time_.load(std::memory_order_relaxed)) < (watchdog_ratio_ / sync_rate_hz_)) {
-            return; 
+            return;
         }
     }
 
@@ -169,7 +169,7 @@ void GatewayNodelet::processSynchronization(double target_time, const std::share
     out_msg->is_valid = (anchor != nullptr);
 
     total_sync_attempts_.fetch_add(1, std::memory_order_relaxed);
-    
+
     // [SENSOR FUSION HELPER] Generic lambda for unified matching logic
     // is_anchor: If true, excludes this sensor from 'hits' count (it's the reference)
     auto sync_sensor = [&](const std::string& name, auto match_ptr, auto& out_field, bool is_anchor = false) {
@@ -203,7 +203,7 @@ void GatewayNodelet::processSynchronization(double target_time, const std::share
             cache_hits_.fetch_add(1, std::memory_order_relaxed);
             double current_stamp = img->header.stamp.toSec();
             double last_stamp = ctx->last_published_stamp.load(std::memory_order_relaxed);
-            
+
             shallowCopyImageMetadata(*img, cam_data.image);
 
             if (info && std::abs(info->header.stamp.toSec() - target_time) <= time_slop_sec_) {
@@ -213,17 +213,18 @@ void GatewayNodelet::processSynchronization(double target_time, const std::share
                 slop_violations_.fetch_add(1, std::memory_order_relaxed);
             }
 
-            // [SPARSE PAYLOAD] Thread-safe check with Time-Jump resilience
-            // Accept new frames if they move forward, or if a large backward jump (Sim Reset) occurs
-            bool is_new_frame = (current_stamp > last_stamp) || 
+            // [SMART SPARSE PAYLOAD]
+            // Keep status=true to indicate sync success, but only send data for NEW frames to save bandwidth.
+            bool is_new_frame = (current_stamp > last_stamp) ||
                                 (current_stamp < (last_stamp - time_jump_threshold_));
+
             if (is_new_frame) {
-                cam_data.image.data = img->data; 
-                cam_data.status = true;          
+                cam_data.image.data = img->data;
                 ctx->last_published_stamp.store(current_stamp, std::memory_order_relaxed);
-            } else {
-                cam_data.status = false; 
             }
+
+            cam_data.status = true;
+
         } else {
             cam_data.status = false;
             if (img) slop_violations_.fetch_add(1, std::memory_order_relaxed);
@@ -272,7 +273,7 @@ void GatewayNodelet::diagnosticsCallback(const ros::TimerEvent& event) {
 
         add_kv("Hit Rate (Approx)", std::to_string(hit_rate * 100.0) + "%");
         add_kv("Slop Violation Rate", std::to_string(slop_rate * 100.0) + "%");
-        
+
         if (hit_rate < diag_hit_rate_warn_) {
             status.level = diagnostic_msgs::DiagnosticStatus::WARN;
             // Refined message based on violation type

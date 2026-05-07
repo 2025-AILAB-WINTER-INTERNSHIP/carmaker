@@ -19,8 +19,8 @@
 #include <map>
 
 namespace carmaker_gateway {
-// [Future Work] In C++20, define 'Message' and 'Extractor' Concepts to enforce 
-// compile-time constraints on template arguments for better type safety and 
+// [Future Work] In C++20, define 'Message' and 'Extractor' Concepts to enforce
+// compile-time constraints on template arguments for better type safety and
 // clearer error messages during cache instantiation.
 
 /**
@@ -52,13 +52,13 @@ private:
 
     struct CameraContext {
         std::string name;
-        std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 10>> image_cache;
-        std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 10>> info_cache;
+        std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 20>> image_cache;
+        std::shared_ptr<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 20>> info_cache;
         ros::Subscriber image_sub;
         ros::Subscriber info_sub;
         std::atomic<double> last_published_stamp;
 
-        CameraContext() : 
+        CameraContext() :
             image_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 10>>()),
             info_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 10>>()),
             last_published_stamp(0.0) {}
@@ -70,7 +70,7 @@ private:
      * @param anchor The anchor data if available (optional).
      */
     void processSynchronization(double target_time, const std::shared_ptr<const carmaker_msgs::DynamicsInfo>& anchor);
-    
+
     /**
      * @brief Perform a shallow copy of Image metadata, excluding the heavy data field.
      */
@@ -113,7 +113,7 @@ private:
     carmaker_gateway::MonotonicAnchorCache<carmaker_msgs::DynamicsInfo, carmaker_gateway::TimestampExtractor<carmaker_msgs::DynamicsInfo>> anchor_cache_;
     carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::Objects, 20, carmaker_gateway::TimestampExtractor<carmaker_msgs::Objects>> objects_cache_;
     carmaker_gateway::LockFreeTimeRingBuffer<carmaker_msgs::UAQ_Out, 20, carmaker_gateway::TimestampExtractor<carmaker_msgs::UAQ_Out>> uaq_cache_;
-    
+
     // Grouped Camera Management
     std::map<std::string, std::unique_ptr<CameraContext>> camera_contexts_;
     std::vector<CameraContext*> fast_camera_list_;
