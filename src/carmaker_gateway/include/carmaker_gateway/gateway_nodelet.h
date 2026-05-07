@@ -59,8 +59,8 @@ private:
         std::atomic<double> last_published_stamp;
 
         CameraContext() :
-            image_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 10>>()),
-            info_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 10>>()),
+            image_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::Image, 20>>()),
+            info_cache(std::make_shared<carmaker_gateway::LockFreeTimeRingBuffer<sensor_msgs::CameraInfo, 20>>()),
             last_published_stamp(0.0) {}
     };
 

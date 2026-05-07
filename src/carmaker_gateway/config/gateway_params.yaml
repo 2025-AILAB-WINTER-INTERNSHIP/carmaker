@@ -10,7 +10,7 @@ sync_rate_hz: 30.0
 # time_slop_ms: Maximum acceptable time difference (in milliseconds) between the anchor
 #               timestamp and the current time. If the difference exceeds this value,
 #               the anchor is considered missing/invalid, dropping the ghost data.
-time_slop_ms: 50.0
+time_slop_ms: 100.0
 
 # ==============================================================================
 # 2. Fault-Tolerance & Troubleshooting Parameters
