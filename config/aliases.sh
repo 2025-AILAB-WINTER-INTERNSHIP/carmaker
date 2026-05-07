@@ -19,12 +19,12 @@ SOURCE_LOG="/docker_dev/scripts/utils_logging.sh"
 if [ -d /opt/ros ]; then
     # --- Build (Unified Colcon) ----------------------------------------------
     # CMAKE_CXX_STANDARD is injected via .env -> docker-compose -> ENV
-    alias cb='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=$(which python3)'
-    alias cbp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=$(which python3) --packages-select'
+    alias cb='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3'
+    alias cbp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3 --packages-select'
 
     # Release mode (Optimized)
-    alias cbr='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=$(which python3)'
-    alias cbrp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=$(which python3) --packages-select'
+    alias cbr='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3'
+    alias cbrp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=/usr/bin/python3 --packages-select'
     alias cbt='colcon test'
     alias cbm='colcon build --symlink-install --metas /docker_dev/config/colcon.meta'
     alias s='source /workspace/install/setup.bash'
