@@ -55,21 +55,23 @@ private:
     void imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index);
     void publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
+    void timerCallback(const ros::TimerEvent& event);
 
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
+    ros::Timer diag_timer_;
     
     // Channels, Data
     std::vector<CameraChannel> channels_;
     std::mutex data_mutex_;
-
+    
     // Advanced Settings
     size_t master_index_ = 0;
     double info_timeout_ = 2.0;
-
+    
     // Diagnostics
     diagnostic_updater::Updater diagnostic_updater_;
-    std::atomic<uint64_t> total_synced_count_{0};
+    uint64_t total_synced_count_ = 0;
 
     // Message Filters
     typedef message_filters::sync_policies::ApproximateTime<

@@ -86,7 +86,14 @@ void ImageSynchronizerNodelet::onInit() {
     sync_->setInterMessageLowerBound(ros::Duration(slop));
     sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
 
+    // 5. Setup Diagnostics Timer (1Hz) to ensure diagnostics are sent even if sync stalls
+    diag_timer_ = nh_.createTimer(ros::Duration(1.0), &ImageSynchronizerNodelet::timerCallback, this);
+
     NODELET_INFO("Image Synchronizer with Diagnostics Started. Master: [%s]", channels_[master_index_].name.c_str());
+}
+
+void ImageSynchronizerNodelet::timerCallback(const ros::TimerEvent& event) {
+    diagnostic_updater_.update();
 }
 
 void ImageSynchronizerNodelet::imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index) {
@@ -112,8 +119,6 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
     for (size_t i = 0; i < images.size(); ++i) {
         publishWithSync(i, images[i], sync_time);
     }
-    
-    diagnostic_updater_.update();
 }
 
 void ImageSynchronizerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
