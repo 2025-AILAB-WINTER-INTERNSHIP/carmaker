@@ -10,45 +10,59 @@
 #include <message_filters/sync_policies/approximate_time.h>
 
 #include <mutex>
+#include <vector>
+#include <memory>
 
 namespace carmaker_image_synchronizer {
 
+/**
+ * @brief Enterprise-grade Image Synchronizer for Multi-Camera perception.
+ * Synchronizes multiple camera streams and attaches the latest CameraInfo.
+ */
 class ImageSynchronizerNodelet : public nodelet::Nodelet {
 public:
     virtual void onInit();
 
 private:
+    struct CameraChannel {
+        std::string name;
+        std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> sub;
+        ros::Subscriber info_sub;
+        ros::Publisher img_pub;
+        ros::Publisher info_pub;
+
+        // Caching
+        sensor_msgs::CameraInfo last_info;
+        bool has_info = false;
+        ros::Time last_info_time;
+    };
+
     // Sync Callback
     void syncCallback(const sensor_msgs::ImageConstPtr& front,
                       const sensor_msgs::ImageConstPtr& rear,
                       const sensor_msgs::ImageConstPtr& left,
                       const sensor_msgs::ImageConstPtr& right);
 
+    void publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time);
+
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
     
-    // 8-Channel Synced Publishers
-    ros::Publisher pub_front_img_, pub_rear_img_, pub_left_img_, pub_right_img_;
-    ros::Publisher pub_front_info_, pub_rear_info_, pub_left_info_, pub_right_info_;
+    // Channels
+    std::vector<CameraChannel> channels_;
+    std::mutex info_mutex_;
+
+    // Settings
+    size_t master_index_ = 0;
+    double info_timeout_ = 2.0;
 
     // Message Filters
     typedef message_filters::sync_policies::ApproximateTime<
         sensor_msgs::Image, sensor_msgs::Image,
         sensor_msgs::Image, sensor_msgs::Image
     > SyncPolicy;
-
-    std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> sub_front_;
-    std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> sub_rear_;
-    std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> sub_left_;
-    std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> sub_right_;
+    
     std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
-
-    // Camera Info Caching
-    std::mutex info_mutex_;
-    bool has_info_front_ = false, has_info_rear_ = false, has_info_left_ = false, has_info_right_ = false;
-
-    ros::Subscriber info_front_sub_, info_rear_sub_, info_left_sub_, info_right_sub_;
-    sensor_msgs::CameraInfo last_info_front_, last_info_rear_, last_info_left_, last_info_right_;
 };
 
 } // namespace carmaker_image_synchronizer
