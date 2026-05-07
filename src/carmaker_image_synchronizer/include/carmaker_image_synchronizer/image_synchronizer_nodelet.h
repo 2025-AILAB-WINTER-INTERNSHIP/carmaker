@@ -8,16 +8,21 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
+#include <diagnostic_updater/diagnostic_updater.h>
 
 #include <mutex>
 #include <vector>
 #include <memory>
+#include <atomic>
 
 namespace carmaker_image_synchronizer {
 
 /**
- * @brief Enterprise-grade Image Synchronizer for Multi-Camera perception.
- * Synchronizes multiple camera streams and attaches the latest CameraInfo.
+ * @brief Image Synchronizer with Real-time Diagnostics.
+ * 
+ * Provides deterministic time-alignment for N-channel camera streams using 
+ * master-clock restamping. Manages temporally aligned CameraInfo caching 
+ * and provides health metrics via the ROS diagnostic system.
  */
 class ImageSynchronizerNodelet : public nodelet::Nodelet {
 public:
@@ -35,15 +40,21 @@ private:
         sensor_msgs::CameraInfo last_info;
         bool has_info = false;
         ros::Time last_info_time;
+
+        // Diagnostics
+        std::atomic<uint64_t> received_count{0};
+        std::atomic<double> last_slop{0.0};
     };
 
-    // Sync Callback
+    // Callbacks
     void syncCallback(const sensor_msgs::ImageConstPtr& front,
                       const sensor_msgs::ImageConstPtr& rear,
                       const sensor_msgs::ImageConstPtr& left,
                       const sensor_msgs::ImageConstPtr& right);
 
+    void imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index);
     void publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time);
+    void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
 
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
@@ -52,9 +63,13 @@ private:
     std::vector<CameraChannel> channels_;
     std::mutex info_mutex_;
 
-    // Settings
+    // Advanced Settings
     size_t master_index_ = 0;
     double info_timeout_ = 2.0;
+
+    // Diagnostics
+    diagnostic_updater::Updater diagnostic_updater_;
+    std::atomic<uint64_t> total_synced_count_{0};
 
     // Message Filters
     typedef message_filters::sync_policies::ApproximateTime<

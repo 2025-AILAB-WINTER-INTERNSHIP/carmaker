@@ -10,13 +10,14 @@ find_package(catkin REQUIRED COMPONENTS
   carmaker_msgs
   sensor_msgs
   diagnostic_msgs
+  diagnostic_updater
   message_filters
 )
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES carmaker_image_synchronizer_nodelet
-  CATKIN_DEPENDS roscpp nodelet carmaker_msgs sensor_msgs diagnostic_msgs message_filters
+  CATKIN_DEPENDS roscpp nodelet carmaker_msgs sensor_msgs diagnostic_msgs diagnostic_updater message_filters
 )
 
 include_directories(
