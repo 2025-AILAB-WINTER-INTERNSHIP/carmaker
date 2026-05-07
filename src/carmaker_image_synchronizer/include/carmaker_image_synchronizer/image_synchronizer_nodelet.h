@@ -42,8 +42,8 @@ private:
         ros::Time last_info_time;
 
         // Diagnostics
-        std::atomic<uint64_t> received_count{0};
-        std::atomic<double> last_slop{0.0};
+        uint64_t received_count = 0;
+        double last_slop = 0.0;
     };
 
     // Callbacks
@@ -59,9 +59,9 @@ private:
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
     
-    // Channels
+    // Channels, Data
     std::vector<CameraChannel> channels_;
-    std::mutex info_mutex_;
+    std::mutex data_mutex_;
 
     // Advanced Settings
     size_t master_index_ = 0;

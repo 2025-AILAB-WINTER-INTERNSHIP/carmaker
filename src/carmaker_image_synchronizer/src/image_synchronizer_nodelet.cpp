@@ -31,21 +31,23 @@ void ImageSynchronizerNodelet::onInit() {
     }
 
     // Validation: Check if YAML list size matches expected_channel_num
-    if (channel_list.size() != static_cast<size_t>(expected_channel_num)) {
-        NODELET_FATAL("Channel list size (%zu) does not match expected_channel_num (%d).", 
-                      channel_list.size(), expected_channel_num);
+    if (static_cast<size_t>(channel_list.size()) != static_cast<size_t>(expected_channel_num)) {
+        NODELET_FATAL("Channel list size (%zu) does not match expected_channel_num (%d).", static_cast<size_t>(channel_list.size()), expected_channel_num);
         return;
     }
 
-    channels_.resize(channel_list.size());
+    channels_.reserve(channel_list.size());
     for (int i = 0; i < channel_list.size(); ++i) {
-        auto& ch = channels_[i];
         XmlRpc::XmlRpcValue& entry = channel_list[i];
 
         if (entry.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
             NODELET_ERROR("Channel entry %d is not a struct. Skipping.", i);
             continue;
         }
+
+        // Create the channel in the vector first to avoid unnecessary moves and ensure stable memory
+        channels_.emplace_back();
+        auto& ch = channels_.back();
 
         ch.name = static_cast<std::string>(entry["name"]);
         std::string in_img  = static_cast<std::string>(entry["in_img"]);
@@ -59,7 +61,7 @@ void ImageSynchronizerNodelet::onInit() {
 
         ch.info_sub = nh_.subscribe<sensor_msgs::CameraInfo>(in_info, 1, 
             [this, i](const sensor_msgs::CameraInfoConstPtr& msg) {
-                std::lock_guard<std::mutex> lock(info_mutex_);
+                std::lock_guard<std::mutex> lock(data_mutex_);
                 channels_[i].last_info = *msg;
                 channels_[i].has_info = true;
                 channels_[i].last_info_time = ros::Time::now();
@@ -88,6 +90,7 @@ void ImageSynchronizerNodelet::onInit() {
 }
 
 void ImageSynchronizerNodelet::imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
     channels_[index].received_count++;
 }
 
@@ -98,11 +101,15 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
     const std::array<sensor_msgs::ImageConstPtr, 4> images = {front, rear, left, right};
     const ros::Time& sync_time = images[master_index_]->header.stamp;
 
-    total_synced_count_++;
+    {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        total_synced_count_++;
+        for (size_t i = 0; i < images.size(); ++i) {
+            channels_[i].last_slop = (images[i]->header.stamp - sync_time).toSec();
+        }
+    }
 
     for (size_t i = 0; i < images.size(); ++i) {
-        // Record slop for diagnostics
-        channels_[i].last_slop = (images[i]->header.stamp - sync_time).toSec();
         publishWithSync(i, images[i], sync_time);
     }
     
@@ -110,6 +117,8 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
 }
 
 void ImageSynchronizerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    
     stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Syncing Active");
     stat.add("Total Synced Groups", total_synced_count_);
     stat.add("Master Channel", channels_[master_index_].name);
@@ -137,7 +146,7 @@ void ImageSynchronizerNodelet::publishWithSync(size_t index, const sensor_msgs::
     synced_img->header.stamp = sync_time;
     ch.img_pub.publish(synced_img);
 
-    std::lock_guard<std::mutex> lock(info_mutex_);
+    std::lock_guard<std::mutex> lock(data_mutex_);
     if (ch.has_info) {
         if ((ros::Time::now() - ch.last_info_time).toSec() < info_timeout_) {
             auto info = ch.last_info;
