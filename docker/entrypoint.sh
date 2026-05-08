@@ -94,13 +94,6 @@ for var in ROS_IP WAYLAND_DISPLAY HOST_WAYLAND_DISPLAY; do
     fi
 done
 
-# Move to workspace root
-[ -d "/workspace" ] && cd /workspace
-
-# Detect actual home directory of the current user (root in dev, devkit in prod)
-DEV_HOME=$(getent passwd "${SUDO_USER:-${USER:-root}}" | cut -d: -f6)
-[ -z "$DEV_HOME" ] && DEV_HOME=$(eval echo "~${SUDO_USER:-${USER:-root}}")
-
 # =============================================================================
 # [1] Environment Detection (Dev vs Prod)
 # =============================================================================
@@ -112,6 +105,20 @@ else
     IS_DEV=false
     log_info "Environment: Production"
 fi
+
+# Move to workspace root
+if [ -d "/workspace" ]; then
+    cd /workspace
+    # [Surgical Fix] Clean up any conflicting libraries leaked from the host via bind mounts
+    if [ "$IS_DEV" = true ]; then
+        find . -maxdepth 1 -name "libnvidia-*.so*" -delete 2>/dev/null || true
+        find . -maxdepth 1 -name "libcuda.so*" -delete 2>/dev/null || true
+    fi
+fi
+
+# Detect actual home directory of the current user (root in dev, devkit in prod)
+DEV_HOME=$(getent passwd "${SUDO_USER:-${USER:-root}}" | cut -d: -f6)
+[ -z "$DEV_HOME" ] && DEV_HOME=$(eval echo "~${SUDO_USER:-${USER:-root}}")
 
 # Helper to robustly inject environment bridge into /etc/bash.bashrc
 # Usage: persist_env_block <marker_name> <profile_script_path>
