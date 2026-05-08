@@ -16,7 +16,8 @@ x-common-env: &common-env
   DISPLAY: ${DISPLAY:-:0}
   DISPLAY_TYPE: ${DISPLAY_TYPE:-X11}
   WAYLAND_DISPLAY: ${HOST_WAYLAND_DISPLAY:-}
-  XDG_RUNTIME_DIR: /tmp/runtime-root
+  XAUTHORITY: /tmp/.container_xauth
+  XDG_RUNTIME_DIR: /tmp/.container_xdg
   UV_PYTHON: ${UV_PYTHON:-3.10}
   UV_SYNC_FLAGS: ${UV_SYNC_FLAGS:-}
   ROS_DISTRO: ${ROS_DISTRO:-humble}
