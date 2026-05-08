@@ -109,6 +109,7 @@ REAL_HOST_XAUTH="${XAUTHORITY:-${HOST_HOME}/.Xauthority}"
 
 # Generate container-scoped Xauthority (limits X11 cookie exposure)
 # This prevents permission issues when the host file is owned by a different user
+# and ensures that only the necessary display cookie is shared with the container.
 HOST_XAUTHORITY_SCOPED="${HOST_CACHE_DIR}/container_xauthority"
 if [ -s "${REAL_HOST_XAUTH}" ] && command -v xauth >/dev/null 2>&1; then
     DISPLAY_NUM="${DISPLAY#:}"
@@ -184,7 +185,6 @@ else
     touch "${HOST_CACHE_DIR}/dummy_gitconfig"
     HOST_GITCONFIG="${HOST_CACHE_DIR}/dummy_gitconfig"
 fi
-
 
 # Validate that path variables do not contain spaces to prevent Makefile parsing issues
 # Use bash indirect reference ${!var} instead of eval to prevent code injection

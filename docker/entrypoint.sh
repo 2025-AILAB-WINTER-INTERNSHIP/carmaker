@@ -114,10 +114,13 @@ fi
 # Move to workspace root
 if [ -d "/workspace" ]; then
     cd /workspace
-    # [Surgical Fix] Clean up any conflicting libraries leaked from the host via bind mounts
+    # Clean up any conflicting libraries leaked from the host via bind mounts
     if [ "$IS_DEV" = true ]; then
-        find . -maxdepth 1 -name "libnvidia-*.so*" -delete 2>/dev/null || true
-        find . -maxdepth 1 -name "libcuda.so*" -delete 2>/dev/null || true
+        LEAKED_LIBS=$(find . -maxdepth 1 \( -name "libnvidia-*.so*" -o -name "libcuda.so*" \) 2>/dev/null)
+        if [ -n "$LEAKED_LIBS" ]; then
+            log_warn "Detected host-leaked libraries in workspace root. Cleaning up for driver stability:"
+            echo "$LEAKED_LIBS" | xargs rm -fv
+        fi
     fi
 fi
 

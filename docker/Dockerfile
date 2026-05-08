@@ -84,8 +84,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
             fi; \
         fi; \
         # Purge container-side NVIDIA driver userspace packages if they were pulled transitively.
+        # This is critical to ensure the container uses the host's driver via nvidia-container-runtime.
         apt-get purge -y "libnvidia-compute-[0-9]*" "nvidia-compute-utils-[0-9]*" "nvidia-utils-[0-9]*" "libnvidia-extra-[0-9]*" || true; \
         apt-get autoremove -y || true; \
+        apt-get clean; \
         ldconfig; \
     fi
 
@@ -133,8 +135,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
             fi; \
         fi; \
         # Purge container-side NVIDIA driver userspace packages if they were pulled transitively.
+        # This is critical to ensure the container uses the host's driver via nvidia-container-runtime.
         apt-get purge -y "libnvidia-compute-[0-9]*" "nvidia-compute-utils-[0-9]*" "nvidia-utils-[0-9]*" "libnvidia-extra-[0-9]*" || true; \
         apt-get autoremove -y || true; \
+        apt-get clean; \
         ldconfig; \
     fi
 
