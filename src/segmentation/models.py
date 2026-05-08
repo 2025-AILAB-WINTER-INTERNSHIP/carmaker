@@ -142,4 +142,56 @@ def build_model(config: Dict[str, Any], num_classes: int) -> nn.Module:
         "num_classes": num_classes,
         "base_channels": int(model_cfg.get("base_channels", config.get("base_channels", 32))),
     }
-    return MODEL_REGISTRY[name](**params)
+    model = MODEL_REGISTRY[name](**params)
+    initialize_weights(model, str(model_cfg.get("weight_init", config.get("weight_init", "pytorch_default"))))
+    return model
+
+
+def initialize_weights(model: nn.Module, name: str) -> None:
+    """Apply an optional explicit weight initialization scheme."""
+    key = name.lower().replace("-", "_")
+    if key in {"", "none", "default", "pytorch_default"}:
+        return
+    if key in {"he", "he_normal", "kaiming", "kaiming_normal"}:
+        _init_modules(model, "kaiming_normal")
+        return
+    if key in {"he_uniform", "kaiming_uniform"}:
+        _init_modules(model, "kaiming_uniform")
+        return
+    if key == "xavier" or key == "xavier_uniform":
+        _init_modules(model, "xavier_uniform")
+        return
+    if key == "xavier_normal":
+        _init_modules(model, "xavier_normal")
+        return
+
+    options = ", ".join(
+        [
+            "pytorch_default",
+            "he_normal",
+            "he_uniform",
+            "xavier_uniform",
+            "xavier_normal",
+        ]
+    )
+    raise ValueError(f"Unknown weight_init '{name}'. Available options: {options}")
+
+
+def _init_modules(model: nn.Module, scheme: str) -> None:
+    for module in model.modules():
+        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
+            if scheme == "kaiming_normal":
+                nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
+            elif scheme == "kaiming_uniform":
+                nn.init.kaiming_uniform_(module.weight, mode="fan_out", nonlinearity="relu")
+            elif scheme == "xavier_normal":
+                nn.init.xavier_normal_(module.weight)
+            elif scheme == "xavier_uniform":
+                nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, (nn.BatchNorm2d, nn.GroupNorm)):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)

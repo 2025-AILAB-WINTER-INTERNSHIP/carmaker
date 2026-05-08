@@ -26,11 +26,18 @@ model:
   name: unet
   in_channels: 3
   base_channels: 32
+  # Options: pytorch_default, he_normal, he_uniform, xavier_uniform, xavier_normal
+  weight_init: pytorch_default
 
 # Current GT class ids from carmaker_image/scripts/apply_mask.py:
 #   0 background
 #   1 lane
 #   2 landmark
+# Loss options:
+#   cross_entropy      Standard pixel-wise CE loss.
+#   dice               Region-overlap loss.
+#   ce_dice            Cross entropy + Dice loss.
+#   focal              Focuses more on hard pixels/classes.
 loss: cross_entropy
 # class_weights: [0.2, 2.0, 3.0]
 
