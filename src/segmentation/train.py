@@ -11,8 +11,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
+import importlib.util
 import json
 import random
+import subprocess
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict
@@ -64,6 +68,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=-1)
     parser.add_argument("--device", default="")
     parser.add_argument("--overfit-count", type=int, default=0)
+    parser.add_argument("--tensorboard", action="store_true")
+    parser.add_argument("--tensorboard-port", type=int, default=6006)
+    parser.add_argument("--tensorboard-host", default="0.0.0.0")
     return parser.parse_args()
 
 
@@ -100,6 +107,7 @@ def main() -> None:
     run_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs" / "unet_carmaker")).expanduser().resolve()
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    _maybe_start_tensorboard(args, run_dir)
 
     # 3) Adapter 생성
     # Adapter는 CSV와 폴더 구조를 읽어서 image_path / mask_path pair 목록을 만든다.
@@ -413,6 +421,48 @@ def _make_writer(run_dir: Path):
         print(f"[warn] TensorBoard disabled: {exc}")
         return None
     return SummaryWriter(log_dir=str(run_dir))
+
+
+def _maybe_start_tensorboard(args: argparse.Namespace, run_dir: Path) -> subprocess.Popen | None:
+    """Start TensorBoard for this run when requested."""
+    if not args.tensorboard:
+        return None
+    if importlib.util.find_spec("tensorboard") is None:
+        print("[warn] TensorBoard is not installed. Run: uv pip install tensorboard")
+        return None
+
+    command = [
+        sys.executable,
+        "-m",
+        "tensorboard.main",
+        "--logdir",
+        str(run_dir),
+        "--host",
+        str(args.tensorboard_host),
+        "--port",
+        str(args.tensorboard_port),
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError as exc:
+        print(f"[warn] Could not start TensorBoard: {exc}")
+        return None
+
+    atexit.register(_terminate_process, process)
+    print(
+        f"[tensorboard] http://{args.tensorboard_host}:{args.tensorboard_port} "
+        f"logdir={run_dir}"
+    )
+    return process
+
+
+def _terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        process.terminate()
 
 
 def _write_scalars(writer, epoch: int, train_loss: float, val: Dict[str, float], optimizer) -> None:

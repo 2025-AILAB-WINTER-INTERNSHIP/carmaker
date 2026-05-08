@@ -240,6 +240,14 @@ learning rate 문제
 python3 src/segmentation/train.py
 ```
 
+학습과 동시에 TensorBoard를 띄우려면 다음처럼 실행한다.
+
+```bash
+uv run src/segmentation/train.py \
+  --tensorboard \
+  --tensorboard-port 6006
+```
+
 다른 데이터 경로를 사용하려면 다음처럼 지정한다.
 
 ```bash
