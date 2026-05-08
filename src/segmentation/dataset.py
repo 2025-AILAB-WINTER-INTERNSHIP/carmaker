@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Callable, Optional, Tuple
 
 import cv2
@@ -96,11 +97,18 @@ def split_dataset(
     val_ratio: float,
     seed: int,
     test_ratio: float = 0.0,
+    stratify_by_camera: bool = False,
 ) -> tuple[Dataset, Dataset, Dataset]:
     """Dataset을 train/validation/test로 나누되 seed로 split을 고정한다."""
     total = len(dataset)
     if val_ratio < 0 or test_ratio < 0 or val_ratio + test_ratio >= 1:
         raise ValueError("val_ratio and test_ratio must be non-negative and sum to less than 1.0")
+
+    if stratify_by_camera:
+        samples = getattr(dataset, "samples", None)
+        if samples is None:
+            raise ValueError("stratify_by_camera requires a dataset with a samples attribute")
+        return _split_dataset_by_camera(dataset, val_ratio, test_ratio, seed)
 
     val_count = int(round(total * val_ratio))
     test_count = int(round(total * test_ratio))
@@ -110,4 +118,41 @@ def split_dataset(
         dataset,
         [train_count, val_count, test_count],
         generator=generator,
+    )
+
+
+def _split_dataset_by_camera(
+    dataset: Dataset,
+    val_ratio: float,
+    test_ratio: float,
+    seed: int,
+) -> tuple[Dataset, Dataset, Dataset]:
+    samples = getattr(dataset, "samples")
+    groups: dict[str, list[int]] = defaultdict(list)
+    for index, sample in enumerate(samples):
+        camera = getattr(sample, "camera", "") or "unknown"
+        groups[camera].append(index)
+
+    generator = torch.Generator().manual_seed(seed)
+    train_indices: list[int] = []
+    val_indices: list[int] = []
+    test_indices: list[int] = []
+
+    for camera in sorted(groups):
+        indices = groups[camera]
+        permutation = torch.randperm(len(indices), generator=generator).tolist()
+        shuffled = [indices[i] for i in permutation]
+
+        val_count = int(round(len(shuffled) * val_ratio))
+        test_count = int(round(len(shuffled) * test_ratio))
+        train_count = len(shuffled) - val_count - test_count
+
+        train_indices.extend(shuffled[:train_count])
+        val_indices.extend(shuffled[train_count : train_count + val_count])
+        test_indices.extend(shuffled[train_count + val_count :])
+
+    return (
+        torch.utils.data.Subset(dataset, train_indices),
+        torch.utils.data.Subset(dataset, val_indices),
+        torch.utils.data.Subset(dataset, test_indices),
     )

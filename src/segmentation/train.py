@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict
 
@@ -135,6 +136,7 @@ def main() -> None:
         val_ratio=float(cfg.get("val_ratio", 0.2)),
         seed=int(cfg.get("seed", 42)),
         test_ratio=float(cfg.get("test_ratio", 0.1)),
+        stratify_by_camera=bool(cfg.get("stratify_by_camera", True)),
     )
 
     # 6) DataLoader 생성
@@ -273,13 +275,17 @@ def validate(
     device: torch.device,
     epoch: int = 0,
     split: str = "val",
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """validation set에서 loss와 segmentation metric을 계산한다."""
     model.eval()
     total_loss = 0.0
     total_items = 0
     matrix = torch.zeros((num_classes, num_classes), dtype=torch.int64, device=device)
     psnr_values = []
+    camera_matrices = defaultdict(lambda: torch.zeros((num_classes, num_classes), dtype=torch.int64, device=device))
+    camera_loss_totals = defaultdict(float)
+    camera_items = defaultdict(int)
+    camera_psnr_values = defaultdict(list)
 
     progress = _progress(loader, desc=f"{split} {epoch:03d}" if epoch else split, leave=False)
     for batch in progress:
@@ -296,6 +302,24 @@ def validate(
         matrix += confusion_matrix(pred, mask, num_classes).to(device)
         psnr_values.append(mask_psnr(pred, mask, max_value=float(num_classes - 1)))
 
+        cameras = [str(camera) or "unknown" for camera in batch.get("camera", [])]
+        if cameras:
+            for camera in sorted(set(cameras)):
+                sample_indices = [idx for idx, value in enumerate(cameras) if value == camera]
+                index_tensor = torch.tensor(sample_indices, dtype=torch.long, device=device)
+                camera_logits = logits.index_select(0, index_tensor)
+                camera_mask = mask.index_select(0, index_tensor)
+                camera_pred = pred.index_select(0, index_tensor)
+                camera_loss = criterion(camera_logits, camera_mask)
+                camera_count = len(sample_indices)
+
+                camera_matrices[camera] += confusion_matrix(camera_pred, camera_mask, num_classes).to(device)
+                camera_loss_totals[camera] += float(camera_loss.item()) * camera_count
+                camera_items[camera] += camera_count
+                camera_psnr_values[camera].append(
+                    mask_psnr(camera_pred, camera_mask, max_value=float(num_classes - 1))
+                )
+
         batch_size = image.shape[0]
         total_loss += float(loss.item()) * batch_size
         total_items += batch_size
@@ -307,7 +331,20 @@ def validate(
     # pred와 GT가 완전히 같으면 PSNR은 inf가 될 수 있으므로 평균에서는 finite 값만 사용한다.
     finite_psnr = [v for v in psnr_values if np.isfinite(v)]
     scores["psnr"] = float(np.mean(finite_psnr)) if finite_psnr else float("inf")
+    scores["by_camera"] = _camera_scores(camera_matrices, camera_loss_totals, camera_items, camera_psnr_values)
     return scores
+
+
+def _camera_scores(camera_matrices, camera_loss_totals, camera_items, camera_psnr_values) -> Dict[str, Dict[str, float]]:
+    """Build metric dictionaries for each camera."""
+    by_camera: Dict[str, Dict[str, float]] = {}
+    for camera in sorted(camera_matrices.keys()):
+        scores = segmentation_scores(camera_matrices[camera].cpu())
+        scores["loss"] = camera_loss_totals[camera] / max(camera_items[camera], 1)
+        finite_psnr = [value for value in camera_psnr_values[camera] if np.isfinite(value)]
+        scores["psnr"] = float(np.mean(finite_psnr)) if finite_psnr else float("inf")
+        by_camera[camera] = scores
+    return by_camera
 
 
 def _progress(iterable, **kwargs):
@@ -396,14 +433,30 @@ def _write_scalars(writer, epoch: int, train_loss: float, val: Dict[str, float],
         if key.startswith("iou/"):
             writer.add_scalar(f"val/{key}", value, epoch)
 
+    _write_score_scalars(writer, "val/all", epoch, val)
+    for camera, scores in val.get("by_camera", {}).items():
+        _write_score_scalars(writer, f"val/{camera}", epoch, scores)
+
 
 def _write_eval_scalars(writer, split: str, epoch: int, scores: Dict[str, float]) -> None:
     """Write evaluation-only metrics such as final test scores."""
     if not writer:
         return
 
+    _write_score_scalars(writer, f"{split}/all", epoch, scores)
     for key, value in scores.items():
+        if key == "by_camera":
+            for camera, camera_scores in value.items():
+                _write_score_scalars(writer, f"{split}/{camera}", epoch, camera_scores)
+            continue
         writer.add_scalar(f"{split}/{key}", value, epoch)
+
+
+def _write_score_scalars(writer, prefix: str, epoch: int, scores: Dict[str, float]) -> None:
+    for key, value in scores.items():
+        if key == "by_camera":
+            continue
+        writer.add_scalar(f"{prefix}/{key}", value, epoch)
 
 
 def _apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
