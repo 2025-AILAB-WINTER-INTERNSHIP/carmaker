@@ -128,12 +128,13 @@ def main() -> None:
             "or pass --data-root/--manifest explicitly."
         )
 
-    # 5) train / validation split
+    # 5) train / validation / test split
     # seed를 고정해서 매번 같은 split이 나오게 한다.
-    train_dataset, val_dataset = split_dataset(
+    train_dataset, val_dataset, test_dataset = split_dataset(
         dataset,
         val_ratio=float(cfg.get("val_ratio", 0.2)),
         seed=int(cfg.get("seed", 42)),
+        test_ratio=float(cfg.get("test_ratio", 0.1)),
     )
 
     # 6) DataLoader 생성
@@ -147,6 +148,13 @@ def main() -> None:
     )
     val_loader = DataLoader(
         val_dataset,
+        batch_size=int(cfg.get("batch_size", 4)),
+        shuffle=False,
+        num_workers=int(cfg.get("num_workers", 2)),
+        pin_memory=device.type == "cuda",
+    )
+    test_loader = DataLoader(
+        test_dataset,
         batch_size=int(cfg.get("batch_size", 4)),
         shuffle=False,
         num_workers=int(cfg.get("num_workers", 2)),
@@ -172,7 +180,10 @@ def main() -> None:
     writer = _make_writer(run_dir)
     best_miou = -1.0
     epochs = int(cfg.get("epochs", 30))
-    print(f"[train] samples={len(train_dataset)} val={len(val_dataset)} device={device} run_dir={run_dir}")
+    print(
+        f"[train] samples={len(train_dataset)} val={len(val_dataset)} "
+        f"test={len(test_dataset)} device={device} run_dir={run_dir}"
+    )
 
     # 9) epoch loop
     epoch_bar = _progress(range(1, epochs + 1), desc="epochs", total=epochs)
@@ -206,6 +217,17 @@ def main() -> None:
 
     # 마지막 epoch 상태도 항상 저장한다.
     save_checkpoint(checkpoint_dir / "last.pt", model, optimizer, epochs, cfg, best_miou)
+    if len(test_dataset) > 0:
+        best_checkpoint = checkpoint_dir / "best.pt"
+        if best_checkpoint.exists():
+            checkpoint = _load_checkpoint(best_checkpoint, device)
+            model.load_state_dict(checkpoint["model_state"])
+        test = validate(model, test_loader, criterion, adapter.num_classes, device, split="test")
+        _write_eval_scalars(writer, "test", epochs, test)
+        print(
+            f"[test] loss={test['loss']:.4f} miou={test['miou']:.4f} "
+            f"dice={test['dice']:.4f} acc={test['pixel_accuracy']:.4f}"
+        )
     if writer:
         writer.close()
     print(f"[train] done best_miou={best_miou:.4f} run_dir={run_dir}")
@@ -243,7 +265,15 @@ def train_one_epoch(model, loader, criterion, optimizer, device: torch.device, e
 
 
 @torch.no_grad()
-def validate(model, loader, criterion, num_classes: int, device: torch.device, epoch: int = 0) -> Dict[str, float]:
+def validate(
+    model,
+    loader,
+    criterion,
+    num_classes: int,
+    device: torch.device,
+    epoch: int = 0,
+    split: str = "val",
+) -> Dict[str, float]:
     """validation set에서 loss와 segmentation metric을 계산한다."""
     model.eval()
     total_loss = 0.0
@@ -251,7 +281,7 @@ def validate(model, loader, criterion, num_classes: int, device: torch.device, e
     matrix = torch.zeros((num_classes, num_classes), dtype=torch.int64, device=device)
     psnr_values = []
 
-    progress = _progress(loader, desc=f"val {epoch:03d}" if epoch else "val", leave=False)
+    progress = _progress(loader, desc=f"{split} {epoch:03d}" if epoch else split, leave=False)
     for batch in progress:
         image = batch["image"].to(device, non_blocking=True)
         mask = batch["mask"].to(device, non_blocking=True)
@@ -330,6 +360,14 @@ def save_checkpoint(path: Path, model, optimizer, epoch: int, cfg: Dict[str, Any
     )
 
 
+def _load_checkpoint(path: Path, device: torch.device) -> Dict[str, Any]:
+    """Load a checkpoint across PyTorch versions."""
+    try:
+        return torch.load(path, map_location=device, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=device)
+
+
 def _make_writer(run_dir: Path):
     """TensorBoard SummaryWriter를 만든다. tensorboard가 없으면 학습은 계속 진행한다."""
     try:
@@ -357,6 +395,15 @@ def _write_scalars(writer, epoch: int, train_loss: float, val: Dict[str, float],
     for key, value in val.items():
         if key.startswith("iou/"):
             writer.add_scalar(f"val/{key}", value, epoch)
+
+
+def _write_eval_scalars(writer, split: str, epoch: int, scores: Dict[str, float]) -> None:
+    """Write evaluation-only metrics such as final test scores."""
+    if not writer:
+        return
+
+    for key, value in scores.items():
+        writer.add_scalar(f"{split}/{key}", value, epoch)
 
 
 def _apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:

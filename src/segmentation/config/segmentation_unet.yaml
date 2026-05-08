@@ -15,6 +15,7 @@ image_size: [1920, 1080]
 num_workers: 2
 batch_size: 1
 val_ratio: 0.2
+test_ratio: 0.1
 seed: 42
 
 epochs: 30

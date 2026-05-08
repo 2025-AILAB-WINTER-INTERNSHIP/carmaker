@@ -91,10 +91,23 @@ class SegmentationDataset(Dataset):
         return image, mask
 
 
-def split_dataset(dataset: Dataset, val_ratio: float, seed: int) -> tuple[Dataset, Dataset]:
-    """Dataset을 train/validation으로 나누되 seed로 split을 고정한다."""
+def split_dataset(
+    dataset: Dataset,
+    val_ratio: float,
+    seed: int,
+    test_ratio: float = 0.0,
+) -> tuple[Dataset, Dataset, Dataset]:
+    """Dataset을 train/validation/test로 나누되 seed로 split을 고정한다."""
     total = len(dataset)
+    if val_ratio < 0 or test_ratio < 0 or val_ratio + test_ratio >= 1:
+        raise ValueError("val_ratio and test_ratio must be non-negative and sum to less than 1.0")
+
     val_count = int(round(total * val_ratio))
-    train_count = total - val_count
+    test_count = int(round(total * test_ratio))
+    train_count = total - val_count - test_count
     generator = torch.Generator().manual_seed(seed)
-    return torch.utils.data.random_split(dataset, [train_count, val_count], generator=generator)
+    return torch.utils.data.random_split(
+        dataset,
+        [train_count, val_count, test_count],
+        generator=generator,
+    )
