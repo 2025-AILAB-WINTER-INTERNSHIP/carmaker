@@ -9,6 +9,7 @@ import torch
 
 
 def confusion_matrix(pred: torch.Tensor, target: torch.Tensor, num_classes: int) -> torch.Tensor:
+    """pred/target 픽셀을 class별 confusion matrix로 누적한다."""
     pred = pred.view(-1).to(torch.int64)
     target = target.view(-1).to(torch.int64)
     valid = (target >= 0) & (target < num_classes)
@@ -18,6 +19,7 @@ def confusion_matrix(pred: torch.Tensor, target: torch.Tensor, num_classes: int)
 
 
 def segmentation_scores(matrix: torch.Tensor) -> Dict[str, float]:
+    """confusion matrix에서 mIoU, Dice, Pixel Accuracy를 계산한다."""
     matrix = matrix.float()
     tp = torch.diag(matrix)
     fp = matrix.sum(dim=0) - tp
@@ -39,8 +41,8 @@ def segmentation_scores(matrix: torch.Tensor) -> Dict[str, float]:
 
 
 def mask_psnr(pred: torch.Tensor, target: torch.Tensor, max_value: float = 2.0) -> float:
+    """예측 mask와 GT mask의 픽셀 차이를 PSNR 형태로 참고 계산한다."""
     mse = torch.mean((pred.float() - target.float()) ** 2).item()
     if mse == 0.0:
         return float("inf")
     return 20.0 * math.log10(max_value) - 10.0 * math.log10(mse)
-

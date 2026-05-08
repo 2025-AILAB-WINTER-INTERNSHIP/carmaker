@@ -12,6 +12,7 @@ Palette = Sequence[Tuple[int, int, int]]
 
 
 def colorize_mask(mask: torch.Tensor | np.ndarray, palette: Palette) -> np.ndarray:
+    """class id mask를 RGB 색상 이미지로 변환한다."""
     if isinstance(mask, torch.Tensor):
         mask_np = mask.detach().cpu().numpy()
     else:
@@ -24,8 +25,8 @@ def colorize_mask(mask: torch.Tensor | np.ndarray, palette: Palette) -> np.ndarr
 
 
 def overlay_mask(image_chw: torch.Tensor, mask: torch.Tensor, palette: Palette, alpha: float = 0.45) -> np.ndarray:
+    """원본 image 위에 colorized mask를 반투명하게 덮는다."""
     image = image_chw.detach().cpu().clamp(0.0, 1.0).numpy().transpose(1, 2, 0)
     image_u8 = (image * 255.0).astype(np.uint8)
     mask_color = colorize_mask(mask, palette)
     return ((1.0 - alpha) * image_u8 + alpha * mask_color).astype(np.uint8)
-

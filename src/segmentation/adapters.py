@@ -18,6 +18,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 @dataclass(frozen=True)
 class SegmentationSample:
+    """학습 코드가 공통으로 사용하는 단일 sample 표현."""
+
     image_path: Path
     mask_path: Path
     camera: str = ""
@@ -25,7 +27,7 @@ class SegmentationSample:
 
 
 class DatasetAdapter:
-    """Base interface used by the PyTorch dataset."""
+    """Dataset별 폴더 구조 차이를 숨기기 위한 base interface."""
 
     class_names: Tuple[str, ...] = ()
     palette: Tuple[Tuple[int, int, int], ...] = ()
@@ -39,7 +41,7 @@ class DatasetAdapter:
 
 
 class CarmakerSegmentationAdapter(DatasetAdapter):
-    """Adapter for the current carmaker_image extraction pipeline."""
+    """carmaker_image/data 구조를 읽는 Adapter."""
 
     class_names = ("background", "lane", "landmark")
     palette = (
@@ -80,6 +82,7 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
         return selected or None
 
     def _load_samples(self) -> List[SegmentationSample]:
+        # manifest.csv가 있으면 CSV pair를 우선 신뢰하고, 없으면 폴더에서 직접 찾는다.
         if self.manifest.exists():
             samples = self._load_manifest_samples(self.manifest)
             if samples:
@@ -87,6 +90,7 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
         return self._discover_post_processed_samples()
 
     def _resolve_data_path(self, value: str) -> Path:
+        # CSV에는 data_root 기준 상대경로가 들어올 수 있으므로 절대경로로 정규화한다.
         path = Path(value)
         if path.is_absolute():
             return path
@@ -101,6 +105,7 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
                 if self.cameras and camera not in self.cameras:
                     continue
 
+                # 학습용 GT는 class id가 저장된 gt_post를 기본으로 사용한다.
                 raw_key_order = ("raw_post", "raw") if self.prefer_post_processed else ("raw", "raw_post")
                 gt_key_order = ("gt_post",) if self.prefer_post_processed else ("gt", "gt_post")
                 image_path = self._first_existing(row, raw_key_order)
@@ -129,6 +134,7 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
         return None
 
     def _discover_post_processed_samples(self) -> List[SegmentationSample]:
+        # CSV가 없을 때 파일명 규칙으로 raw_post와 gt_post를 매칭하는 fallback.
         raw_root = self.data_root / "raw_post_processed"
         gt_root = self.data_root / "gt_post_processed"
         samples: List[SegmentationSample] = []

@@ -1,7 +1,7 @@
 # Standalone CarMaker fisheye semantic segmentation baseline.
 #
 # Run from /workspace:
-#   python3 src/segmentation/debug_dataset.py --count 10 --image-size 1920,1080
+#   python3 src/segmentation/tools/debug_dataset.py --count 10 --image-size 1920,1080
 #   python3 src/segmentation/train.py --overfit-count 10 --epochs 50
 
 data_root: ../../carmaker_image/data

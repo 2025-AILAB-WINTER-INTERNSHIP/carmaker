@@ -102,7 +102,7 @@ src/carmaker_image/data/gt_post_processed/
 이미 데이터가 확보된 상태라면 여기부터 실행하면 됩니다.
 
 ```bash
-python3 src/segmentation/debug_dataset.py --count 10 --image-size 1920,1080
+python3 src/segmentation/tools/debug_dataset.py --count 10 --image-size 1920,1080
 ```
 
 결과:
@@ -129,7 +129,7 @@ src/carmaker_image/data
 다른 위치에 데이터가 있으면 직접 지정합니다.
 
 ```bash
-python3 src/segmentation/debug_dataset.py \
+python3 src/segmentation/tools/debug_dataset.py \
   --data-root /path/to/carmaker_image/data \
   --manifest /path/to/carmaker_image/data/csv/manifest.csv \
   --count 10
@@ -220,8 +220,8 @@ debug/*/pred_overlay
 | `src/segmentation/models.py` | U-Net, 임시 TinyFCN, model registry, `build_model`을 관리한다 |
 | `src/segmentation/losses.py` | CrossEntropy, Dice, CE+Dice, Focal loss를 만든다 |
 | `src/segmentation/metrics.py` | mIoU, class별 IoU, Dice, Pixel Accuracy, PSNR을 계산한다 |
-| `src/segmentation/visualization.py` | mask colorize와 overlay 이미지를 만든다 |
-| `src/segmentation/debug_dataset.py` | 학습 전 dataset pair와 mask 값을 확인한다 |
+| `src/segmentation/utils/visualization.py` | mask colorize와 overlay 이미지를 만든다 |
+| `src/segmentation/tools/debug_dataset.py` | 학습 전 dataset pair와 mask 값을 확인한다 |
 | `src/segmentation/train.py` | 학습, 검증, TensorBoard, checkpoint 저장을 수행한다 |
 | `src/segmentation/config/segmentation_unet.yaml` | 학습 설정 파일 |
 
