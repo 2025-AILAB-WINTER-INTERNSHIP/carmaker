@@ -21,6 +21,11 @@ import torch
 from torch.utils.data import DataLoader
 
 try:
+    from tqdm.auto import tqdm
+except Exception:
+    tqdm = None
+
+try:
     from .adapters import CarmakerSegmentationAdapter
     from .dataset import SegmentationDataset, split_dataset
     from .losses import build_loss
@@ -101,7 +106,8 @@ def main() -> None:
         data_root=cfg.get("data_root", str(DEFAULT_DATA_ROOT)),
         manifest=cfg.get("manifest") or None,
         cameras=cfg.get("cameras"),
-        prefer_post_processed=True,
+        use_raw_post_processed=bool(cfg.get("use_raw_post_processed", False)),
+        use_mask_post_processed=True,
     )
 
     # 4) Dataset 생성
@@ -169,14 +175,17 @@ def main() -> None:
     print(f"[train] samples={len(train_dataset)} val={len(val_dataset)} device={device} run_dir={run_dir}")
 
     # 9) epoch loop
-    for epoch in range(1, epochs + 1):
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val = validate(model, val_loader, criterion, adapter.num_classes, device)
-
-        print(
-            f"[epoch {epoch:03d}] train_loss={train_loss:.4f} "
-            f"val_loss={val['loss']:.4f} miou={val['miou']:.4f} "
-            f"dice={val['dice']:.4f} acc={val['pixel_accuracy']:.4f}"
+    epoch_bar = _progress(range(1, epochs + 1), desc="epochs", total=epochs)
+    for epoch in epoch_bar:
+        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, epoch)
+        val = validate(model, val_loader, criterion, adapter.num_classes, device, epoch)
+        _set_progress_postfix(
+            epoch_bar,
+            train_loss=f"{train_loss:.4f}",
+            val_loss=f"{val['loss']:.4f}",
+            miou=f"{val['miou']:.4f}",
+            dice=f"{val['dice']:.4f}",
+            acc=f"{val['pixel_accuracy']:.4f}",
         )
 
         # TensorBoard Scalars에 loss/metric을 기록한다.
@@ -199,15 +208,17 @@ def main() -> None:
     save_checkpoint(checkpoint_dir / "last.pt", model, optimizer, epochs, cfg, best_miou)
     if writer:
         writer.close()
+    print(f"[train] done best_miou={best_miou:.4f} run_dir={run_dir}")
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device: torch.device) -> float:
+def train_one_epoch(model, loader, criterion, optimizer, device: torch.device, epoch: int = 0) -> float:
     """train_loader를 한 번 순회하며 model weight를 업데이트한다."""
     model.train()
     total_loss = 0.0
     total_items = 0
 
-    for batch in loader:
+    progress = _progress(loader, desc=f"train {epoch:03d}" if epoch else "train", leave=False)
+    for batch in progress:
         # DataLoader batch 형식:
         # image: [B, 3, H, W], mask: [B, H, W]
         image = batch["image"].to(device, non_blocking=True)
@@ -226,12 +237,13 @@ def train_one_epoch(model, loader, criterion, optimizer, device: torch.device) -
         batch_size = image.shape[0]
         total_loss += float(loss.item()) * batch_size
         total_items += batch_size
+        _set_progress_postfix(progress, loss=f"{total_loss / max(total_items, 1):.4f}")
 
     return total_loss / max(total_items, 1)
 
 
 @torch.no_grad()
-def validate(model, loader, criterion, num_classes: int, device: torch.device) -> Dict[str, float]:
+def validate(model, loader, criterion, num_classes: int, device: torch.device, epoch: int = 0) -> Dict[str, float]:
     """validation set에서 loss와 segmentation metric을 계산한다."""
     model.eval()
     total_loss = 0.0
@@ -239,7 +251,8 @@ def validate(model, loader, criterion, num_classes: int, device: torch.device) -
     matrix = torch.zeros((num_classes, num_classes), dtype=torch.int64, device=device)
     psnr_values = []
 
-    for batch in loader:
+    progress = _progress(loader, desc=f"val {epoch:03d}" if epoch else "val", leave=False)
+    for batch in progress:
         image = batch["image"].to(device, non_blocking=True)
         mask = batch["mask"].to(device, non_blocking=True)
 
@@ -256,6 +269,7 @@ def validate(model, loader, criterion, num_classes: int, device: torch.device) -
         batch_size = image.shape[0]
         total_loss += float(loss.item()) * batch_size
         total_items += batch_size
+        _set_progress_postfix(progress, loss=f"{total_loss / max(total_items, 1):.4f}")
 
     scores = segmentation_scores(matrix.cpu())
     scores["loss"] = total_loss / max(total_items, 1)
@@ -264,6 +278,20 @@ def validate(model, loader, criterion, num_classes: int, device: torch.device) -
     finite_psnr = [v for v in psnr_values if np.isfinite(v)]
     scores["psnr"] = float(np.mean(finite_psnr)) if finite_psnr else float("inf")
     return scores
+
+
+def _progress(iterable, **kwargs):
+    """Return a tqdm progress bar when available, otherwise the original iterable."""
+    if tqdm is None:
+        return iterable
+    kwargs.setdefault("dynamic_ncols", True)
+    return tqdm(iterable, **kwargs)
+
+
+def _set_progress_postfix(progress, **values) -> None:
+    """Update tqdm postfix only when the iterable is actually a tqdm instance."""
+    if hasattr(progress, "set_postfix"):
+        progress.set_postfix(**values)
 
 
 @torch.no_grad()

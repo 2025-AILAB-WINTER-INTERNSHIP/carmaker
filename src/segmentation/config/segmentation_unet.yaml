@@ -7,6 +7,7 @@
 data_root: ../../carmaker_image/data
 manifest: ../../carmaker_image/data/csv/manifest.csv
 cameras: front,left,rear,right
+use_raw_post_processed: false
 
 # Original CarMaker image size. This preserves the 16:9 geometry, but it is
 # much heavier than 512x512, so start with batch_size: 1.

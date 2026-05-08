@@ -3,7 +3,7 @@
 The adapter layer hides dataset layout differences from the training loop.
 For this repository the primary source is ``carmaker_image/data``:
 
-  raw_post_processed/<scenario>/<camera>/*_raw_*_post.png
+  raw_images/<scenario>/<camera>/*_raw_*.png
   gt_post_processed/<scenario>/<camera>/*_GT_*_post.png
   csv/manifest.csv
 """
@@ -55,7 +55,9 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
         data_root: str | Path,
         manifest: str | Path | None = None,
         cameras: Iterable[str] | str | None = None,
-        prefer_post_processed: bool = True,
+        prefer_post_processed: bool | None = None,
+        use_raw_post_processed: bool = False,
+        use_mask_post_processed: bool = True,
     ) -> None:
         self.data_root = Path(data_root).expanduser().resolve()
         self.manifest = (
@@ -64,7 +66,11 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
             else self.data_root / "csv" / "manifest.csv"
         )
         self.cameras = self._parse_cameras(cameras)
-        self.prefer_post_processed = prefer_post_processed
+        if prefer_post_processed is not None:
+            use_raw_post_processed = prefer_post_processed
+            use_mask_post_processed = prefer_post_processed
+        self.use_raw_post_processed = use_raw_post_processed
+        self.use_mask_post_processed = use_mask_post_processed
         self._samples = self._load_samples()
 
     def samples(self) -> Sequence[SegmentationSample]:
@@ -106,8 +112,8 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
                     continue
 
                 # 학습용 GT는 class id가 저장된 gt_post를 기본으로 사용한다.
-                raw_key_order = ("raw_post", "raw") if self.prefer_post_processed else ("raw", "raw_post")
-                gt_key_order = ("gt_post",) if self.prefer_post_processed else ("gt", "gt_post")
+                raw_key_order = ("raw_post", "raw") if self.use_raw_post_processed else ("raw", "raw_post")
+                gt_key_order = ("gt_post",) if self.use_mask_post_processed else ("gt", "gt_post")
                 image_path = self._first_existing(row, raw_key_order)
                 mask_path = self._first_existing(row, gt_key_order)
                 if not image_path or not mask_path:
@@ -135,7 +141,7 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
 
     def _discover_post_processed_samples(self) -> List[SegmentationSample]:
         # CSV가 없을 때 파일명 규칙으로 raw_post와 gt_post를 매칭하는 fallback.
-        raw_root = self.data_root / "raw_post_processed"
+        raw_root = self.data_root / ("raw_post_processed" if self.use_raw_post_processed else "raw_images")
         gt_root = self.data_root / "gt_post_processed"
         samples: List[SegmentationSample] = []
         if not raw_root.exists() or not gt_root.exists():
@@ -147,7 +153,7 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
                 continue
 
             rel_parent = mask_path.parent.relative_to(gt_root)
-            raw_name = self._mask_name_to_raw_name(mask_path.name)
+            raw_name = self._mask_name_to_raw_name(mask_path.name, post_processed=self.use_raw_post_processed)
             image_path = raw_root / rel_parent / raw_name
             if not image_path.exists():
                 continue
@@ -167,7 +173,11 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
         return name.split("_", 1)[0] if "_" in name else ""
 
     @staticmethod
-    def _mask_name_to_raw_name(name: str) -> str:
+    def _mask_name_to_raw_name(name: str, post_processed: bool = True) -> str:
         raw_name = name.replace("_GT_", "_raw_")
         raw_name = raw_name.replace("_GT", "_raw")
+        if not post_processed:
+            path = Path(raw_name)
+            if path.stem.endswith("_post"):
+                raw_name = f"{path.stem[:-5]}{path.suffix}"
         return raw_name
