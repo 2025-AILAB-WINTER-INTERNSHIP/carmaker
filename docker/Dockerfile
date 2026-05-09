@@ -175,6 +175,7 @@ ENV PATH="/usr/lib/ccache:/workspace/install/.venv/bin:$PATH" \
     UV_LINK_MODE=copy \
     VIRTUAL_ENV=/workspace/install/.venv \
     CMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD} \
+    SYS_PYTHON_EXE=${SYS_PYTHON_EXE} \
     BASH_ENV=/root/.bashrc
 
 RUN mkdir -p /cache/ccache /cache/uv /workspace/install
@@ -246,7 +247,7 @@ RUN --mount=type=cache,target=/cache/uv,sharing=locked \
     if [ -f pyproject.toml ] && [ -f uv.lock ]; then uv sync --frozen ${UV_SYNC_FLAGS}; fi
 RUN --mount=type=cache,target=/cache/ccache,sharing=locked \
     mkdir -p build && cd build && \
-    cmake ../src -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/workspace/install -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD} ${CMAKE_EXTRA_ARGS} && \
+    cmake ../src -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/workspace/install -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD} -DPYTHON_EXECUTABLE=$(bash /docker_dev/scripts/get_python_exe.sh) ${CMAKE_EXTRA_ARGS} && \
     make -j$(nproc) && make install && \
     bash /docker_dev/scripts/check_deps.sh /workspace/install
 
@@ -270,7 +271,7 @@ RUN --mount=type=cache,target=/cache/uv,sharing=locked \
     if [ -f pyproject.toml ] && [ -f uv.lock ]; then uv sync --frozen ${UV_SYNC_FLAGS}; fi
 RUN --mount=type=cache,target=/cache/ccache,sharing=locked \
     . /opt/ros/${ROS_DISTRO}/setup.sh && \
-    colcon build ${COLCON_EXTRA_FLAGS} --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD} ${CMAKE_EXTRA_ARGS} --install-base /workspace/install && \
+    colcon build ${COLCON_EXTRA_FLAGS} --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD} -DPYTHON_EXECUTABLE=$(bash /docker_dev/scripts/get_python_exe.sh) ${CMAKE_EXTRA_ARGS} --install-base /workspace/install && \
     bash /docker_dev/scripts/check_deps.sh /workspace/install
 
 # ── Final Production Runtime Images (Switch Strategy) ────────────────────────

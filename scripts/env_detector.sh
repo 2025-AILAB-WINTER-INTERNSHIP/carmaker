@@ -195,7 +195,16 @@ for _path_var in HOST_HOME HOST_CACHE_DIR HOST_X11_DIR HOST_GITCONFIG HOST_XAUTH
     fi
 done
 
-# 5. Output results in KEY=VALUE format for Makefile or environment injection
+# 4. Python Interpreter Detection (SSOT Integration)
+# Detects the best python executable for the current project context.
+GET_PY_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/get_python_exe.sh"
+if [ -f "$GET_PY_SCRIPT" ]; then
+    PYTHON_EXECUTABLE=$(bash "$GET_PY_SCRIPT")
+else
+    PYTHON_EXECUTABLE="${SYS_PYTHON_EXE:-/usr/bin/python3}"
+fi
+
+# 5. Output all detected variables for Makefile integration
 echo "IS_WSL=${IS_WSL}"
 echo "HOST_DXG_MOUNT=${HOST_DXG_MOUNT}"
 echo "HOST_ARCH=${HOST_ARCH}"
@@ -215,3 +224,4 @@ echo "HOST_GITCONFIG=${HOST_GITCONFIG}"
 echo "HOST_SSH_AUTH_SOCK=${HOST_SSH_AUTH_SOCK}"
 echo "HOST_CUDA_MAX=${HOST_CUDA_MAX:-Unknown}"
 echo "WSL_LIB_DIR_MOUNT=${WSL_LIB_DIR_MOUNT}"
+echo "PYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}"

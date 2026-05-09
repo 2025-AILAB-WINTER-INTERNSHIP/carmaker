@@ -23,13 +23,16 @@ SYS_PYTHON_EXE="/usr/bin/python3"
 # Smart Python Detection for Builds
 # Returns venv python ONLY if --share (system-site-packages) is enabled; otherwise defaults to system python.
 function __get_build_py_exe() {
-    local cfg_file="${VIRTUAL_ENV}/pyvenv.cfg"
-    # Returns venv python ONLY if --share (system-site-packages) is enabled; 
-    # This ensures consistency between system libraries and Python bindings.
-    if [ -f "$cfg_file" ] && grep -q "include-system-site-packages = true" "$cfg_file" 2>/dev/null; then
-        echo "${VENV_PATH}/bin/python3"
+    local script_live="/workspace/scripts/get_python_exe.sh"
+    local script_static="/docker_dev/scripts/get_python_exe.sh"
+
+    # 1. Prefer central detection script (Single Source of Truth)
+    if [ -f "$script_live" ]; then
+        bash "$script_live"
+    elif [ -f "$script_static" ]; then
+        bash "$script_static"
     else
-        # Default to system python for maximum stability in isolated environments
+        # 2. Minimal fallback to system python (avoiding logic duplication)
         echo "${SYS_PYTHON_EXE:-/usr/bin/python3}"
     fi
 }
@@ -48,7 +51,19 @@ if [ -n "${ROS_DISTRO}" ]; then
     alias cbr='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=$(__get_build_py_exe)'
     alias cbrp='colcon build --symlink-install --install-base /workspace/install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17} -DPYTHON_EXECUTABLE=$(__get_build_py_exe) --packages-select'
     alias cbt='colcon test'
-    alias s='source /workspace/install/setup.bash'
+    # Smart Sourcing: Auto-detects (devel/) or (install/)
+    function __smart_source() {
+        if [ -f "/workspace/install/setup.bash" ]; then
+            source "/workspace/install/setup.bash"
+            echo -e "${GREEN}✓${NC} Sourced install/"
+        elif [ -f "/workspace/devel/setup.bash" ]; then
+            source "/workspace/devel/setup.bash"
+            echo -e "${GREEN}✓${NC} Sourced devel/"
+        else
+            echo -e "${YELLOW}⚠${NC} No setup.bash found in install/ or devel/"
+        fi
+    }
+    alias s='__smart_source'
     alias sb='source ~/.bashrc'
 
     # --- Navigation ----------------------------------------------------------
@@ -124,7 +139,7 @@ function __env_sync_state() {
     if [ "$action" == "lock" ]; then
         # 1. Backup existing state
         export _OLD_UV_PYTHON="$UV_PYTHON"
-        
+
         # 2. Detect identity and decide locking strategy
         if grep -q "include-system-site-packages = true" "$cfg_file" 2>/dev/null; then
             export ENVIRONMENT_TYPE="SHARED"
@@ -166,14 +181,14 @@ function activate() {
         if [ -n "$(type -t deactivate)" ]; then
             # Capture the body of the original deactivate function safely
             local original_body=$(declare -f deactivate | sed '1,/^[{ ]/d; $d')
-            
+
             function deactivate() {
                 # 1. Execute original logic (restores PATH, PS1, etc.)
                 eval "$original_body"
-                
+
                 # 2. Execute our custom state restoration
                 __env_sync_state "restore"
-                
+
                 # 3. Final cleanup
                 unset -f deactivate 2>/dev/null
                 echo -e "${BLUE}ℹ${NC} Environment deactivated. State restored."

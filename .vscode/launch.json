@@ -27,20 +27,20 @@
         {
             "id": "executablePath",
             "type": "promptString",
-            "description": "Absolute path to executable (e.g., /workspace/install/lib/my_pkg/my_node)",
-            "default": "/workspace/install/lib/"
+            "description": "Absolute path to executable (e.g., /workspace/install/pkg_name/lib/pkg_name/my_node)",
+            "default": "/workspace/install/pkg_name/lib/pkg_name/my_node"
         },
         {
             "id": "launchFile",
             "type": "promptString",
-            "description": "Launch file path (e.g., src/my_pkg/launch/bringup.launch.py)",
-            "default": "src/"
+            "description": "Relative path to the launch file (e.g., src/pkg_name/launch/launch_name.launch)",
+            "default": "src/pkg_name/launch/launch_name.launch"
         },
         {
             "id": "rosPackage",
             "type": "promptString",
-            "description": "ROS package name (e.g., my_robot_pkg)",
-            "default": ""
+            "description": "ROS package name",
+            "default": "pkg_name"
         },
         {
             "id": "rosExecutable",

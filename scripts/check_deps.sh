@@ -38,6 +38,49 @@ while IFS= read -r ELF_FILE; do
     fi
 done < <(find "$TARGET_DIR" -type f \( -executable -o -name "*.so*" \) ! -name "*.py" -exec file {} + 2>/dev/null | grep -E 'ELF.*(executable|shared object)' | cut -d: -f1)
 
+# --- Python Integrity Check (SSOT Integration) -------------------------------
+function check_python_integrity() {
+    local script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    local get_py_script="${script_dir}/get_python_exe.sh"
+
+    if [ ! -f "$get_py_script" ]; then
+        log_warn "Python detector script not found. Skipping Python integrity check."
+        return 0
+    fi
+
+    local active_py=$(bash "$get_py_script")
+    log_info "Verifying Python integrity for: $active_py"
+
+    # 1. Basic Interpreter execution test
+    if ! "$active_py" --version &>/dev/null; then
+        log_error "Python interpreter is not executable: $active_py"
+        return 1
+    fi
+
+    # 2. ROS Distro-specific binding test
+    case "${ROS_DISTRO}" in
+        noetic)
+            if ! "$active_py" -c "import rospy" &>/dev/null; then
+                log_error "ROS 1 (Noetic) bindings not found in $active_py. Check your venv configuration."
+                return 1
+            fi
+            ;;
+        humble|foxy|galactic)
+            if ! "$active_py" -c "import rclpy" &>/dev/null; then
+                log_error "ROS 2 (${ROS_DISTRO}) bindings not found in $active_py. Check your venv configuration."
+                return 1
+            fi
+            ;;
+        *)
+            log_warn "Unknown ROS_DISTRO '${ROS_DISTRO}'. Skipping specific binding check."
+            ;;
+    esac
+
+    log_ok "Python ROS bindings verified successfully."
+}
+
+check_python_integrity || MISSING_COUNT=$((MISSING_COUNT + 1))
+
 if [ $MISSING_COUNT -gt 0 ]; then
     log_error "$MISSING_COUNT files have missing dependencies."
     log_info "Please add missing packages to dependencies/apt.txt (with # runtime comment)."

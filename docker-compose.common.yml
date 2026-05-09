@@ -16,8 +16,10 @@ x-common-env: &common-env
   DISPLAY: ${DISPLAY:-:0}
   DISPLAY_TYPE: ${DISPLAY_TYPE:-X11}
   WAYLAND_DISPLAY: ${HOST_WAYLAND_DISPLAY:-}
+  QT_X11_NO_MITSHM: "1"
   XAUTHORITY: /tmp/.container_xauth
   XDG_RUNTIME_DIR: /tmp/.container_xdg
+  SYS_PYTHON_EXE: ${SYS_PYTHON_EXE:-/usr/bin/python3}
   UV_PYTHON: ${UV_PYTHON:-3.10}
   UV_SYNC_FLAGS: ${UV_SYNC_FLAGS:-}
   ROS_DISTRO: ${ROS_DISTRO:-humble}
@@ -30,7 +32,6 @@ x-common-env: &common-env
   CMAKE_CXX_STANDARD: ${CMAKE_CXX_STANDARD:-17}
   CMAKE_EXTRA_ARGS: ${CMAKE_EXTRA_ARGS:-}
   COLCON_EXTRA_FLAGS: ${COLCON_EXTRA_FLAGS:-}
-  QT_X11_NO_MITSHM: "1"
 
 x-nvidia-env: &nvidia-env
   <<: *common-env

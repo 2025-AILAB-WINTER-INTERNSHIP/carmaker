@@ -31,11 +31,7 @@
 
     // ── Search & Explorer Exclusions ─────────────────────────────────────────
     "files.exclude": {
-        "**/build": true,
-        "**/install": true,
-        "**/log": true,
         "**/.docker_cache": true,
-        "**/src/thirdparty": true,
         "**/__pycache__": true,
         "**/*.pyc": true
     },
@@ -60,7 +56,7 @@
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
     "C_Cpp.default.cppStandard": "c++${env:CMAKE_CXX_STANDARD}",
     "C_Cpp.default.cStandard": "c${env:CMAKE_C_STANDARD}",
-    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "C_Cpp.default.compileCommands": "/workspace/build/compile_commands.json",
     "C_Cpp.codeAnalysis.runAutomatically": true,
     "C_Cpp.errorSquiggles": "enabled",
 
