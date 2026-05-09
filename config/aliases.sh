@@ -23,10 +23,14 @@ SYS_PYTHON_EXE="/usr/bin/python3"
 # Smart Python Detection for Builds
 # Returns venv python ONLY if --share (system-site-packages) is enabled; otherwise defaults to system python.
 function __get_build_py_exe() {
-    if [ -n "$VIRTUAL_ENV" ] && grep -q "include-system-site-packages = true" "$VIRTUAL_ENV/pyvenv.cfg" 2>/dev/null; then
+    local cfg_file="${VIRTUAL_ENV}/pyvenv.cfg"
+    # Returns venv python ONLY if --share (system-site-packages) is enabled; 
+    # This ensures consistency between system libraries and Python bindings.
+    if [ -f "$cfg_file" ] && grep -q "include-system-site-packages = true" "$cfg_file" 2>/dev/null; then
         echo "${VENV_PATH}/bin/python3"
     else
-        echo "${SYS_PYTHON_EXE}"
+        # Default to system python for maximum stability in isolated environments
+        echo "${SYS_PYTHON_EXE:-/usr/bin/python3}"
     fi
 }
 
@@ -106,7 +110,7 @@ function mkenv() {
         msg="shared .venv (with system packages)"
     fi
     mkdir -p "$(dirname "$VENV_PATH")" && \
-    uv venv $share_flag --python "$py_exe" "$VENV_PATH" && \
+    uv venv "$VENV_PATH" --python "$py_exe" $share_flag --seed --prompt "${COMPOSE_PROJECT_NAME:-.venv}" && \
     ln -sf "$VENV_PATH" /workspace/.venv && \
     echo -e "Created ${GREEN}${msg}${NC} in $(dirname "$VENV_PATH") and linked to /workspace/.venv. Run: ${CYAN}activate${NC}"
 }
@@ -160,12 +164,18 @@ function activate() {
 
         # Override deactivate to ensure clean state restoration
         if [ -n "$(type -t deactivate)" ]; then
-            local original_deactivate=$(declare -f deactivate)
+            # Capture the body of the original deactivate function safely
+            local original_body=$(declare -f deactivate | sed '1,/^[{ ]/d; $d')
+            
             function deactivate() {
-                # Run original logic and then restore our state
-                unset -f deactivate
-                eval "${original_deactivate#deactivate ()}"
+                # 1. Execute original logic (restores PATH, PS1, etc.)
+                eval "$original_body"
+                
+                # 2. Execute our custom state restoration
                 __env_sync_state "restore"
+                
+                # 3. Final cleanup
+                unset -f deactivate 2>/dev/null
                 echo -e "${BLUE}ℹ${NC} Environment deactivated. State restored."
             }
         fi
@@ -271,6 +281,23 @@ alias ccache-clear='ccache -C'
 alias sync_deps='bash /docker_dev/scripts/sync_deps.sh'
 alias check_deps='bash /docker_dev/scripts/check_deps.sh'
 
+# Internal helper to categorize the current workspace for intelligent automation
+function __detect_project_type() {
+    if [ -n "${ROS_DISTRO}" ] && command -v colcon &>/dev/null; then
+        # Check for ROS-specific markers
+        if [ -f "/workspace/src/CMakeLists.txt" ] || find /workspace/src -maxdepth 2 -name "package.xml" | grep -q .; then
+            echo "ROS"
+            return
+        fi
+    fi
+
+    if find /workspace/src -maxdepth 2 -name "CMakeLists.txt" | grep -q .; then
+        echo "CPP"
+    else
+        echo "PYTHON"
+    fi
+}
+
 # One-step Workspace Initialization (mkenv + uvs + sync_deps + build)
 # Automatically selects between cb (ROS), mbuild (C++), or no-build (Python)
 function mksync() {
@@ -279,20 +306,22 @@ function mksync() {
 
     # 1. Core Environment Setup
     mkenv "$@" && \
-    source "${VENV_PATH}/bin/activate" && \
+    activate && \
     UV_PYTHON="$target_py" uvs && \
     sync_deps --rosdep || return 1
 
     # 2. Intelligent Build Strategy
-    if [ -n "${ROS_DISTRO}" ] && command -v colcon &>/dev/null; then
-        log_info "ROS environment detected. Executing colcon build (cb)..."
-        cb && s
-    elif [ -f "/workspace/src/CMakeLists.txt" ]; then
-        log_info "Pure C++ project detected (CMakeLists.txt found). Executing mbuild..."
-        mbuild
-    else
-        log_ok "Pure Python project or minimal environment detected. Skipping build step."
-    fi
+    local project_type=$(__detect_project_type)
+    case "$project_type" in
+        "ROS")
+            log_info "ROS environment detected. Executing colcon build (cb)..."
+            cb && s ;;
+        "CPP")
+            log_info "Pure C++ project detected. Executing mbuild..."
+            mbuild ;;
+        *)
+            log_ok "Pure Python or minimal project detected. Skipping build step." ;;
+    esac
 }
 
 # =============================================================================
