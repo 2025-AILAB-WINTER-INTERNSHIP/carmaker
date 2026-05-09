@@ -12,6 +12,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/utils_logging.sh" 2>/dev/null || true
 LOG_PREFIX="[Env Detector]"
 
+# 0. Detect Workspace Paths (Host & Container Separation)
+HOST_WORKSPACE_PATH="${HOST_WORKSPACE_PATH:-$(pwd)}"
+WORKSPACE_PATH="${WORKSPACE_PATH:-/workspace}"
+
 # 1. Check Environment and Determine host CPU architecture
 # Composite WSL 2 detection: kernel signature + WSLg artifact check.
 # Simple "Microsoft" grep causes false positives on Azure VMs and Hyper-V guests.
@@ -77,10 +81,10 @@ else
     HOST_DRI_MOUNT="/dev/null:/dev/null"
 fi
 
-# 3. Detect Display Protocols and Establish Secure Cache Paths
-# Ensure a valid cache directory exists, defaulting to .docker_cache within the workspace
+# 3. Establish Workspace Path and Secure Cache Paths
+# HOST side cache should be relative to HOST_WORKSPACE_PATH
 if [ -z "${DOCKER_DEV_CACHE_DIR}" ]; then
-    HOST_CACHE_DIR="${WORKSPACE_PATH:-$(pwd)}/.docker_cache"
+    HOST_CACHE_DIR="${HOST_WORKSPACE_PATH}/.docker_cache"
 else
     HOST_CACHE_DIR="${DOCKER_DEV_CACHE_DIR}"
 fi
@@ -205,6 +209,8 @@ else
 fi
 
 # 5. Output all detected variables for Makefile integration
+echo "HOST_WORKSPACE_PATH=${HOST_WORKSPACE_PATH}"
+echo "WORKSPACE_PATH=${WORKSPACE_PATH}"
 echo "IS_WSL=${IS_WSL}"
 echo "HOST_DXG_MOUNT=${HOST_DXG_MOUNT}"
 echo "HOST_ARCH=${HOST_ARCH}"

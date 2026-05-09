@@ -20,17 +20,23 @@ ERROR  := $(RED)[ERROR]$(NC)
 # Load Environment Variables
 -include .env
 
+# Workspace Path Architecture (Separation of Host and Container)
+# HOST_WORKSPACE_PATH: Physical path on the host machine (Source)
+# WORKSPACE_PATH: Logical path inside the container (Target/SSOT)
+HOST_WORKSPACE_PATH ?= $(CURDIR)
+WORKSPACE_PATH      ?= /workspace
+
+# Auto-match TARGETARCH
+TARGETARCH ?= $(HOST_ARCH)
+
+export
+
 # Environment Detection Engine (Auto-detection — triggered by relevant targets)
 # Applied to Docker-related operations to ensure hardware and display compatibility
 NEEDS_DETECTOR := $(filter-out help setup env-check%,$(MAKECMDGOALS))
 ifneq ($(NEEDS_DETECTOR),)
 $(foreach line,$(shell bash scripts/env_detector.sh),$(eval $(line)))
 endif
-
-# Auto-match TARGETARCH
-TARGETARCH ?= $(HOST_ARCH)
-WORKSPACE_PATH ?= $(CURDIR)
-export
 
 COMPOSE := docker compose
 COMPOSE_DEV := -f docker-compose.dev.yml
@@ -135,7 +141,11 @@ endef
 
 # $1: MOUNT_DIR (Absolute Path), $2: Targets to delete
 define SUDO_FREE_RM
-	echo -e "  $(INFO) Performing sudo-free deletion: $2"; \
+	if [ "$1" = "/" ] || [ -z "$1" ]; then \
+		echo -e "  $(ERROR) Critical Safety: Refusing to delete from root directory!"; \
+		exit 1; \
+	fi; \
+	echo -e "  $(INFO) Performing sudo-free deletion: $2 in $1"; \
 	docker run --rm -v "$1:/mnt" alpine sh -c "cd /mnt && rm -rf $2" 2>/dev/null || true; \
 	if [ "$(SKIP_ALPINE_RM)" != "1" ]; then \
 		echo -e "  $(INFO) Cleaning up the temporary alpine image used for sudo-free deletion..."; \
@@ -221,6 +231,8 @@ setup:
 status: check
 	$(call PRINT_SECTION,Project Configuration Summary)
 	@echo "  Project Name:      $(COMPOSE_PROJECT_NAME)"
+	@echo "  Workspace(Host):   $(HOST_WORKSPACE_PATH)"
+	@echo "  Workspace(Docker): $(WORKSPACE_PATH)"
 	@echo "  OS Environment:    $(if $(filter true,$(IS_WSL)),WSL 2 (Windows Subsystem for Linux),Linux Native)"
 	@echo "  Architecture:      $(HOST_ARCH) (Target: $(TARGETARCH))"
 	@echo "  Display:           $(DISPLAY) ($(DISPLAY_TYPE))"
@@ -263,7 +275,7 @@ xauth:
 
 check: check-host
 	@if [ ! -f .env ]; then echo -e "  $(ERROR) .env not found. Please run 'make setup' first."; exit 1; fi
-	@if [ ! -d "$(WORKSPACE_PATH)" ]; then echo -e "  $(ERROR) WORKSPACE_PATH ($(WORKSPACE_PATH)) does not exist."; exit 1; fi
+	@if [ ! -d "$(HOST_WORKSPACE_PATH)" ]; then echo -e "  $(ERROR) HOST_WORKSPACE_PATH ($(HOST_WORKSPACE_PATH)) does not exist."; exit 1; fi
 	@if [ "$(IS_WSL)" = "true" ]; then \
 		bash scripts/wsl_auditor.sh; \
 		if [[ "$(CURDIR)" == /mnt/* ]]; then \
@@ -509,7 +521,7 @@ clean:
 		read ans || true; \
 	fi; \
 	if [ "$$ans" = "y" ] || [ "$$ans" = "Y" ]; then \
-		$(call SUDO_FREE_RM,$(WORKSPACE_PATH),build install log .venv); \
+		$(call SUDO_FREE_RM,$(HOST_WORKSPACE_PATH),build install log .venv); \
 	else \
 		echo -e "  $(INFO) Safely skipped deleting host folders."; \
 	fi
@@ -521,7 +533,7 @@ clean-cache:
 		echo -e "  $(ERROR) Cache directory ($$CACHE_DIR) is invalid or unsafe."; \
 		exit 1; \
 	fi; \
-	if ! (echo "$$CACHE_DIR" | grep -q "$(COMPOSE_PROJECT_NAME)" || echo "$$CACHE_DIR" | grep -q "$(WORKSPACE_PATH)"); then \
+	if ! (echo "$$CACHE_DIR" | grep -q "$(COMPOSE_PROJECT_NAME)" || echo "$$CACHE_DIR" | grep -q "$(HOST_WORKSPACE_PATH)"); then \
 		echo -e "  $(WARN) This cache string ($$CACHE_DIR) points to a shared global cache. Proceeding here affects all projects."; \
 	fi; \
 	if [ -d "$$CACHE_DIR" ]; then \
