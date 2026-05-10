@@ -12,11 +12,16 @@
 
 set -e
 
+# Force UTF-8 locale for terminal emoji and ASCII art support
+export LANG=${LANG:-C.UTF-8}
+export LC_ALL=${LANG:-C.UTF-8}
+export LANGUAGE=${LANG:-en_US.UTF-8}
+
 # =============================================================================
 # Bootstrap: Logging (must precede helper function definitions)
 # =============================================================================
-SOURCE_LOG="/docker_dev/scripts/utils_logging.sh"
-[ ! -f "$SOURCE_LOG" ] && SOURCE_LOG="/opt/scripts/utils_logging.sh"
+SOURCE_LOG="/docker_dev/scripts/util_logging.sh"
+[ ! -f "$SOURCE_LOG" ] && SOURCE_LOG="/opt/scripts/util_logging.sh"
 [ -f "$SOURCE_LOG" ] && source "$SOURCE_LOG"
 
 # Fallback: Define logging stubs if utility functions are unavailable (Safety net for production)
@@ -226,6 +231,15 @@ fi
 # =============================================================================
 # [8] Environment Sourcing (ROS and Python venv)
 # =============================================================================
+
+# [8.1] Development Aliases & Tools (For Non-interactive support)
+ALIASES_SH="/docker_dev/config/util_aliases.sh"
+[ ! -f "$ALIASES_SH" ] && ALIASES_SH="/opt/scripts/util_aliases.sh"
+if [ -f "$ALIASES_SH" ]; then
+    source "$ALIASES_SH"
+    log_ok "Development aliases and tools integrated"
+fi
+
 # ROS environment source
 ROS_SETUP="/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
 if [ -f "$ROS_SETUP" ]; then
@@ -240,41 +254,16 @@ else
     log_info "ROS2 not installed or not in /opt/ros, skipping ROS2 setup"
 fi
 
-# Auto-activate Python virtual environment
-if [ -f "${WORKSPACE_PATH:-/workspace}/install/.venv/bin/activate" ]; then
-    if [ "$IS_DEV" = true ]; then
-        ln -sf "${WORKSPACE_PATH:-/workspace}/install/.venv" "${WORKSPACE_PATH:-/workspace}/.venv"
-    fi
-    source "${WORKSPACE_PATH:-/workspace}/install/.venv/bin/activate"
-    log_ok "Python virtualenv activated (${WORKSPACE_PATH:-/workspace}/install/.venv)"
-fi
-
-# [8.1] Development Aliases & Tools (For Non-interactive support)
-ALIASES_SH="/docker_dev/config/aliases.sh"
-[ ! -f "$ALIASES_SH" ] && ALIASES_SH="/opt/scripts/aliases.sh"
-if [ -f "$ALIASES_SH" ]; then
-    source "$ALIASES_SH"
-    log_ok "Development aliases and tools integrated"
-fi
-
 # [8.2] ROS Version-specific Configuration
-if [ "${ROS_DISTRO}" = "noetic" ]; then
-    # Prioritize environment variables injected by Docker Compose, fallback to defaults
-    if [ -z "$ROS_HOSTNAME" ] || [ "$ROS_HOSTNAME" = "localhost" ]; then
-        export ROS_MASTER_URI="http://$(hostname):11311"
-        export ROS_HOSTNAME=$(hostname)
-    fi
-else
-    # ROS 2 (Humble) Specifics
-    export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-    export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+ROS_ENV_INIT="/docker_dev/config/init_ros_env.sh"
+[ ! -f "$ROS_ENV_INIT" ] && ROS_ENV_INIT="/opt/scripts/init_ros_env.sh"
+if [ -f "$ROS_ENV_INIT" ]; then
+    source "$ROS_ENV_INIT"
+fi
 
-    # Auto-configure CycloneDDS defaults using the external config file (Unicast Fallback for Bridge Networks)
-    if [ "$RMW_IMPLEMENTATION" = "rmw_cyclonedds_cpp" ] && [ -z "$CYCLONEDDS_URI" ]; then
-        if [ -f /docker_dev/config/cyclonedds.xml ]; then
-            export CYCLONEDDS_URI=file:///docker_dev/config/cyclonedds.xml
-        fi
-    fi
+# [8.3] Auto-activate Python virtual environment
+if [ -f "${WORKSPACE_PATH:-/workspace}/install/.venv/bin/activate" ]; then
+    activate
 fi
 
 # =============================================================================
@@ -282,10 +271,10 @@ fi
 # =============================================================================
 # Sourced after ROS to ensure LD_LIBRARY_PATH priority for GPU drivers
 log_info "GPU mode: ${GPU_MODE:-auto}"
-if [ -f "/docker_dev/scripts/gpu_setup.sh" ]; then
-    source /docker_dev/scripts/gpu_setup.sh "${GPU_MODE:-auto}" || log_warn "GPU setup encountered errors, continuing with defaults."
-elif [ -f "/opt/scripts/gpu_setup.sh" ]; then
-    source /opt/scripts/gpu_setup.sh "${GPU_MODE:-auto}" || log_warn "GPU setup encountered errors, continuing with defaults."
+if [ -f "/docker_dev/scripts/setup_gpu.sh" ]; then
+    source /docker_dev/scripts/setup_gpu.sh "${GPU_MODE:-auto}" || log_warn "GPU setup encountered errors, continuing with defaults."
+elif [ -f "/opt/scripts/setup_gpu.sh" ]; then
+    source /opt/scripts/setup_gpu.sh "${GPU_MODE:-auto}" || log_warn "GPU setup encountered errors, continuing with defaults."
 fi
 
 # Persist GPU environment for non-interactive shells (docker exec)
@@ -319,8 +308,8 @@ if [ "$IS_DEV" = true ]; then
     TARGET_DIR="${SYNC_TARGET_DIR:-src/thirdparty}"
     if [ "$PWD" == "${WORKSPACE_PATH:-/workspace}" ] && [ -f "dependencies/dependencies.repos" ]; then
         if [ ! -d "$TARGET_DIR" ] || [ -z "$(ls -A $TARGET_DIR 2>/dev/null)" ]; then
-            log_info "Dependency directory ($TARGET_DIR) is empty. Running sync_deps.sh..."
-            bash /docker_dev/scripts/sync_deps.sh
+            log_info "Dependency directory ($TARGET_DIR) is empty. Running setup_sync_deps.sh..."
+            bash /docker_dev/scripts/setup_sync_deps.sh
         fi
     fi
 fi

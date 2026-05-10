@@ -1,11 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# config/bash_init.sh
+# config/init_bash.sh
 # Common shell initialization for Docker development environment
 #
 # Sets up core environment variables and sources dependent configuration files
 # to ensure a consistent developer experience across ROS1 and ROS2 targets.
 # =============================================================================
+
+# Force UTF-8 locale for terminal emoji and ASCII art support
+export LANG=${LANG:-C.UTF-8}
+export LC_ALL=${LANG:-C.UTF-8}
+export LANGUAGE=${LANG:-en_US.UTF-8}
 
 # ccache
 export PATH="/usr/lib/ccache:$PATH"
@@ -20,7 +25,7 @@ export UV_PROJECT_ENVIRONMENT="${WORKSPACE_PATH:-/workspace}/install/.venv"
 export CMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD:-17}
 
 # Custom Aliases
-source /docker_dev/config/aliases.sh
+source /docker_dev/config/util_aliases.sh
 
 # Shell Prompt
 export PS1="\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ "
@@ -45,28 +50,15 @@ if [ -f /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash ]; then
 fi
 
 # ROS Version-specific Configuration
-if [ "${ROS_DISTRO}" = "noetic" ]; then
-    # Prioritize environment variables injected by Docker Compose, fallback to defaults
-    if [ -z "$ROS_HOSTNAME" ] || [ "$ROS_HOSTNAME" = "localhost" ]; then
-        export ROS_MASTER_URI="http://$(hostname):11311"
-        export ROS_HOSTNAME=$(hostname)
-    fi
-else
-    # ROS 2 (Humble) Specifics
-    export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-    export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
-
-    # Auto-configure CycloneDDS defaults using the external config file (Unicast Fallback for Bridge Networks)
-    if [ "$RMW_IMPLEMENTATION" = "rmw_cyclonedds_cpp" ] && [ -z "$CYCLONEDDS_URI" ]; then
-        if [ -f /docker_dev/config/cyclonedds.xml ]; then
-            export CYCLONEDDS_URI=file:///docker_dev/config/cyclonedds.xml
-        fi
-    fi
+ROS_ENV_INIT="/docker_dev/config/init_ros_env.sh"
+[ ! -f "$ROS_ENV_INIT" ] && ROS_ENV_INIT="/opt/scripts/init_ros_env.sh"
+if [ -f "$ROS_ENV_INIT" ]; then
+    source "$ROS_ENV_INIT"
 fi
 
 # Auto-activate uv Virtual Environment (.venv)
 if [ -f "${WORKSPACE_PATH:-/workspace}/install/.venv/bin/activate" ]; then
-    source "${WORKSPACE_PATH:-/workspace}/install/.venv/bin/activate"
+    activate
 fi
 
 # GPU Environment Variables (Sourced after ROS to maintain LD_LIBRARY_PATH priority)
@@ -75,6 +67,8 @@ if [ -f /root/.gpu_env.sh ]; then
 fi
 
 # Welcome Message (MOTD)
-if [ -f /docker_dev/scripts/welcome.sh ]; then
-    bash /docker_dev/scripts/welcome.sh
+WELCOME_SH="/docker_dev/scripts/show_welcome.sh"
+[ ! -f "$WELCOME_SH" ] && WELCOME_SH="/opt/scripts/show_welcome.sh"
+if [ -f "$WELCOME_SH" ]; then
+    bash "$WELCOME_SH"
 fi

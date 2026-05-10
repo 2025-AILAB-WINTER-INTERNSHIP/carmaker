@@ -1,9 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# config/aliases.sh
+# config/util_aliases.sh
 # Comprehensive alias collection for ROS2, C++, Python (uv), and Diagnostics
 #
-# Loaded via ~/.bashrc using: source /docker_dev/config/aliases.sh
+# Loaded via ~/.bashrc using: source /docker_dev/config/util_aliases.sh
 # Note: ROS-specific aliases are only defined if the ros2 command is available,
 # ensuring compatibility with non-ROS dev targets.
 # Note: This file should only be loaded inside the container environment.
@@ -15,8 +15,8 @@ if [ ! -f /.dockerenv ] && [ "$FORCE_LOAD_ALIASES" != "true" ]; then
 fi
 
 # Load logging utility for shared color variables & branding
-SOURCE_LOG="/docker_dev/scripts/utils_logging.sh"
-[ ! -f "$SOURCE_LOG" ] && SOURCE_LOG="$(dirname "${BASH_SOURCE[0]}")/../scripts/utils_logging.sh"
+SOURCE_LOG="/docker_dev/scripts/util_logging.sh"
+[ ! -f "$SOURCE_LOG" ] && SOURCE_LOG="$(dirname "${BASH_SOURCE[0]}")/../scripts/util_logging.sh"
 [ -f "$SOURCE_LOG" ] && source "$SOURCE_LOG"
 
 # Non-interactive shell detection
@@ -29,8 +29,8 @@ SYS_PYTHON_EXE=${SYS_PYTHON_EXE:-/usr/bin/python3}
 # Smart Python Detection for Builds
 # Returns venv python ONLY if --share (system-site-packages) is enabled; otherwise defaults to system python.
 function __get_build_py_exe() {
-    local script_live="${WORKSPACE_PATH:-/workspace}/scripts/get_python_exe.sh"
-    local script_static="/docker_dev/scripts/get_python_exe.sh"
+    local script_live="${WORKSPACE_PATH:-/workspace}/scripts/util_get_python.sh"
+    local script_static="/docker_dev/scripts/util_get_python.sh"
 
     # 1. Prefer central detection script (Single Source of Truth)
     if [ -f "$script_live" ]; then
@@ -136,74 +136,75 @@ function mkenv() {
     echo -e "Created ${GREEN}${msg}${NC} in $(dirname "$VENV_PATH") and linked to ${WORKSPACE_PATH:-/workspace}/.venv. Run: ${CYAN}activate${NC}"
 }
 
-# Internal helper for environment state management (State Provider Pattern)
-# Handles UV_PYTHON locking, backup, and restoration
-function __env_sync_state() {
-    local action="$1" # "lock" or "restore"
-    local cfg_file="${VENV_PATH}/pyvenv.cfg"
+# Internal helper to purge virtual environment traces (PATH, PS1)
+function __venv_purge_state() {
+    local v_root="$1"
+    [ -z "$v_root" ] && return
 
-    if [ "$action" == "lock" ]; then
-        # 1. Backup existing state
-        export _OLD_UV_PYTHON="$UV_PYTHON"
+    # 1. PATH Cleanup: Safely remove duplicate paths from start/middle/end
+    export PATH=":${PATH}:"
+    export PATH="${PATH//:${v_root}\/bin:/:}"
+    export PATH="${PATH#:}" export PATH="${PATH%:}"
 
-        # 2. Detect identity and decide locking strategy
-        if grep -q "include-system-site-packages = true" "$cfg_file" 2>/dev/null; then
-            export ENVIRONMENT_TYPE="SHARED"
-            export UV_PYTHON="$(which python3)"
-            return 0 # Locked (Shared Mode)
-        else
-            export ENVIRONMENT_TYPE="PURE"
-            return 1 # Flexible (Pure Mode)
-        fi
+    # 2. PS1 Cleanup: Precisely remove venv prompt (Anchored to ^ to protect paths with parentheses)
+    export PS1=$(echo "$PS1" | sed -E 's/^\(([^)]+)\) //g; s/^\(([^)]+)\)//g')
+}
+
+# Internal helper to detect venv mode from pyvenv.cfg
+function __get_venv_mode() {
+    local v_path="$1"
+    if grep -q "include-system-site-packages = true" "${v_path}/pyvenv.cfg" 2>/dev/null; then
+        echo "SHARED"
     else
-        # 3. Restore state on deactivation
-        if [ -n "$_OLD_UV_PYTHON" ]; then
-            export UV_PYTHON="$_OLD_UV_PYTHON"
-        else
-            unset UV_PYTHON
-        fi
-        unset _OLD_UV_PYTHON
-        unset ENVIRONMENT_TYPE
-        return 0
+        echo "PURE"
     fi
 }
 
 # Smart activation function that handles Shared (Integrated) vs Pure (Isolated) environments
 function activate() {
-    local act_script="${VENV_PATH}/bin/activate"
-    if [ -f "$act_script" ]; then
-        source "$act_script"
+    local target_venv="${VENV_PATH:-${WORKSPACE_PATH:-/workspace}/install/.venv}"
+    local act_script="${target_venv}/bin/activate"
+    [ ! -f "$act_script" ] && { echo -e "${RED}Error:${NC} Virtual environment not found at ${target_venv}, Run ${CYAN}mkenv${NC} or ${CYAN}mksync${NC} first."; return 1; }
 
-        # Apply environment-aware state locking
-        if __env_sync_state "lock"; then
-            echo -e "${GREEN}✓${NC} Activated: ${CYAN}$(python3 --version)${NC} (${YELLOW}Shared Mode${NC})"
-            echo -e "  ${YELLOW}UV_PYTHON is locked to ensure System & Shared package integrity.${NC}"
-        else
-            echo -e "${GREEN}✓${NC} Activated: ${CYAN}$(python3 --version)${NC} (${BLUE}Pure Mode${NC})"
-            echo -e "  ${BLUE}Operating in isolated environment mode.${NC}"
-        fi
+    # 1. Surgical Reset: Purge existing traces
+    __venv_purge_state "$target_venv"
+    unset VIRTUAL_ENV ENVIRONMENT_TYPE _OLD_UV_PYTHON
 
-        # Override deactivate to ensure clean state restoration
-        if [ -n "$(type -t deactivate)" ]; then
-            # Capture the body of the original deactivate function safely
-            local original_body=$(declare -f deactivate | sed '1,/^[{ ]/d; $d')
-
-            function deactivate() {
-                # 1. Execute original logic (restores PATH, PS1, etc.)
-                eval "$original_body"
-
-                # 2. Execute our custom state restoration
-                __env_sync_state "restore"
-
-                # 3. Final cleanup
-                unset -f deactivate 2>/dev/null
-                echo -e "${BLUE}ℹ${NC} Environment deactivated. State restored."
-            }
-        fi
-    else
-        echo -e "${RED}Error:${NC} Virtual environment not found at ${VENV_PATH}"
-        echo -e "Run ${CYAN}mkenv${NC} or ${CYAN}mksync${NC} first."
+    # 2. Source & State Locking
+    source "$act_script"
+    export _OLD_UV_PYTHON="$UV_PYTHON"
+    export ENVIRONMENT_TYPE=$(__get_venv_mode "$target_venv")
+    if [ "$ENVIRONMENT_TYPE" == "SHARED" ]; then
+        export UV_PYTHON="$(which python3)"
     fi
+
+    # Ensure .venv symlink exists in development for IDE integration
+    if [ -d "/docker_dev" ]; then
+        ln -sf "$target_venv" "${WORKSPACE_PATH:-/workspace}/.venv" 2>/dev/null
+    fi
+
+    [ "$INTERACTIVE" = true ] && echo -e "${GREEN}✓${NC} Activated (${ENVIRONMENT_TYPE})"
+
+    # 3. Simple Proxy Override: Extend deactivate with custom restoration
+    [ "$(type -t deactivate)" != "function" ] && return 0
+
+    # Protect against nested activation overwriting the original backup
+    if [ "$(type -t __v_deactivate)" != "function" ]; then
+        eval "$(declare -f deactivate | sed '1s/^deactivate/__v_deactivate/')"
+    fi
+
+    function deactivate() {
+        local v_root="${VIRTUAL_ENV:-$target_venv}"
+        __v_deactivate              # Original cleanup
+
+        # Custom restoration cleanup
+        [ -n "$_OLD_UV_PYTHON" ] && export UV_PYTHON="$_OLD_UV_PYTHON" || unset UV_PYTHON
+        __venv_purge_state "$v_root"
+
+        unset -f __v_deactivate deactivate
+        unset ENVIRONMENT_TYPE _OLD_UV_PYTHON
+        echo -e "${BLUE}ℹ${NC} Environment deactivated."
+    }
 }
 
 # Python environment verification
@@ -214,20 +215,20 @@ function __pyv_impl() {
 
     # 1. System Python Status
     local sys_ver="$($sys_py --version 2>&1 | cut -d' ' -f2)"
-    printf "  %-18s %s (%s)\n" "System Python:" "$sys_ver" "$sys_py"
+    printf "  %-18s %s [%s]\n" "System Python:" "$sys_ver" "$sys_py"
 
     # 2. Virtual Environment Status
     if [ -d "$venv_path" ] && [ -f "$venv_py" ]; then
         local venv_ver="$($venv_py --version 2>&1 | cut -d' ' -f2)"
-        local mode_str="${ENVIRONMENT_TYPE:-INACTIVE}"
+        local current_mode="${ENVIRONMENT_TYPE:-$(__get_venv_mode "$venv_path")}"
         local mode_color="${NC}"
-        [ "$mode_str" == "SHARED" ] && mode_color="${YELLOW}"
-        [ "$mode_str" == "PURE" ] && mode_color="${BLUE}"
+        [ "$current_mode" == "SHARED" ] && mode_color="${YELLOW}"
+        [ "$current_mode" == "PURE" ] && mode_color="${BLUE}"
 
         if [[ "$VIRTUAL_ENV" == "$venv_path" ]]; then
-            printf "  ${GREEN}%-18s${NC} %s (${mode_color}%s${NC}) at %s\n" "uv Virtual Env:" "$venv_ver" "$mode_str" "$venv_path"
+            printf "  ${GREEN}%-18s${NC} %s (Activated: ${mode_color}%s${NC}) [%s]\n" "uv Virtual Env:" "$venv_ver" "$current_mode" "$venv_path"
         else
-            printf "  ${CYAN}%-18s${NC} %s (Inactive) at %s\n" "uv Virtual Env:" "$venv_ver" "$venv_path"
+            printf "  ${CYAN}%-18s${NC} %s (Inactive: ${mode_color}%s${NC}) [%s]\n" "uv Virtual Env:" "$venv_ver" "$current_mode" "$venv_path"
         fi
     else
         printf "  ${YELLOW}%-18s${NC} %s\n" "uv Virtual Env:" "None (Run 'mkenv' to create)"
@@ -299,7 +300,7 @@ alias ll='ls -alF'
 alias la='ls -A'
 alias ccache-stat='ccache -s'
 alias ccache-clear='ccache -C'
-alias sync_deps='bash /docker_dev/scripts/sync_deps.sh'
+alias sync_deps='bash /docker_dev/scripts/setup_sync_deps.sh'
 alias check_deps='bash /docker_dev/scripts/check_deps.sh'
 
 # Internal helper to categorize the current workspace for intelligent automation
@@ -348,16 +349,19 @@ function mksync() {
 # =============================================================================
 # Hardware Diagnostics
 # =============================================================================
-alias hw_check='bash /docker_dev/scripts/hardware_check.sh'
+alias hw_check='bash /docker_dev/scripts/check_hardware.sh'
 alias gpu_check='glxinfo 2>&1 | grep -E "OpenGL (vendor|renderer|version)" || echo "Error: glxinfo failed (no display?)"'
-alias vulkan_check='vulkaninfo --summary 2>/dev/null | head -20 || echo "Vulkan not available"'
-alias gpu_status='source /docker_dev/scripts/gpu_setup.sh status'
 alias gpu_test='timeout 5 glxgears -info 2>&1 | head -10 || echo "GPU test failed (no display?)"'
-alias gpu_setup='source /docker_dev/scripts/gpu_setup.sh auto && __gpu_status_impl'
-alias use_intel='source /docker_dev/scripts/gpu_setup.sh intel && __gpu_status_impl'
-alias use_amd='source /docker_dev/scripts/gpu_setup.sh amd && __gpu_status_impl'
-alias use_nvidia='source /docker_dev/scripts/gpu_setup.sh nvidia && __gpu_status_impl'
-alias use_cpu='source /docker_dev/scripts/gpu_setup.sh cpu && __gpu_status_impl'
+alias vulkan_check='vulkaninfo --summary 2>/dev/null | head -20 || echo "Vulkan not available"'
+
+# --- GPU Control & Status ---
+alias gpu_status='source /docker_dev/scripts/setup_gpu.sh status'
+alias __gpu_status_impl='source /docker_dev/scripts/setup_gpu.sh status'
+alias gpu_setup='source /docker_dev/scripts/setup_gpu.sh auto && __gpu_status_impl'
+alias use_intel='source /docker_dev/scripts/setup_gpu.sh intel && __gpu_status_impl'
+alias use_amd='source /docker_dev/scripts/setup_gpu.sh amd && __gpu_status_impl'
+alias use_nvidia='source /docker_dev/scripts/setup_gpu.sh nvidia && __gpu_status_impl'
+alias use_cpu='source /docker_dev/scripts/setup_gpu.sh cpu && __gpu_status_impl'
 
 # =============================================================================
 # Help / Documentation
@@ -398,6 +402,7 @@ function __print_help() {
     echo -e "    ${GREEN}use_nvidia${NC} / ${GREEN}cpu${NC} : Force NVIDIA Hardware / Software rendering"
     echo -e "    ${GREEN}use_intel${NC} / ${GREEN}amd${NC}  : Force Intel or AMD (Mesa) acceleration"
     echo -e "    ${GREEN}gpu_check${NC} / ${GREEN}test${NC} : glxinfo check / glxgears performance test"
+    echo -e "    ${GREEN}vulkan_check${NC}      : Vulkan availability & driver check"
     echo -e ""
     echo -e "  ${BLUE}🛠️  System Utilities:${NC}"
     echo -e "    ${GREEN}cw${NC} / ${GREEN}cs${NC} / ${GREEN}cc${NC}     : cd to ${WORKSPACE_PATH:-/workspace}, ${WORKSPACE_PATH:-/workspace}/src, or /docker_dev/config"
