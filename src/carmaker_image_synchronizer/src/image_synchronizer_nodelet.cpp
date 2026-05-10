@@ -12,7 +12,7 @@ void ImageSynchronizerNodelet::onInit() {
     int expected_channel_num, queue_size;
     double slop;
     std::string master_name;
-    
+
     pnh_.param<int>("settings/channel_num", expected_channel_num, 4);
     pnh_.param<int>("settings/queue_size", queue_size, 10);
     pnh_.param<double>("settings/sync_slop_sec", slop, 0.05);
@@ -59,9 +59,9 @@ void ImageSynchronizerNodelet::onInit() {
         ch.sub = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh_, in_img, queue_size);
         ch.sub->registerCallback(boost::bind(&ImageSynchronizerNodelet::imageRawCallback, this, _1, i));
 
-        ch.info_sub = nh_.subscribe<sensor_msgs::CameraInfo>(in_info, 1, 
+        ch.info_sub = nh_.subscribe<sensor_msgs::CameraInfo>(in_info, 1,
             [this, i](const sensor_msgs::CameraInfoConstPtr& msg) {
-                std::lock_guard<std::mutex> lock(data_mutex_);
+                std::lock_guard<std::mutex> lock(info_mutex_);
                 channels_[i].last_info = *msg;
                 channels_[i].has_info = true;
                 channels_[i].last_info_time = ros::Time::now();
@@ -80,7 +80,7 @@ void ImageSynchronizerNodelet::onInit() {
     }
 
     sync_ = std::make_unique<message_filters::Synchronizer<SyncPolicy>>(
-        SyncPolicy(queue_size), 
+        SyncPolicy(queue_size),
         *channels_[0].sub, *channels_[1].sub, *channels_[2].sub, *channels_[3].sub
     );
     sync_->setInterMessageLowerBound(ros::Duration(slop));
@@ -97,7 +97,7 @@ void ImageSynchronizerNodelet::timerCallback(const ros::TimerEvent& event) {
 }
 
 void ImageSynchronizerNodelet::imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
+    // Lock-free increment using std::atomic
     channels_[index].received_count++;
 }
 
@@ -108,9 +108,11 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
     const std::array<sensor_msgs::ImageConstPtr, 4> images = {front, rear, left, right};
     const ros::Time& sync_time = images[master_index_]->header.stamp;
 
+    // Atomic increment
+    total_synced_count_++;
+
     {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        total_synced_count_++;
+        std::lock_guard<std::mutex> lock(status_mutex_);
         for (size_t i = 0; i < images.size(); ++i) {
             channels_[i].last_slop = (images[i]->header.stamp - sync_time).toSec();
         }
@@ -122,24 +124,37 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
 }
 
 void ImageSynchronizerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    
     stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Syncing Active");
-    stat.add("Total Synced Groups", total_synced_count_);
+
+    // total_synced_count_ is atomic, no lock needed
+    stat.add("Total Synced Groups", total_synced_count_.load());
+
+    // master_index_ is effectively read-only after onInit, but we can protect it if needed.
+    // For simplicity, we assume channels_ structure is static after onInit.
     stat.add("Master Channel", channels_[master_index_].name);
 
     for (const auto& ch : channels_) {
         std::string prefix = "Channel [" + ch.name + "]/";
-        stat.add(prefix + "Raw Received", ch.received_count);
-        stat.add(prefix + "Last Slop (s)", ch.last_slop);
-        
-        double success_rate = (ch.received_count > 0) ? (double)total_synced_count_ / ch.received_count : 0.0;
+
+        // received_count is atomic
+        uint64_t raw_received = ch.received_count.load();
+        stat.add(prefix + "Raw Received", raw_received);
+
+        {
+            std::lock_guard<std::mutex> lock(status_mutex_);
+            stat.add(prefix + "Last Slop (s)", ch.last_slop);
+        }
+
+        double success_rate = (raw_received > 0) ? (double)total_synced_count_.load() / raw_received : 0.0;
         stat.add(prefix + "Approx Sync Rate", success_rate);
 
-        if (!ch.has_info) {
-            stat.mergeSummary(diagnostic_updater::DiagnosticStatusWrapper::WARN, "Missing CameraInfo on " + ch.name);
-        } else if ((ros::Time::now() - ch.last_info_time).toSec() > info_timeout_) {
-            stat.mergeSummary(diagnostic_updater::DiagnosticStatusWrapper::ERROR, "Stale CameraInfo on " + ch.name);
+        {
+            std::lock_guard<std::mutex> lock(info_mutex_);
+            if (!ch.has_info) {
+                stat.mergeSummary(diagnostic_updater::DiagnosticStatusWrapper::WARN, "Missing CameraInfo on " + ch.name);
+            } else if ((ros::Time::now() - ch.last_info_time).toSec() > info_timeout_) {
+                stat.mergeSummary(diagnostic_updater::DiagnosticStatusWrapper::ERROR, "Stale CameraInfo on " + ch.name);
+            }
         }
     }
 }
@@ -147,18 +162,21 @@ void ImageSynchronizerNodelet::produceDiagnostics(diagnostic_updater::Diagnostic
 void ImageSynchronizerNodelet::publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time) {
     auto& ch = channels_[index];
 
+    // Deep copy for timestamp modification
     auto synced_img = boost::make_shared<sensor_msgs::Image>(*img);
     synced_img->header.stamp = sync_time;
     ch.img_pub.publish(synced_img);
 
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (ch.has_info) {
-        if ((ros::Time::now() - ch.last_info_time).toSec() < info_timeout_) {
-            auto info = ch.last_info;
-            info.header.stamp = sync_time;
-            ch.info_pub.publish(info);
-        } else {
-            NODELET_WARN_THROTTLE(10.0, "[%s] CameraInfo stale (>%.1fs).", ch.name.c_str(), info_timeout_);
+    {
+        std::lock_guard<std::mutex> lock(info_mutex_);
+        if (ch.has_info) {
+            if ((ros::Time::now() - ch.last_info_time).toSec() < info_timeout_) {
+                auto info = ch.last_info;
+                info.header.stamp = sync_time;
+                ch.info_pub.publish(info);
+            } else {
+                NODELET_WARN_THROTTLE(10.0, "[%s] CameraInfo stale (>%.1fs).", ch.name.c_str(), info_timeout_);
+            }
         }
     }
 }

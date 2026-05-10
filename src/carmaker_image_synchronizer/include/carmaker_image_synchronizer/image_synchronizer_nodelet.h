@@ -19,9 +19,9 @@ namespace carmaker_image_synchronizer {
 
 /**
  * @brief Image Synchronizer with Real-time Diagnostics.
- * 
- * Provides deterministic time-alignment for N-channel camera streams using 
- * master-clock restamping. Manages temporally aligned CameraInfo caching 
+ *
+ * Provides deterministic time-alignment for N-channel camera streams using
+ * master-clock restamping. Manages temporally aligned CameraInfo caching
  * and provides health metrics via the ROS diagnostic system.
  */
 class ImageSynchronizerNodelet : public nodelet::Nodelet {
@@ -36,21 +36,41 @@ private:
         ros::Publisher img_pub;
         ros::Publisher info_pub;
 
-        // Caching
+        // Caching (Protected by info_mutex_)
         sensor_msgs::CameraInfo last_info;
         bool has_info = false;
         ros::Time last_info_time;
 
         // Diagnostics
-        uint64_t received_count = 0;
+        // Using atomic for high-frequency counter to avoid lock contention in imageRawCallback
+        std::atomic<uint64_t> received_count{0};
+
+        // C++20 optimization note: std::atomic<double> could be used here.
+        // In C++17, we protect this with status_mutex_.
         double last_slop = 0.0;
+
+        // CameraChannel needs custom move constructor because std::atomic is non-copyable/non-movable
+        CameraChannel() = default;
+        CameraChannel(const CameraChannel&) = delete;
+        CameraChannel& operator=(const CameraChannel&) = delete;
+        CameraChannel(CameraChannel&& other) noexcept :
+            name(std::move(other.name)),
+            sub(std::move(other.sub)),
+            info_sub(std::move(other.info_sub)),
+            img_pub(std::move(other.img_pub)),
+            info_pub(std::move(other.info_pub)),
+            last_info(std::move(other.last_info)),
+            has_info(other.has_info),
+            last_info_time(other.last_info_time),
+            received_count(other.received_count.load()),
+            last_slop(other.last_slop) {}
     };
 
     // Callbacks
     void syncCallback(const sensor_msgs::ImageConstPtr& front,
-                      const sensor_msgs::ImageConstPtr& rear,
-                      const sensor_msgs::ImageConstPtr& left,
-                      const sensor_msgs::ImageConstPtr& right);
+                        const sensor_msgs::ImageConstPtr& rear,
+                        const sensor_msgs::ImageConstPtr& left,
+                        const sensor_msgs::ImageConstPtr& right);
 
     void imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index);
     void publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time);
@@ -60,25 +80,30 @@ private:
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
     ros::Timer diag_timer_;
-    
+
     // Channels, Data
     std::vector<CameraChannel> channels_;
-    std::mutex data_mutex_;
-    
+
+    // Mutex splitting to reduce contention:
+    // 1. info_mutex_: Protects CameraInfo caching and its validity state.
+    // 2. status_mutex_: Protects diagnostic status fields (slop) and master settings.
+    std::mutex info_mutex_;
+    std::mutex status_mutex_;
+
     // Advanced Settings
     size_t master_index_ = 0;
     double info_timeout_ = 2.0;
-    
+
     // Diagnostics
     diagnostic_updater::Updater diagnostic_updater_;
-    uint64_t total_synced_count_ = 0;
+    std::atomic<uint64_t> total_synced_count_{0};
 
     // Message Filters
     typedef message_filters::sync_policies::ApproximateTime<
         sensor_msgs::Image, sensor_msgs::Image,
         sensor_msgs::Image, sensor_msgs::Image
     > SyncPolicy;
-    
+
     std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 };
 

@@ -17,7 +17,7 @@ channels:
     in_info: "/mono/fisheye/front/camera_info"
     out_img: "/synced/front/image"
     out_info: "/synced/front/camera_info"
-  
+
   - name: "rear"
     in_img:  "/mono/fisheye/rear/image_raw"
     in_info: "/mono/fisheye/rear/camera_info"
