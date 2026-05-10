@@ -47,12 +47,14 @@ fi
 # ROS Version-specific Configuration
 if [ "${ROS_DISTRO}" = "noetic" ]; then
     # Prioritize environment variables injected by Docker Compose, fallback to defaults
-    export ROS_MASTER_URI=${ROS_MASTER_URI:-http://localhost:11311}
-    export ROS_HOSTNAME=${ROS_HOSTNAME:-localhost}
+    if [ -z "$ROS_HOSTNAME" ] || [ "$ROS_HOSTNAME" = "localhost" ]; then
+        export ROS_MASTER_URI="http://$(hostname):11311"
+        export ROS_HOSTNAME=$(hostname)
+    fi
 else
     # ROS 2 (Humble) Specifics
-    export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
     export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
 
     # Auto-configure CycloneDDS defaults using the external config file (Unicast Fallback for Bridge Networks)
     if [ "$RMW_IMPLEMENTATION" = "rmw_cyclonedds_cpp" ] && [ -z "$CYCLONEDDS_URI" ]; then

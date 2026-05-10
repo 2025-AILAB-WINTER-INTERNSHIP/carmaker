@@ -249,12 +249,32 @@ if [ -f "${WORKSPACE_PATH:-/workspace}/install/.venv/bin/activate" ]; then
     log_ok "Python virtualenv activated (${WORKSPACE_PATH:-/workspace}/install/.venv)"
 fi
 
-# [8.5] Development Aliases & Tools (For Non-interactive support)
+# [8.1] Development Aliases & Tools (For Non-interactive support)
 ALIASES_SH="/docker_dev/config/aliases.sh"
 [ ! -f "$ALIASES_SH" ] && ALIASES_SH="/opt/scripts/aliases.sh"
 if [ -f "$ALIASES_SH" ]; then
     source "$ALIASES_SH"
     log_ok "Development aliases and tools integrated"
+fi
+
+# [8.2] ROS Version-specific Configuration
+if [ "${ROS_DISTRO}" = "noetic" ]; then
+    # Prioritize environment variables injected by Docker Compose, fallback to defaults
+    if [ -z "$ROS_HOSTNAME" ] || [ "$ROS_HOSTNAME" = "localhost" ]; then
+        export ROS_MASTER_URI="http://$(hostname):11311"
+        export ROS_HOSTNAME=$(hostname)
+    fi
+else
+    # ROS 2 (Humble) Specifics
+    export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}
+
+    # Auto-configure CycloneDDS defaults using the external config file (Unicast Fallback for Bridge Networks)
+    if [ "$RMW_IMPLEMENTATION" = "rmw_cyclonedds_cpp" ] && [ -z "$CYCLONEDDS_URI" ]; then
+        if [ -f /docker_dev/config/cyclonedds.xml ]; then
+            export CYCLONEDDS_URI=file:///docker_dev/config/cyclonedds.xml
+        fi
+    fi
 fi
 
 # =============================================================================
