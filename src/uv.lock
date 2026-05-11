@@ -80,8 +80,6 @@ dependencies = [
     { name = "numpy", version = "1.24.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9' or (extra == 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' or (extra == 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')" },
     { name = "open3d" },
-    { name = "opencv-python", version = "4.11.0.86", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' or (extra == 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')" },
-    { name = "opencv-python", version = "4.13.0.92", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9' or (extra == 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')" },
     { name = "pandas" },
     { name = "protobuf" },
     { name = "pyre-check" },
@@ -113,7 +111,6 @@ requires-dist = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "open3d" },
-    { name = "opencv-python" },
     { name = "pandas" },
     { name = "protobuf", specifier = "<5" },
     { name = "pyre-check" },
@@ -1712,90 +1709,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/df/c8/a138dce488ee99311f0f628ce44417f7b6a1f410e29b9c21ca29e7101ad5/open3d-0.19.0-cp39-cp39-macosx_13_0_x86_64.whl", hash = "sha256:c675d43a1aaffe1905698a5b63e47ffec4946870c7b1e3e79ec1b76e19842614", size = 75217005, upload-time = "2025-01-08T07:26:56.344Z" },
     { url = "https://files.pythonhosted.org/packages/32/b4/283b5041937e2516915c78b58482f63b79e00ee12daebaa1f0906cf873f2/open3d-0.19.0-cp39-cp39-manylinux_2_31_x86_64.whl", hash = "sha256:4187b5997650e5f7a5faebea28d1bb24a8a103c54e3f37e6a657b0b2cdd9c560", size = 447680634, upload-time = "2025-01-08T07:25:27.171Z" },
     { url = "https://files.pythonhosted.org/packages/5a/2d/8cd3cae15540a7d47170f202b79bd13ff556aef24020b8b2272b1f3e6514/open3d-0.19.0-cp39-cp39-win_amd64.whl", hash = "sha256:c7fe2fce6aa45e91dddb1430a0d29a460f1421870aee30472faed651df70375e", size = 69497339, upload-time = "2025-01-08T07:28:02.583Z" },
-]
-
-[[package]]
-name = "opencv-python"
-version = "4.11.0.86"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.12' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "(python_full_version >= '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')",
-    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "python_full_version == '3.11.*' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.11.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')",
-    "python_full_version == '3.10.*' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "python_full_version == '3.10.*' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.10.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu') or (python_full_version == '3.10.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')",
-    "python_full_version == '3.9.*' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "python_full_version == '3.9.*' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.9.*' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu') or (python_full_version == '3.9.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu') or (python_full_version == '3.9.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')",
-    "(python_full_version >= '3.12' and platform_machine == 'aarch64' and platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version >= '3.13' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "(python_full_version >= '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version == '3.11.*' and platform_machine == 'aarch64' and platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.11.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version == '3.10.*' and platform_machine == 'aarch64' and platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.10.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version == '3.10.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version == '3.9.*' and platform_machine == 'aarch64' and platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.9.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version == '3.9.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version >= '3.12' and sys_platform == 'darwin' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.12.*' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.11.*' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.10.*' and sys_platform == 'darwin' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.10.*' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.9.*' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.9.*' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.9.*' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version >= '3.12' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "(python_full_version >= '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version == '3.11.*' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.11.*' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.11.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version == '3.10.*' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.10.*' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.10.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version == '3.10.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version == '3.9.*' and platform_machine == 'arm64' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "python_full_version == '3.9.*' and platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-    "(python_full_version == '3.9.*' and platform_machine != 'arm64' and sys_platform == 'darwin' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version == '3.9.*' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version == '3.9.*' and sys_platform != 'darwin' and sys_platform != 'linux' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-]
-dependencies = [
-    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' or (extra == 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/17/06/68c27a523103dad5837dc5b87e71285280c4f098c60e4fe8a8db6486ab09/opencv-python-4.11.0.86.tar.gz", hash = "sha256:03d60ccae62304860d232272e4a4fda93c39d595780cb40b161b310244b736a4", size = 95171956, upload-time = "2025-01-16T13:52:24.737Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/4d/53b30a2a3ac1f75f65a59eb29cf2ee7207ce64867db47036ad61743d5a23/opencv_python-4.11.0.86-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:432f67c223f1dc2824f5e73cdfcd9db0efc8710647d4e813012195dc9122a52a", size = 37326322, upload-time = "2025-01-16T13:52:25.887Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/84/0a67490741867eacdfa37bc18df96e08a9d579583b419010d7f3da8ff503/opencv_python-4.11.0.86-cp37-abi3-macosx_13_0_x86_64.whl", hash = "sha256:9d05ef13d23fe97f575153558653e2d6e87103995d54e6a35db3f282fe1f9c66", size = 56723197, upload-time = "2025-01-16T13:55:21.222Z" },
-    { url = "https://files.pythonhosted.org/packages/f3/bd/29c126788da65c1fb2b5fb621b7fed0ed5f9122aa22a0868c5e2c15c6d23/opencv_python-4.11.0.86-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1b92ae2c8852208817e6776ba1ea0d6b1e0a1b5431e971a2a0ddd2a8cc398202", size = 42230439, upload-time = "2025-01-16T13:51:35.822Z" },
-    { url = "https://files.pythonhosted.org/packages/2c/8b/90eb44a40476fa0e71e05a0283947cfd74a5d36121a11d926ad6f3193cc4/opencv_python-4.11.0.86-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6b02611523803495003bd87362db3e1d2a0454a6a63025dc6658a9830570aa0d", size = 62986597, upload-time = "2025-01-16T13:52:08.836Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/d7/1d5941a9dde095468b288d989ff6539dd69cd429dbf1b9e839013d21b6f0/opencv_python-4.11.0.86-cp37-abi3-win32.whl", hash = "sha256:810549cb2a4aedaa84ad9a1c92fbfdfc14090e2749cedf2c1589ad8359aa169b", size = 29384337, upload-time = "2025-01-16T13:52:13.549Z" },
-    { url = "https://files.pythonhosted.org/packages/a4/7d/f1c30a92854540bf789e9cd5dde7ef49bbe63f855b85a2e6b3db8135c591/opencv_python-4.11.0.86-cp37-abi3-win_amd64.whl", hash = "sha256:085ad9b77c18853ea66283e98affefe2de8cc4c1f43eda4c100cf9b2721142ec", size = 39488044, upload-time = "2025-01-16T13:52:21.928Z" },
-]
-
-[[package]]
-name = "opencv-python"
-version = "4.13.0.92"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.9' and extra != 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu'",
-    "(python_full_version < '3.9' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version < '3.9' and platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version < '3.9' and sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "(python_full_version < '3.9' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu') or (python_full_version < '3.9' and sys_platform == 'darwin' and extra == 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu')",
-    "python_full_version < '3.9' and extra != 'extra-5-ailab-cpu' and extra != 'extra-5-ailab-gpu'",
-]
-dependencies = [
-    { name = "numpy", version = "1.24.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9' or (extra == 'extra-5-ailab-cpu' and extra == 'extra-5-ailab-gpu')" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/6f/5a28fef4c4a382be06afe3938c64cc168223016fa520c5abaf37e8862aa5/opencv_python-4.13.0.92-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:caf60c071ec391ba51ed00a4a920f996d0b64e3e46068aac1f646b5de0326a19", size = 46247052, upload-time = "2026-02-05T07:01:25.046Z" },
-    { url = "https://files.pythonhosted.org/packages/08/ac/6c98c44c650b8114a0fb901691351cfb3956d502e8e9b5cd27f4ee7fbf2f/opencv_python-4.13.0.92-cp37-abi3-macosx_14_0_x86_64.whl", hash = "sha256:5868a8c028a0b37561579bfb8ac1875babdc69546d236249fff296a8c010ccf9", size = 32568781, upload-time = "2026-02-05T07:01:41.379Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/51/82fed528b45173bf629fa44effb76dff8bc9f4eeaee759038362dfa60237/opencv_python-4.13.0.92-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0bc2596e68f972ca452d80f444bc404e08807d021fbba40df26b61b18e01838a", size = 47685527, upload-time = "2026-02-05T06:59:11.24Z" },
-    { url = "https://files.pythonhosted.org/packages/db/07/90b34a8e2cf9c50fe8ed25cac9011cde0676b4d9d9c973751ac7616223a2/opencv_python-4.13.0.92-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:402033cddf9d294693094de5ef532339f14ce821da3ad7df7c9f6e8316da32cf", size = 70460872, upload-time = "2026-02-05T06:59:19.162Z" },
-    { url = "https://files.pythonhosted.org/packages/02/6d/7a9cc719b3eaf4377b9c2e3edeb7ed3a81de41f96421510c0a169ca3cfd4/opencv_python-4.13.0.92-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:bccaabf9eb7f897ca61880ce2869dcd9b25b72129c28478e7f2a5e8dee945616", size = 46708208, upload-time = "2026-02-05T06:59:15.419Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/55/b3b49a1b97aabcfbbd6c7326df9cb0b6fa0c0aefa8e89d500939e04aa229/opencv_python-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:620d602b8f7d8b8dab5f4b99c6eb353e78d3fb8b0f53db1bd258bb1aa001c1d5", size = 72927042, upload-time = "2026-02-05T06:59:23.389Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/17/de5458312bcb07ddf434d7bfcb24bb52c59635ad58c6e7c751b48949b009/opencv_python-4.13.0.92-cp37-abi3-win32.whl", hash = "sha256:372fe164a3148ac1ca51e5f3ad0541a4a276452273f503441d718fab9c5e5f59", size = 30932638, upload-time = "2026-02-05T07:02:14.98Z" },
-    { url = "https://files.pythonhosted.org/packages/e9/a5/1be1516390333ff9be3a9cb648c9f33df79d5096e5884b5df71a588af463/opencv_python-4.13.0.92-cp37-abi3-win_amd64.whl", hash = "sha256:423d934c9fafb91aad38edf26efb46da91ffbc05f3f59c4b0c72e699720706f5", size = 40212062, upload-time = "2026-02-05T07:02:12.724Z" },
 ]
 
 [[package]]

@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>eigen</name>
+  <version>5.0.1</version>
+  <description>Eigen build wrapper</description>
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>MPL2</license>
+  <buildtool_depend>cmake</buildtool_depend>
+</package>
