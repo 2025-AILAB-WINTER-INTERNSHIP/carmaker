@@ -528,6 +528,7 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
     model_cfg = cfg.get("model", {})
     model_name = model_cfg.get("name", "model") if isinstance(model_cfg, dict) else str(model_cfg)
     base_channels = model_cfg.get("base_channels", "") if isinstance(model_cfg, dict) else ""
+    weight_init = model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default")) if isinstance(model_cfg, dict) else cfg.get("weight_init", "pytorch_default")
     image_size = cfg.get("image_size", "")
     loss_name = str(cfg.get("loss", ""))
 
@@ -536,6 +537,7 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
         f"- image_size: `{image_size}`",
         f"- loss: `{loss_name}`",
         f"- base_channels: `{base_channels}`",
+        f"- weight_init: `{weight_init}`",
         f"- batch_size: `{cfg.get('batch_size', '')}`",
         f"- learning_rate: `{cfg.get('learning_rate', '')}`",
         f"- weight_decay: `{cfg.get('weight_decay', '')}`",
@@ -552,6 +554,7 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
         "image_size": str(image_size),
         "loss": loss_name,
         "base_channels": str(base_channels),
+        "weight_init": str(weight_init),
         "batch_size": str(cfg.get("batch_size", "")),
         "learning_rate": str(cfg.get("learning_rate", "")),
         "weight_decay": str(cfg.get("weight_decay", "")),
