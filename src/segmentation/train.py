@@ -36,7 +36,7 @@ try:
     from .losses import build_loss
     from .metrics import confusion_matrix, mask_psnr, segmentation_scores
     from .models import build_model
-    from .utils.visualization import overlay_mask
+    from .utils.visualization import make_image_grid, overlay_mask
 except ImportError:
     # `python3 src/segmentation/train.py`처럼 파일을 직접 실행할 때 사용하는 fallback import.
     from adapters import CarmakerSegmentationAdapter
@@ -44,7 +44,7 @@ except ImportError:
     from losses import build_loss
     from metrics import confusion_matrix, mask_psnr, segmentation_scores
     from models import build_model
-    from utils.visualization import overlay_mask
+    from utils.visualization import make_image_grid, overlay_mask
 
 
 SEGMENTATION_ROOT = Path(__file__).resolve().parent
@@ -171,6 +171,15 @@ def main() -> None:
         pin_memory=device.type == "cuda",
     )
 
+    # TensorBoard debug image용 loader.
+    # 학습용 train_loader는 shuffle=True지만, debug 이미지는 고정 샘플을 봐야 epoch별 변화가 보인다.
+    debug_image_count = int(cfg.get("debug_image_count", 4))
+    debug_loaders = {
+        "train": _make_debug_loader(train_dataset, debug_image_count, device),
+        "val": _make_debug_loader(val_dataset, debug_image_count, device),
+        "test": _make_debug_loader(test_dataset, debug_image_count, device),
+    }
+
     # 7) model / loss / optimizer 생성
     # build_model과 build_loss를 쓰면 config만 바꿔 모델과 loss를 교체할 수 있다.
     model = build_model(cfg, num_classes=adapter.num_classes).to(device)
@@ -212,9 +221,9 @@ def main() -> None:
         # TensorBoard Scalars에 loss/metric을 기록한다.
         _write_scalars(writer, epoch, train_loss, val, optimizer)
 
-        # TensorBoard Images에 GT/pred overlay를 기록한다.
+        # TensorBoard Images에 train/val/test별 GT/pred overlay grid를 기록한다.
         if writer and (epoch == 1 or epoch % int(cfg.get("image_log_interval", 5)) == 0):
-            write_debug_images(writer, epoch, model, val_loader, adapter.palette, device)
+            write_debug_image_grids(writer, epoch, model, debug_loaders, adapter.palette, device)
 
         # validation mIoU가 최고일 때 best checkpoint를 갱신한다.
         if val["miou"] > best_miou:
@@ -369,9 +378,37 @@ def _set_progress_postfix(progress, **values) -> None:
         progress.set_postfix(**values)
 
 
+def _make_debug_loader(dataset, debug_image_count: int, device: torch.device):
+    """TensorBoard 이미지 확인용 loader를 만든다.
+
+    각 split에서 앞쪽 고정 샘플 최대 debug_image_count개만 사용한다.
+    """
+    if len(dataset) == 0 or debug_image_count <= 0:
+        return None
+
+    count = min(debug_image_count, len(dataset))
+    subset = torch.utils.data.Subset(dataset, list(range(count)))
+    return DataLoader(
+        subset,
+        batch_size=count,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=device.type == "cuda",
+    )
+
+
 @torch.no_grad()
-def write_debug_images(writer, epoch: int, model, loader, palette, device: torch.device) -> None:
-    """TensorBoard Images 탭에 GT/pred overlay를 기록한다."""
+def write_debug_image_grids(writer, epoch: int, model, loaders: Dict[str, Any], palette, device: torch.device) -> None:
+    """TensorBoard Images 탭에 train/val/test별 2x2 overlay grid를 기록한다."""
+    for split, loader in loaders.items():
+        if loader is None:
+            continue
+        _write_debug_image_grid(writer, epoch, model, loader, palette, device, split)
+
+
+@torch.no_grad()
+def _write_debug_image_grid(writer, epoch: int, model, loader, palette, device: torch.device, split: str) -> None:
+    """한 split에서 고정 샘플 여러 장을 grid로 묶어 기록한다."""
     try:
         batch = next(iter(loader))
     except StopIteration:
@@ -384,11 +421,14 @@ def write_debug_images(writer, epoch: int, model, loader, palette, device: torch
     image_cpu = batch["image"].cpu()
     max_items = min(4, image_cpu.shape[0])
 
+    gt_overlays = []
+    pred_overlays = []
     for idx in range(max_items):
-        gt_overlay = overlay_mask(image_cpu[idx], gt[idx], palette)
-        pred_overlay = overlay_mask(image_cpu[idx], pred[idx], palette)
-        writer.add_image(f"debug/{idx}/gt_overlay", gt_overlay, epoch, dataformats="HWC")
-        writer.add_image(f"debug/{idx}/pred_overlay", pred_overlay, epoch, dataformats="HWC")
+        gt_overlays.append(overlay_mask(image_cpu[idx], gt[idx], palette))
+        pred_overlays.append(overlay_mask(image_cpu[idx], pred[idx], palette))
+
+    writer.add_image(f"debug/{split}/gt_grid", make_image_grid(gt_overlays, columns=2), epoch, dataformats="HWC")
+    writer.add_image(f"debug/{split}/pred_grid", make_image_grid(pred_overlays, columns=2), epoch, dataformats="HWC")
 
 
 def save_checkpoint(path: Path, model, optimizer, epoch: int, cfg: Dict[str, Any], best_miou: float) -> None:
