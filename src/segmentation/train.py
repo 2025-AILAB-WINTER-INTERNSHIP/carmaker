@@ -18,6 +18,7 @@ import random
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -104,7 +105,8 @@ def main() -> None:
     # 2) device / output directory 준비
     # CUDA가 가능하면 GPU를 쓰고, 아니면 CPU로 fallback한다.
     device = torch.device(cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
-    run_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs" / "unet_carmaker")).expanduser().resolve()
+    run_dir = _resolve_run_dir(cfg, explicit_run_dir=bool(args.run_dir))
+    cfg["run_dir"] = str(run_dir)
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     _maybe_start_tensorboard(args, run_dir)
@@ -197,6 +199,7 @@ def main() -> None:
 
     # 8) TensorBoard writer / checkpoint 기준값 준비
     writer = _make_writer(run_dir)
+    _write_run_metadata(writer, cfg, adapter.num_classes, device)
     best_miou = -1.0
     epochs = int(cfg.get("epochs", 30))
     print(
@@ -498,6 +501,62 @@ def _maybe_start_tensorboard(args: argparse.Namespace, run_dir: Path) -> subproc
         f"logdir={run_dir}"
     )
     return process
+
+
+def _resolve_run_dir(cfg: Dict[str, Any], explicit_run_dir: bool = False) -> Path:
+    """실험별 run directory를 결정한다.
+
+    --run-dir를 직접 주면 해당 폴더를 그대로 사용한다.
+    config의 run_dir는 base directory로 보고, 그 아래 timestamp/model/loss 기반 폴더를 자동 생성한다.
+    """
+    base_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs")).expanduser().resolve()
+    if explicit_run_dir:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        return base_dir
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = base_dir / timestamp
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: torch.device) -> None:
+    """TensorBoard에 run 설정을 text/hparams 형태로 기록한다."""
+    if not writer:
+        return
+
+    model_cfg = cfg.get("model", {})
+    model_name = model_cfg.get("name", "model") if isinstance(model_cfg, dict) else str(model_cfg)
+    base_channels = model_cfg.get("base_channels", "") if isinstance(model_cfg, dict) else ""
+    image_size = cfg.get("image_size", "")
+    loss_name = str(cfg.get("loss", ""))
+
+    metadata_lines = [
+        f"- model: `{model_name}`",
+        f"- image_size: `{image_size}`",
+        f"- loss: `{loss_name}`",
+        f"- base_channels: `{base_channels}`",
+        f"- batch_size: `{cfg.get('batch_size', '')}`",
+        f"- learning_rate: `{cfg.get('learning_rate', '')}`",
+        f"- weight_decay: `{cfg.get('weight_decay', '')}`",
+        f"- num_classes: `{num_classes}`",
+        f"- device: `{device}`",
+        f"- data_root: `{cfg.get('data_root', '')}`",
+        f"- manifest: `{cfg.get('manifest', '')}`",
+    ]
+    writer.add_text("run/config", "\n".join(metadata_lines), 0)
+
+    # HParams 탭에서도 핵심 설정을 빠르게 비교할 수 있게 남긴다.
+    hparams = {
+        "model": str(model_name),
+        "image_size": str(image_size),
+        "loss": loss_name,
+        "base_channels": str(base_channels),
+        "batch_size": str(cfg.get("batch_size", "")),
+        "learning_rate": str(cfg.get("learning_rate", "")),
+        "weight_decay": str(cfg.get("weight_decay", "")),
+    }
+    writer.add_hparams(hparams, {"hparam/placeholder": 0.0})
 
 
 def _terminate_process(process: subprocess.Popen) -> None:
