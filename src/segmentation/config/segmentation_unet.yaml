@@ -19,7 +19,7 @@ test_ratio: 0.1
 stratify_by_camera: true
 seed: 42
 
-epochs: 30
+epochs: 5
 learning_rate: 0.001
 weight_decay: 0.0001
 model:
@@ -27,7 +27,7 @@ model:
   in_channels: 3
   base_channels: 32
   # Options: pytorch_default, he_normal, he_uniform, xavier_uniform, xavier_normal
-  weight_init: pytorch_default
+  weight_init: he_normal
 
 # Current GT class ids from carmaker_image/scripts/apply_mask.py:
 #   0 background
@@ -39,12 +39,12 @@ model:
 #   dice               Region-overlap loss.
 #   ce_dice            Cross entropy + Dice loss.
 #   focal              Focuses more on hard pixels/classes.
-loss: cross_entropy
-# class_weights: [0.2, 2.0, 3.0]
+loss: focal
+class_weights: [0.5, 3.0, 2.0]
 
-checkpoint_interval: 10
-image_log_interval: 5
-debug_image_count: 4
+checkpoint_interval: 1
+image_log_interval: 1
+debug_image_count: 8
 # Base directory. train.py creates a timestamp-only subfolder for each run.
 # Model/image/loss metadata is written inside TensorBoard under run/config and HParams.
 run_dir: ../runs

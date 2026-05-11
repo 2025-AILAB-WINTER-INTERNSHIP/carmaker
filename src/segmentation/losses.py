@@ -12,7 +12,9 @@ from torch import nn
 class DiceLoss(nn.Module):
     """Dice score를 loss로 변환한 segmentation loss."""
 
-    def __init__(self, num_classes: int, smooth: float = 1.0, ignore_index: Optional[int] = None) -> None:
+    def __init__(
+        self, num_classes: int, smooth: float = 1.0, ignore_index: Optional[int] = None
+    ) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
@@ -21,7 +23,9 @@ class DiceLoss(nn.Module):
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # logits를 class probability로 바꾸고, target은 one-hot으로 맞춘다.
         probs = torch.softmax(logits, dim=1)
-        target_one_hot = F.one_hot(target.clamp_min(0), self.num_classes).permute(0, 3, 1, 2).float()
+        target_one_hot = (
+            F.one_hot(target.clamp_min(0), self.num_classes).permute(0, 3, 1, 2).float()
+        )
 
         if self.ignore_index is not None:
             valid = (target != self.ignore_index).unsqueeze(1)
@@ -59,7 +63,11 @@ class FocalLoss(nn.Module):
             reduction="none",
         )
         pt = torch.exp(-ce)
-        return ((1.0 - pt) ** self.gamma * ce).mean()
+        # return ((1.0 - pt) ** self.gamma * ce).mean()
+        focal_loss = (1.0 - pt) ** self.gamma * ce
+        num_valid = (target > 0).sum().float()
+        num_valid = torch.clamp(num_valid, min=1.0)
+        return focal_loss.sum() / num_valid
 
 
 def build_loss(
@@ -69,7 +77,11 @@ def build_loss(
     device: str | torch.device = "cpu",
 ) -> nn.Module:
     """config의 loss 이름을 실제 nn.Module로 변환한다."""
-    weight = torch.tensor(class_weights, dtype=torch.float32, device=device) if class_weights else None
+    weight = (
+        torch.tensor(class_weights, dtype=torch.float32, device=device)
+        if class_weights
+        else None
+    )
     key = name.lower().replace("_", "-")
     if key in {"cross-entropy", "ce", "weighted-cross-entropy", "weighted-ce"}:
         return nn.CrossEntropyLoss(weight=weight)
@@ -87,7 +99,13 @@ def build_loss(
 class CombinedLoss(nn.Module):
     """두 loss를 가중합으로 묶는 wrapper."""
 
-    def __init__(self, first: nn.Module, second: nn.Module, first_weight: float = 1.0, second_weight: float = 1.0) -> None:
+    def __init__(
+        self,
+        first: nn.Module,
+        second: nn.Module,
+        first_weight: float = 1.0,
+        second_weight: float = 1.0,
+    ) -> None:
         super().__init__()
         self.first = first
         self.second = second
@@ -95,4 +113,6 @@ class CombinedLoss(nn.Module):
         self.second_weight = second_weight
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return self.first_weight * self.first(logits, target) + self.second_weight * self.second(logits, target)
+        return self.first_weight * self.first(
+            logits, target
+        ) + self.second_weight * self.second(logits, target)
