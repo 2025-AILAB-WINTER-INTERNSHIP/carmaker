@@ -393,7 +393,7 @@ def _make_debug_loader(dataset, debug_image_count: int, device: torch.device):
     subset = torch.utils.data.Subset(dataset, list(range(count)))
     return DataLoader(
         subset,
-        batch_size=count,
+        batch_size=1,
         shuffle=False,
         num_workers=0,
         pin_memory=device.type == "cuda",
@@ -413,25 +413,35 @@ def write_debug_image_grids(writer, epoch: int, model, loaders: Dict[str, Any], 
 def _write_debug_image_grid(writer, epoch: int, model, loader, palette, device: torch.device, split: str) -> None:
     """한 split에서 고정 샘플 여러 장을 grid로 묶어 기록한다."""
     try:
-        batch = next(iter(loader))
-    except StopIteration:
+        iterator = iter(loader)
+    except TypeError:
         return
 
     model.eval()
-    image = batch["image"].to(device)
-    pred = torch.argmax(model(image), dim=1).cpu()
-    gt = batch["mask"].cpu()
-    image_cpu = batch["image"].cpu()
-    max_items = min(4, image_cpu.shape[0])
-
     gt_overlays = []
     pred_overlays = []
-    for idx in range(max_items):
-        gt_overlays.append(overlay_mask(image_cpu[idx], gt[idx], palette))
-        pred_overlays.append(overlay_mask(image_cpu[idx], pred[idx], palette))
 
-    writer.add_image(f"debug/{split}/gt_grid", make_image_grid(gt_overlays, columns=2), epoch, dataformats="HWC")
-    writer.add_image(f"debug/{split}/pred_grid", make_image_grid(pred_overlays, columns=2), epoch, dataformats="HWC")
+    # Full-resolution images are large, so run TensorBoard debug samples one by one.
+    # A 4-image batch can OOM even when the real training batch size is 1.
+    for batch in iterator:
+        image = batch["image"].to(device)
+        try:
+            pred = torch.argmax(model(image), dim=1).cpu()
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower() and device.type == "cuda":
+                torch.cuda.empty_cache()
+                print(f"[tensorboard] skipped debug/{split} image grid because CUDA ran out of memory")
+                return
+            raise
+
+        gt = batch["mask"].cpu()
+        image_cpu = batch["image"].cpu()
+        gt_overlays.append(overlay_mask(image_cpu[0], gt[0], palette))
+        pred_overlays.append(overlay_mask(image_cpu[0], pred[0], palette))
+
+    if gt_overlays:
+        writer.add_image(f"debug/{split}/gt_grid", make_image_grid(gt_overlays, columns=2), epoch, dataformats="HWC")
+        writer.add_image(f"debug/{split}/pred_grid", make_image_grid(pred_overlays, columns=2), epoch, dataformats="HWC")
 
 
 def save_checkpoint(path: Path, model, optimizer, epoch: int, cfg: Dict[str, Any], best_miou: float) -> None:
