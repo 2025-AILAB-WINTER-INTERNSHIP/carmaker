@@ -1,0 +1,15 @@
+# Runtime parameters for segmentation_inference_node.py.
+
+# Required: set this to a trained checkpoint from train.py.
+checkpoint_path: ""
+
+# Optional: override or supplement the config embedded in the checkpoint.
+config_path: ""
+
+device: ""
+image_size: ""
+image_topic: "/camera/image_raw"
+class_map_topic: "/segmentation/class_map"
+
+input_encoding: "bgr8"
+queue_size: 1

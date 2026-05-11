@@ -2,12 +2,15 @@
 
 이 문서는 CarMaker에서 추출한 raw 이미지와 GT 이미지를 사용해 semantic segmentation 모델을 학습하는 방법을 설명한다.
 
-현재 구조에서는 `carmaker_image` 패키지가 rosbag 이미지 추출과 GT 후처리를 담당하고, `src/segmentation` 패키지가 dataset 구성, 모델 학습, 검증, TensorBoard 기록을 담당한다.
+현재 구조에서는 `carmaker_image` 패키지가 rosbag 이미지 추출과 GT 후처리를 담당하고, `src/segmentation` 패키지가 dataset 구성, 모델 학습, 검증, TensorBoard 기록을 담당한다. 학습된 checkpoint를 ROS topic으로 연결하는 runtime interface는 `src/segmentation_ros` 패키지가 담당한다.
 
 ```text
 src/carmaker_image      # rosbag 이미지 추출, GT 후처리
 src/segmentation        # dataset, model, loss, metric, train loop
+src/segmentation_ros    # 학습 checkpoint를 사용하는 ROS1 inference node
 ```
+
+ROS inference 구조와 topic interface는 `docs/SEGMENTATION_ROS_INTERFACE.md`에 정리되어 있다.
 
 이미 `src/carmaker_image/data` 아래에 필요한 데이터가 준비되어 있다면 rosbag 추출과 후처리 단계는 다시 실행하지 않아도 된다. 바로 dataset debug 또는 학습 단계부터 시작하면 된다.
 
@@ -40,6 +43,14 @@ logits: [B, C, H, W]
   | losses.py + metrics.py
   v
 checkpoint + TensorBoard logs
+  |
+  | src/segmentation/inference.py
+  v
+restored model + class_map
+  |
+  | src/segmentation_ros/scripts/segmentation_inference_node.py
+  v
+/segmentation/class_map
 ```
 
 역할 분리는 다음과 같다.
@@ -274,6 +285,45 @@ src/segmentation/runs/unet_carmaker/
     ...
   events.out.tfevents...
 ```
+
+### 6. ROS Inference Node 실행
+
+학습이 끝나면 `best.pt` 또는 `last.pt`를 ROS inference node 입력으로 사용한다. 일반적으로 validation mIoU가 가장 좋았던 `best.pt`를 먼저 사용한다.
+
+```bash
+catkin_make
+source devel/setup.bash
+```
+
+```bash
+roslaunch segmentation_ros segmentation_inference.launch \
+  checkpoint_path:=/absolute/path/to/best.pt \
+  image_topic:=/camera/image_raw
+```
+
+출력 topic:
+
+```text
+/segmentation/class_map
+```
+
+출력 형태:
+
+```text
+sensor_msgs/Image
+encoding: mono8
+pixel value: class id
+```
+
+현재 class id:
+
+```text
+0 = background
+1 = lane
+2 = landmark
+```
+
+자세한 ROS interface 구조는 `docs/SEGMENTATION_ROS_INTERFACE.md`를 참고한다.
 
 ## Dataset Split
 
@@ -746,7 +796,10 @@ landmark weight   = 3.0
 | `src/segmentation/utils/visualization.py` | mask colorize, overlay image 생성 |
 | `src/segmentation/tools/debug_dataset.py` | dataset pair와 mask 값 확인용 debug tool |
 | `src/segmentation/train.py` | 학습, 검증, test 평가, TensorBoard, checkpoint 저장 |
+| `src/segmentation/inference.py` | checkpoint 복원, 전처리, 모델 추론, class map 생성 |
 | `src/segmentation/config/segmentation_unet.yaml` | 학습 설정 파일 |
+| `src/segmentation_ros/scripts/segmentation_inference_node.py` | ROS Image subscribe, class map publish |
+| `src/segmentation_ros/launch/segmentation_inference.launch` | ROS inference node 실행 설정 |
 
 ## 확장 기준
 
@@ -759,3 +812,4 @@ landmark weight   = 3.0
 | metric 추가 | `src/segmentation/metrics.py` |
 | 학습 방식 변경 | `src/segmentation/train.py` |
 | 실험 설정 변경 | `src/segmentation/config/segmentation_unet.yaml` |
+| ROS inference topic 변경 | `src/segmentation_ros/config/segmentation_inference.yaml` 또는 launch argument |
