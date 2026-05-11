@@ -218,11 +218,10 @@ def main() -> None:
             val_loss=f"{val['loss']:.4f}",
             miou=f"{val['miou']:.4f}",
             dice=f"{val['dice']:.4f}",
-            acc=f"{val['pixel_accuracy']:.4f}",
         )
 
         # TensorBoard Scalars에 loss/metric을 기록한다.
-        _write_scalars(writer, epoch, train_loss, val, optimizer)
+        _write_scalars(writer, epoch, train_loss, val, optimizer, adapter.class_names)
 
         # TensorBoard Images에 train/val/test별 GT/pred overlay grid를 기록한다.
         if writer and (epoch == 1 or epoch % int(cfg.get("image_log_interval", 5)) == 0):
@@ -245,12 +244,13 @@ def main() -> None:
             checkpoint = _load_checkpoint(best_checkpoint, device)
             model.load_state_dict(checkpoint["model_state"])
         test = validate(model, test_loader, criterion, adapter.num_classes, device, split="test")
-        _write_eval_scalars(writer, "test", epochs, test)
+        _write_eval_scalars(writer, "test", epochs, test, adapter.class_names)
         print(
             f"[test] loss={test['loss']:.4f} miou={test['miou']:.4f} "
-            f"dice={test['dice']:.4f} acc={test['pixel_accuracy']:.4f}"
+            f"dice={test['dice']:.4f}"
         )
     if writer:
+        _write_hparams(writer, cfg, best_miou)
         writer.close()
     print(f"[train] done best_miou={best_miou:.4f} run_dir={run_dir}")
 
@@ -351,6 +351,7 @@ def validate(
     # pred와 GT가 완전히 같으면 PSNR은 inf가 될 수 있으므로 평균에서는 finite 값만 사용한다.
     finite_psnr = [v for v in psnr_values if np.isfinite(v)]
     scores["psnr"] = float(np.mean(finite_psnr)) if finite_psnr else float("inf")
+    scores["_confusion_matrix"] = matrix.cpu()
     scores["by_camera"] = _camera_scores(camera_matrices, camera_loss_totals, camera_items, camera_psnr_values)
     return scores
 
@@ -542,10 +543,21 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
     image_size = cfg.get("image_size", "")
     loss_name = str(cfg.get("loss", ""))
 
+    metadata_cfg = dict(cfg)
+    metadata_cfg["num_classes"] = num_classes
+    metadata_cfg["device"] = str(device)
+    metadata_cfg["model_name"] = str(model_name)
+    metadata_cfg["base_channels"] = base_channels
+    metadata_cfg["weight_init"] = weight_init
+    metadata_cfg["loss"] = loss_name
+    metadata_cfg["image_size"] = image_size
+
     metadata_lines = [
+        "## Run Summary",
         f"- model: `{model_name}`",
         f"- image_size: `{image_size}`",
         f"- loss: `{loss_name}`",
+        f"- class_weights: `{cfg.get('class_weights', None)}`",
         f"- base_channels: `{base_channels}`",
         f"- weight_init: `{weight_init}`",
         f"- batch_size: `{cfg.get('batch_size', '')}`",
@@ -553,23 +565,51 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
         f"- weight_decay: `{cfg.get('weight_decay', '')}`",
         f"- num_classes: `{num_classes}`",
         f"- device: `{device}`",
-        f"- data_root: `{cfg.get('data_root', '')}`",
-        f"- manifest: `{cfg.get('manifest', '')}`",
+        "",
+        "## Full Config",
+        "```json",
+        json.dumps(metadata_cfg, indent=2, sort_keys=True, default=str),
+        "```",
     ]
     writer.add_text("run/config", "\n".join(metadata_lines), 0)
 
     # HParams 탭에서도 핵심 설정을 빠르게 비교할 수 있게 남긴다.
+def _write_hparams(writer, cfg: Dict[str, Any], best_miou: float) -> None:
+    """TensorBoard HParams에 run 설정과 best mIoU를 기록한다."""
+    if not writer:
+        return
+
+    model_cfg = cfg.get("model", {})
+    model_name = model_cfg.get("name", "model") if isinstance(model_cfg, dict) else str(model_cfg)
+    base_channels = model_cfg.get("base_channels", "") if isinstance(model_cfg, dict) else ""
+    weight_init = model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default")) if isinstance(model_cfg, dict) else cfg.get("weight_init", "pytorch_default")
+    image_size = cfg.get("image_size", "")
+    loss_name = str(cfg.get("loss", ""))
+
     hparams = {
         "model": str(model_name),
         "image_size": str(image_size),
         "loss": loss_name,
+        "class_weights": str(cfg.get("class_weights", None)),
         "base_channels": str(base_channels),
         "weight_init": str(weight_init),
+        "in_channels": str(model_cfg.get("in_channels", cfg.get("in_channels", ""))) if isinstance(model_cfg, dict) else "",
         "batch_size": str(cfg.get("batch_size", "")),
+        "num_workers": str(cfg.get("num_workers", "")),
+        "epochs": str(cfg.get("epochs", "")),
         "learning_rate": str(cfg.get("learning_rate", "")),
         "weight_decay": str(cfg.get("weight_decay", "")),
+        "val_ratio": str(cfg.get("val_ratio", "")),
+        "test_ratio": str(cfg.get("test_ratio", "")),
+        "stratify_by_camera": str(cfg.get("stratify_by_camera", "")),
+        "cameras": str(cfg.get("cameras", "")),
+        "use_raw_post_processed": str(cfg.get("use_raw_post_processed", "")),
+        "checkpoint_interval": str(cfg.get("checkpoint_interval", "")),
+        "image_log_interval": str(cfg.get("image_log_interval", "")),
+        "debug_image_count": str(cfg.get("debug_image_count", "")),
+        "seed": str(cfg.get("seed", "")),
     }
-    writer.add_hparams(hparams, {"hparam/placeholder": 0.0})
+    writer.add_hparams(hparams, {"hparam/best_miou": float(best_miou)})
 
 
 def _terminate_process(process: subprocess.Popen) -> None:
@@ -577,7 +617,7 @@ def _terminate_process(process: subprocess.Popen) -> None:
         process.terminate()
 
 
-def _write_scalars(writer, epoch: int, train_loss: float, val: Dict[str, float], optimizer) -> None:
+def _write_scalars(writer, epoch: int, train_loss: float, val: Dict[str, Any], optimizer, class_names) -> None:
     """TensorBoard Scalars 탭에 정량 지표를 기록한다."""
     if not writer:
         return
@@ -586,39 +626,92 @@ def _write_scalars(writer, epoch: int, train_loss: float, val: Dict[str, float],
     writer.add_scalar("val/loss", val["loss"], epoch)
     writer.add_scalar("val/miou", val["miou"], epoch)
     writer.add_scalar("val/dice", val["dice"], epoch)
-    writer.add_scalar("val/pixel_accuracy", val["pixel_accuracy"], epoch)
     writer.add_scalar("val/psnr", val["psnr"], epoch)
     writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"], epoch)
+    _write_confusion_matrix_text(writer, "val/confusion_matrix", epoch, val.get("_confusion_matrix"), class_names)
 
     # class별 IoU는 val/iou/class_0, val/iou/class_1처럼 따로 기록한다.
     for key, value in val.items():
         if key.startswith("iou/"):
             writer.add_scalar(f"val/{key}", value, epoch)
 
-    _write_score_scalars(writer, "val/all", epoch, val)
+    _write_score_scalars(writer, "val/all", epoch, val, include_classification_metrics=True)
     for camera, scores in val.get("by_camera", {}).items():
-        _write_score_scalars(writer, f"val/{camera}", epoch, scores)
+        _write_score_scalars(writer, f"val/{camera}", epoch, scores, include_classification_metrics=False)
 
 
-def _write_eval_scalars(writer, split: str, epoch: int, scores: Dict[str, float]) -> None:
+def _write_eval_scalars(writer, split: str, epoch: int, scores: Dict[str, Any], class_names) -> None:
     """Write evaluation-only metrics such as final test scores."""
     if not writer:
         return
 
-    _write_score_scalars(writer, f"{split}/all", epoch, scores)
+    _write_score_scalars(writer, f"{split}/all", epoch, scores, include_classification_metrics=True)
+    _write_confusion_matrix_text(
+        writer,
+        f"{split}/confusion_matrix",
+        epoch,
+        scores.get("_confusion_matrix"),
+        class_names,
+    )
     for key, value in scores.items():
+        if key.startswith("_"):
+            continue
         if key == "by_camera":
             for camera, camera_scores in value.items():
-                _write_score_scalars(writer, f"{split}/{camera}", epoch, camera_scores)
+                _write_score_scalars(
+                    writer,
+                    f"{split}/{camera}",
+                    epoch,
+                    camera_scores,
+                    include_classification_metrics=False,
+                )
             continue
         writer.add_scalar(f"{split}/{key}", value, epoch)
 
 
-def _write_score_scalars(writer, prefix: str, epoch: int, scores: Dict[str, float]) -> None:
+def _write_score_scalars(
+    writer,
+    prefix: str,
+    epoch: int,
+    scores: Dict[str, float],
+    include_classification_metrics: bool = True,
+) -> None:
     for key, value in scores.items():
-        if key == "by_camera":
+        if key.startswith("_") or key == "by_camera":
+            continue
+        if not include_classification_metrics and _is_classification_metric(key):
+            continue
+        if not isinstance(value, (int, float)):
             continue
         writer.add_scalar(f"{prefix}/{key}", value, epoch)
+
+
+def _is_classification_metric(key: str) -> bool:
+    """camera별 view에서는 전체 class 분석용 precision/recall/f1 계열을 숨긴다."""
+    return key.startswith(("precision/", "recall/", "f1/"))
+
+
+def _write_confusion_matrix_text(writer, tag: str, epoch: int, matrix, class_names) -> None:
+    """TensorBoard Text 탭에 confusion matrix를 markdown table로 기록한다."""
+    if not writer or matrix is None:
+        return
+
+    if isinstance(matrix, torch.Tensor):
+        values = matrix.detach().cpu().to(torch.int64).tolist()
+    else:
+        values = matrix
+
+    labels = [str(name) for name in class_names]
+    if len(labels) != len(values):
+        labels = [f"class_{idx}" for idx in range(len(values))]
+
+    header = "| GT \\ Pred | " + " | ".join(labels) + " |"
+    separator = "|---|" + "|".join("---" for _ in labels) + "|"
+    rows = [header, separator]
+    for label, row in zip(labels, values):
+        rows.append("| " + label + " | " + " | ".join(str(int(value)) for value in row) + " |")
+
+    writer.add_text(tag, "\n".join(rows), epoch)
 
 
 def _apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
