@@ -1,0 +1,3 @@
+# This file prevents colcon from exploring modules within opencv_contrib as standalone packages.
+# These modules are intended to be built as part of the main opencv package via
+# the OPENCV_EXTRA_MODULES_PATH CMake flag.
