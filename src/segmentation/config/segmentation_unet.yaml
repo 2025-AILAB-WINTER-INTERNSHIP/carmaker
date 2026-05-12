@@ -45,8 +45,10 @@ model:
 loss: focal
 # class_weights is used directly by CrossEntropy/Focal terms only.
 # It affects: cross_entropy, ce_dice CE term, focal, focal_dice Focal term.
-# It does not affect the current DiceLoss term, which averages per-class Dice equally.
+# It does not affect the DiceLoss term.
 class_weights: [5.0, 15.0, 10.0]
+# Dice terms ignore background by default so lane/landmark dominate overlap loss.
+dice_exclude_classes: [0]
 
 checkpoint_interval: 4
 image_log_interval: 1

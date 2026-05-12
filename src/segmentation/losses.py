@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -13,12 +13,17 @@ class DiceLoss(nn.Module):
     """Dice score를 loss로 변환한 segmentation loss."""
 
     def __init__(
-        self, num_classes: int, smooth: float = 1.0, ignore_index: Optional[int] = None
+        self,
+        num_classes: int,
+        smooth: float = 1.0,
+        ignore_index: Optional[int] = None,
+        exclude_classes: Optional[Sequence[int]] = None,
     ) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
         self.ignore_index = ignore_index
+        self.exclude_classes = tuple(exclude_classes or ())
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # logits: [B, C, H, W] -> softmax 확률 p_c.
@@ -37,14 +42,21 @@ class DiceLoss(nn.Module):
         # class별 soft Dice:
         #   Dice_c = (2 * sum(p_c * y_c) + smooth) / (sum(p_c) + sum(y_c) + smooth)
         # DiceLoss:
-        #   loss = 1 - mean_c(Dice_c)
+        #   loss = 1 - mean_c(Dice_c), c not in exclude_classes
         #
         # 현재 DiceLoss는 class_weights를 직접 쓰지 않는다.
-        # 모든 class의 Dice를 같은 비중으로 평균낸다.
+        # exclude_classes를 뺀 나머지 class의 Dice를 같은 비중으로 평균낸다.
         dims = (0, 2, 3)
         intersection = torch.sum(probs * target_one_hot, dims)
         union = torch.sum(probs + target_one_hot, dims)
         dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
+        if self.exclude_classes:
+            include_mask = torch.ones(self.num_classes, dtype=torch.bool, device=logits.device)
+            for class_id in self.exclude_classes:
+                if 0 <= class_id < self.num_classes:
+                    include_mask[class_id] = False
+            if include_mask.any():
+                dice = dice[include_mask]
         return 1.0 - dice.mean()
 
 
@@ -98,11 +110,12 @@ def build_loss(
     name: str,
     num_classes: int,
     class_weights: Optional[list[float]] = None,
+    dice_exclude_classes: Optional[Sequence[int]] = None,
     device: str | torch.device = "cpu",
 ) -> nn.Module:
     """config의 loss 이름을 실제 nn.Module로 변환한다."""
     # class_weights는 픽셀별 분류 loss인 CrossEntropy/Focal 계열에만 직접 적용된다.
-    # 이 파일의 DiceLoss는 class_weights를 받지 않고 class별 Dice를 단순 평균한다.
+    # DiceLoss는 class_weights 대신 dice_exclude_classes로 평균 대상 class를 고른다.
     weight = (
         torch.tensor(class_weights, dtype=torch.float32, device=device)
         if class_weights
@@ -112,16 +125,16 @@ def build_loss(
     if key in {"cross-entropy", "ce", "weighted-cross-entropy", "weighted-ce"}:
         return nn.CrossEntropyLoss(weight=weight)
     if key in {"dice"}:
-        return DiceLoss(num_classes=num_classes)
+        return DiceLoss(num_classes=num_classes, exclude_classes=dice_exclude_classes)
     if key in {"ce-dice", "cross-entropy-dice"}:
         ce = nn.CrossEntropyLoss(weight=weight)
-        dice = DiceLoss(num_classes=num_classes)
+        dice = DiceLoss(num_classes=num_classes, exclude_classes=dice_exclude_classes)
         return CombinedLoss(ce, dice)
     if key in {"focal", "focal-loss"}:
         return FocalLoss(weight=weight)
     if key in {"focal-dice", "focal-dice-loss"}:
         focal = FocalLoss(weight=weight)
-        dice = DiceLoss(num_classes=num_classes)
+        dice = DiceLoss(num_classes=num_classes, exclude_classes=dice_exclude_classes)
         return CombinedLoss(focal, dice, first_weight=0.5, second_weight=1.0)
     raise ValueError(f"Unknown loss: {name}")
 

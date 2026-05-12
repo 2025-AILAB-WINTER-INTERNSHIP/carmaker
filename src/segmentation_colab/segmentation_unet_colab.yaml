@@ -1,7 +1,8 @@
 # Google Colab training template for CarMaker semantic segmentation.
 #
 # In Colab, prefer absolute paths under Google Drive. The notebook at
-# notebooks/segmentation_colab.ipynb can generate this config automatically.
+# src/segmentation_colab/segmentation_colab.ipynb can generate this config
+# automatically.
 
 data_root: /content/drive/MyDrive/carmaker_segmentation/data
 manifest: /content/drive/MyDrive/carmaker_segmentation/data/csv/manifest.csv
@@ -30,8 +31,11 @@ model:
 
 loss: focal
 class_weights: [5.0, 15.0, 10.0]
+dice_exclude_classes: [0]
 
 checkpoint_interval: 4
 image_log_interval: 1
+# TensorBoard debug grids use one tag per split. Inside each grid, camera
+# samples are arranged by column, so 8 means up to 8 rows per camera.
 debug_image_count: 8
 run_dir: /content/drive/MyDrive/carmaker_segmentation/runs

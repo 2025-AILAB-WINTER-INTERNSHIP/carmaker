@@ -611,7 +611,7 @@ debug/test/gt_grid
 debug/test/pred_grid
 ```
 
-각 split에서 최대 `debug_image_count`개 sample이 grid로 기록된다. `gt_grid`는 정답 mask overlay이고, `pred_grid`는 모델 예측 mask overlay이다.
+각 split마다 하나의 grid로 기록된다. grid 내부는 camera별 column으로 묶이며, 예를 들어 `debug_image_count: 8`이고 `front/left/rear/right`가 모두 있으면 8행 x 4열 형태로 최대 32장이 들어간다. `gt_grid`는 정답 mask overlay이고, `pred_grid`는 모델 예측 mask overlay이다.
 
 debug sample은 고정되어 있으므로 `gt_grid`는 첫 epoch에만 기록한다. `pred_grid`는 모델 예측 변화를 보기 위해 첫 epoch과 `image_log_interval`마다 기록한다.
 
@@ -826,11 +826,16 @@ class_weights 미적용:
 - focal_dice의 Dice 항
 ```
 
-현재 DiceLoss는 class별 Dice를 같은 비중으로 평균낸다.
+현재 DiceLoss는 `dice_exclude_classes`에 지정된 class를 제외하고, 남은 class별 Dice를 같은 비중으로 평균낸다.
+기본 config는 배경 class 0을 제외해 lane/landmark overlap 신호를 더 크게 본다.
 
 ```text
 Dice_c = (2 * sum(p_c * y_c) + smooth) / (sum(p_c) + sum(y_c) + smooth)
-DiceLoss = 1 - mean_c(Dice_c)
+DiceLoss = 1 - mean_c(Dice_c), c not in dice_exclude_classes
+```
+
+```yaml
+dice_exclude_classes: [0]
 ```
 
 FocalLoss는 정답 class 확률이 낮은 어려운 픽셀의 기여도를 더 크게 남긴다.

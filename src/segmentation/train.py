@@ -174,12 +174,12 @@ def main() -> None:
     )
 
     # TensorBoard debug image용 loader.
-    # 학습용 train_loader는 shuffle=True지만, debug 이미지는 고정 샘플을 봐야 epoch별 변화가 보인다.
+    # 학습용 train_loader는 shuffle=True지만, debug 이미지는 카메라별 고정 샘플을 봐야 epoch별 변화가 보인다.
     debug_image_count = int(cfg.get("debug_image_count", 4))
     debug_loaders = {
-        "train": _make_debug_loader(train_dataset, debug_image_count, device),
-        "val": _make_debug_loader(val_dataset, debug_image_count, device),
-        "test": _make_debug_loader(test_dataset, debug_image_count, device),
+        "train": _make_debug_loader_by_camera_grid(train_dataset, debug_image_count, device),
+        "val": _make_debug_loader_by_camera_grid(val_dataset, debug_image_count, device),
+        "test": _make_debug_loader_by_camera_grid(test_dataset, debug_image_count, device),
     }
 
     # 7) model / loss / optimizer 생성
@@ -189,6 +189,7 @@ def main() -> None:
         name=str(cfg.get("loss", "cross_entropy")),
         num_classes=adapter.num_classes,
         class_weights=cfg.get("class_weights"),
+        dice_exclude_classes=cfg.get("dice_exclude_classes", [0]),
         device=device,
     )
     optimizer = torch.optim.AdamW(
@@ -391,23 +392,52 @@ def _set_progress_postfix(progress, **values) -> None:
         progress.set_postfix(**values)
 
 
-def _make_debug_loader(dataset, debug_image_count: int, device: torch.device):
+def _make_debug_loader_by_camera_grid(dataset, debug_image_count: int, device: torch.device):
     """TensorBoard 이미지 확인용 loader를 만든다.
 
-    각 split에서 앞쪽 고정 샘플 최대 debug_image_count개만 사용한다.
+    각 split에서 camera별 고정 샘플을 하나의 grid로 묶는다.
     """
     if len(dataset) == 0 or debug_image_count <= 0:
         return None
 
-    count = min(debug_image_count, len(dataset))
-    subset = torch.utils.data.Subset(dataset, list(range(count)))
-    return DataLoader(
+    indices_by_camera: Dict[str, list[int]] = defaultdict(list)
+    for index in range(len(dataset)):
+        camera = _debug_sample_camera(dataset, index)
+        indices_by_camera[camera].append(index)
+
+    cameras = sorted(camera for camera, indices in indices_by_camera.items() if indices)
+    indices = []
+    for sample_index in range(debug_image_count):
+        for camera in cameras:
+            camera_indices = indices_by_camera[camera]
+            if sample_index < len(camera_indices):
+                indices.append(camera_indices[sample_index])
+
+    if not indices:
+        return None
+
+    subset = torch.utils.data.Subset(dataset, indices)
+    loader = DataLoader(
         subset,
         batch_size=1,
         shuffle=False,
         num_workers=0,
         pin_memory=device.type == "cuda",
     )
+    return {"loader": loader, "columns": max(len(cameras), 1)}
+
+
+def _debug_sample_camera(dataset, index: int) -> str:
+    """Return camera metadata for a dataset/subset item without loading images."""
+    if isinstance(dataset, torch.utils.data.Subset):
+        return _debug_sample_camera(dataset.dataset, int(dataset.indices[index]))
+
+    samples = getattr(dataset, "samples", None)
+    if samples is None or index >= len(samples):
+        return "unknown"
+
+    camera = getattr(samples[index], "camera", "") or "unknown"
+    return str(camera)
 
 
 @torch.no_grad()
@@ -421,11 +451,19 @@ def write_debug_image_grids(
     write_gt: bool = True,
 ) -> None:
     """TensorBoard Images 탭에 train/val/test별 overlay grid를 기록한다."""
-    for split, loader in loaders.items():
-        if loader is None:
+    for split, spec in loaders.items():
+        if not spec:
             continue
         _write_debug_image_grid(
-            writer, epoch, model, loader, palette, device, split, write_gt=write_gt
+            writer,
+            epoch,
+            model,
+            spec["loader"],
+            palette,
+            device,
+            split,
+            columns=int(spec.get("columns", 2)),
+            write_gt=write_gt,
         )
 
 
@@ -438,6 +476,7 @@ def _write_debug_image_grid(
     palette,
     device: torch.device,
     split: str,
+    columns: int = 2,
     write_gt: bool = True,
 ) -> None:
     """한 split에서 고정 샘플 여러 장을 grid로 묶어 기록한다."""
@@ -472,13 +511,13 @@ def _write_debug_image_grid(
         if write_gt:
             writer.add_image(
                 f"debug/{split}/gt_grid",
-                make_image_grid(gt_overlays, columns=2),
+                make_image_grid(gt_overlays, columns=columns),
                 epoch,
                 dataformats="HWC",
             )
         writer.add_image(
             f"debug/{split}/pred_grid",
-            make_image_grid(pred_overlays, columns=2),
+            make_image_grid(pred_overlays, columns=columns),
             epoch,
             dataformats="HWC",
         )
@@ -607,6 +646,7 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
         f"- image_size: `{image_size}`",
         f"- loss: `{loss_name}`",
         f"- class_weights: `{cfg.get('class_weights', None)}`",
+        f"- dice_exclude_classes: `{cfg.get('dice_exclude_classes', [0])}`",
         f"- base_channels: `{base_channels}`",
         f"- activation: `{activation}`",
         f"- weight_init: `{weight_init}`",
@@ -650,6 +690,7 @@ def _write_hparams(writer, cfg: Dict[str, Any], best_miou: float) -> None:
         "image_size": str(image_size),
         "loss": loss_name,
         "class_weights": str(cfg.get("class_weights", None)),
+        "dice_exclude_classes": str(cfg.get("dice_exclude_classes", [0])),
         "base_channels": str(base_channels),
         "activation": str(activation),
         "weight_init": str(weight_init),
