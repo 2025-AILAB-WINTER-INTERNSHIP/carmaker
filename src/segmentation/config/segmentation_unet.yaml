@@ -12,14 +12,14 @@ use_raw_post_processed: false
 # Original CarMaker image size. This preserves the 16:9 geometry, but it is
 # much heavier than 512x512, so start with batch_size: 1.
 image_size: [1920, 1080]
-num_workers: 2
+num_workers: 4
 batch_size: 1
 val_ratio: 0.2
 test_ratio: 0.1
 stratify_by_camera: true
 seed: 42
 
-epochs: 5
+epochs: 16
 learning_rate: 0.001
 weight_decay: 0.0001
 model:
@@ -40,9 +40,9 @@ model:
 #   ce_dice            Cross entropy + Dice loss.
 #   focal              Focuses more on hard pixels/classes.
 loss: focal
-class_weights: [0.5, 3.0, 2.0]
+class_weights: [5.0, 15.0, 10.0]
 
-checkpoint_interval: 1
+checkpoint_interval: 4
 image_log_interval: 1
 debug_image_count: 8
 # Base directory. train.py creates a timestamp-only subfolder for each run.

@@ -1,0 +1,30 @@
+<launch>
+    <!-- Arguments -->
+    <arg name="foxglove" default="false" />
+    <arg name="use_sim_time" default="false" />
+    <arg name="map_file"        default="" />
+
+    <!-- Global parameter -->
+    <param name="use_sim_time" value="$(arg use_sim_time)" />
+
+    <!-- Nodelet Manager -->
+    <node pkg="nodelet" type="nodelet" name="localization_manager" args="manager" output="screen" />
+
+    <!-- carmaker_localization Nodelet -->
+    <node pkg="nodelet" type="nodelet" name="LocalizationNodelet" args="load carmaker_localization/LocalizationNodelet localization_manager" output="screen">
+
+        <!-- Load Parameters -->
+        <rosparam command="load" file="$(find carmaker_localization)/config/localization_params.yaml" />
+        <rosparam command="load" file="$(find carmaker_localization)/config/vehicle_params.yaml" />
+
+        <!-- Overwrite Map File Path -->
+        <param name="map_matcher/map_file" value="$(arg map_file)" />
+    </node>
+
+    <!-- Foxglove Bridge for Visualization (Optional) -->
+    <group if="$(arg foxglove)">
+        <include file="$(find foxglove_bridge)/launch/foxglove_bridge.launch" >
+        <arg name="port" value="8765" />
+        </include>
+    </group>
+</launch>
