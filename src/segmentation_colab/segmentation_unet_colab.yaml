@@ -1,0 +1,37 @@
+# Google Colab training template for CarMaker semantic segmentation.
+#
+# In Colab, prefer absolute paths under Google Drive. The notebook at
+# notebooks/segmentation_colab.ipynb can generate this config automatically.
+
+data_root: /content/drive/MyDrive/carmaker_segmentation/data
+manifest: /content/drive/MyDrive/carmaker_segmentation/data/csv/manifest.csv
+cameras: front,left,rear,right
+use_raw_post_processed: false
+
+# 1920x1080 is supported, but many free Colab GPUs run out of memory at that
+# size. Start with 960x540, then increase if GPU memory allows.
+image_size: [960, 540]
+num_workers: 2
+batch_size: 1
+val_ratio: 0.2
+test_ratio: 0.1
+stratify_by_camera: true
+seed: 42
+
+epochs: 16
+learning_rate: 0.001
+weight_decay: 0.0001
+model:
+  name: unet
+  in_channels: 3
+  base_channels: 32
+  activation: relu
+  weight_init: he_normal
+
+loss: focal
+class_weights: [5.0, 15.0, 10.0]
+
+checkpoint_interval: 4
+image_log_interval: 1
+debug_image_count: 8
+run_dir: /content/drive/MyDrive/carmaker_segmentation/runs
