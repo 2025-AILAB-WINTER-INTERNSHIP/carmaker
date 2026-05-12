@@ -12,15 +12,15 @@ import torch.nn.functional as F
 class ConvBlock(nn.Module):
     """U-Net에서 반복적으로 쓰는 3x3 Conv block."""
 
-    def __init__(self, in_channels: int, out_channels: int) -> None:
+    def __init__(self, in_channels: int, out_channels: int, activation: str = "relu") -> None:
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
+            build_activation(activation),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
+            build_activation(activation),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -34,22 +34,28 @@ class UNet(nn.Module):
     ConvTranspose2d(kernel_size=2, stride=2)는 decoder에서 해상도를 2배 키운다.
     """
 
-    def __init__(self, in_channels: int = 3, num_classes: int = 3, base_channels: int = 32) -> None:
+    def __init__(
+        self,
+        in_channels: int = 3,
+        num_classes: int = 3,
+        base_channels: int = 32,
+        activation: str = "relu",
+    ) -> None:
         super().__init__()
-        self.enc1 = ConvBlock(in_channels, base_channels)
-        self.enc2 = ConvBlock(base_channels, base_channels * 2)
-        self.enc3 = ConvBlock(base_channels * 2, base_channels * 4)
-        self.enc4 = ConvBlock(base_channels * 4, base_channels * 8)
-        self.bottleneck = ConvBlock(base_channels * 8, base_channels * 16)
+        self.enc1 = ConvBlock(in_channels, base_channels, activation=activation)
+        self.enc2 = ConvBlock(base_channels, base_channels * 2, activation=activation)
+        self.enc3 = ConvBlock(base_channels * 2, base_channels * 4, activation=activation)
+        self.enc4 = ConvBlock(base_channels * 4, base_channels * 8, activation=activation)
+        self.bottleneck = ConvBlock(base_channels * 8, base_channels * 16, activation=activation)
 
         self.up4 = nn.ConvTranspose2d(base_channels * 16, base_channels * 8, kernel_size=2, stride=2)
-        self.dec4 = ConvBlock(base_channels * 16, base_channels * 8)
+        self.dec4 = ConvBlock(base_channels * 16, base_channels * 8, activation=activation)
         self.up3 = nn.ConvTranspose2d(base_channels * 8, base_channels * 4, kernel_size=2, stride=2)
-        self.dec3 = ConvBlock(base_channels * 8, base_channels * 4)
+        self.dec3 = ConvBlock(base_channels * 8, base_channels * 4, activation=activation)
         self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2)
-        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2)
+        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2, activation=activation)
         self.up1 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2)
-        self.dec1 = ConvBlock(base_channels * 2, base_channels)
+        self.dec1 = ConvBlock(base_channels * 2, base_channels, activation=activation)
 
         self.head = nn.Conv2d(base_channels, num_classes, kernel_size=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -83,20 +89,26 @@ class TinyFCN(nn.Module):
     정식 비교 모델이라기보다 model registry 교체 구조 확인과 smoke test용이다.
     """
 
-    def __init__(self, in_channels: int = 3, num_classes: int = 3, base_channels: int = 32) -> None:
+    def __init__(
+        self,
+        in_channels: int = 3,
+        num_classes: int = 3,
+        base_channels: int = 32,
+        activation: str = "relu",
+    ) -> None:
         super().__init__()
         self.encoder = nn.Sequential(
-            ConvBlock(in_channels, base_channels),
+            ConvBlock(in_channels, base_channels, activation=activation),
             nn.MaxPool2d(2),
-            ConvBlock(base_channels, base_channels * 2),
+            ConvBlock(base_channels, base_channels * 2, activation=activation),
             nn.MaxPool2d(2),
-            ConvBlock(base_channels * 2, base_channels * 4),
+            ConvBlock(base_channels * 2, base_channels * 4, activation=activation),
         )
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2),
-            ConvBlock(base_channels * 2, base_channels * 2),
+            ConvBlock(base_channels * 2, base_channels * 2, activation=activation),
             nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2),
-            ConvBlock(base_channels, base_channels),
+            ConvBlock(base_channels, base_channels, activation=activation),
             nn.Conv2d(base_channels, num_classes, kernel_size=1),
         )
 
@@ -111,6 +123,24 @@ MODEL_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "unet": UNet,
     "tiny_fcn": TinyFCN,
 }
+
+
+def build_activation(name: str) -> nn.Module:
+    """Build an activation module from config."""
+    key = name.lower().replace("-", "_")
+    if key in {"relu"}:
+        return nn.ReLU(inplace=True)
+    if key in {"leaky_relu", "lrelu"}:
+        return nn.LeakyReLU(negative_slope=0.01, inplace=True)
+    if key in {"elu"}:
+        return nn.ELU(inplace=True)
+    if key in {"gelu"}:
+        return nn.GELU()
+    if key in {"silu", "swish"}:
+        return nn.SiLU(inplace=True)
+
+    options = ", ".join(["relu", "leaky_relu", "elu", "gelu", "silu"])
+    raise ValueError(f"Unknown activation '{name}'. Available options: {options}")
 
 
 def build_model(config: Dict[str, Any], num_classes: int) -> nn.Module:
@@ -141,28 +171,33 @@ def build_model(config: Dict[str, Any], num_classes: int) -> nn.Module:
         "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 3))),
         "num_classes": num_classes,
         "base_channels": int(model_cfg.get("base_channels", config.get("base_channels", 32))),
+        "activation": str(model_cfg.get("activation", config.get("activation", "relu"))),
     }
     model = MODEL_REGISTRY[name](**params)
-    initialize_weights(model, str(model_cfg.get("weight_init", config.get("weight_init", "pytorch_default"))))
+    initialize_weights(
+        model,
+        str(model_cfg.get("weight_init", config.get("weight_init", "pytorch_default"))),
+        activation=params["activation"],
+    )
     return model
 
 
-def initialize_weights(model: nn.Module, name: str) -> None:
+def initialize_weights(model: nn.Module, name: str, activation: str = "relu") -> None:
     """Apply an optional explicit weight initialization scheme."""
     key = name.lower().replace("-", "_")
     if key in {"", "none", "default", "pytorch_default"}:
         return
     if key in {"he", "he_normal", "kaiming", "kaiming_normal"}:
-        _init_modules(model, "kaiming_normal")
+        _init_modules(model, "kaiming_normal", activation=activation)
         return
     if key in {"he_uniform", "kaiming_uniform"}:
-        _init_modules(model, "kaiming_uniform")
+        _init_modules(model, "kaiming_uniform", activation=activation)
         return
     if key == "xavier" or key == "xavier_uniform":
-        _init_modules(model, "xavier_uniform")
+        _init_modules(model, "xavier_uniform", activation=activation)
         return
     if key == "xavier_normal":
-        _init_modules(model, "xavier_normal")
+        _init_modules(model, "xavier_normal", activation=activation)
         return
 
     options = ", ".join(
@@ -177,13 +212,24 @@ def initialize_weights(model: nn.Module, name: str) -> None:
     raise ValueError(f"Unknown weight_init '{name}'. Available options: {options}")
 
 
-def _init_modules(model: nn.Module, scheme: str) -> None:
+def _init_modules(model: nn.Module, scheme: str, activation: str = "relu") -> None:
+    nonlinearity, negative_slope = _kaiming_params(activation)
     for module in model.modules():
         if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
             if scheme == "kaiming_normal":
-                nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.kaiming_normal_(
+                    module.weight,
+                    a=negative_slope,
+                    mode="fan_out",
+                    nonlinearity=nonlinearity,
+                )
             elif scheme == "kaiming_uniform":
-                nn.init.kaiming_uniform_(module.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.kaiming_uniform_(
+                    module.weight,
+                    a=negative_slope,
+                    mode="fan_out",
+                    nonlinearity=nonlinearity,
+                )
             elif scheme == "xavier_normal":
                 nn.init.xavier_normal_(module.weight)
             elif scheme == "xavier_uniform":
@@ -195,3 +241,10 @@ def _init_modules(model: nn.Module, scheme: str) -> None:
                 nn.init.ones_(module.weight)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
+
+
+def _kaiming_params(activation: str) -> tuple[str, float]:
+    key = activation.lower().replace("-", "_")
+    if key in {"leaky_relu", "lrelu"}:
+        return "leaky_relu", 0.01
+    return "relu", 0.0

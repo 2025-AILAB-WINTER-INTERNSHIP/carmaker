@@ -223,9 +223,18 @@ def main() -> None:
         # TensorBoard Scalars에 loss/metric을 기록한다.
         _write_scalars(writer, epoch, train_loss, val, optimizer, adapter.class_names)
 
-        # TensorBoard Images에 train/val/test별 GT/pred overlay grid를 기록한다.
+        # TensorBoard Images에 train/val/test별 overlay grid를 기록한다.
+        # GT grid는 고정 샘플이라 첫 epoch에만 쓰고, pred grid만 주기적으로 갱신한다.
         if writer and (epoch == 1 or epoch % int(cfg.get("image_log_interval", 5)) == 0):
-            write_debug_image_grids(writer, epoch, model, debug_loaders, adapter.palette, device)
+            write_debug_image_grids(
+                writer,
+                epoch,
+                model,
+                debug_loaders,
+                adapter.palette,
+                device,
+                write_gt=epoch == 1,
+            )
 
         # validation mIoU가 최고일 때 best checkpoint를 갱신한다.
         if val["miou"] > best_miou:
@@ -402,16 +411,35 @@ def _make_debug_loader(dataset, debug_image_count: int, device: torch.device):
 
 
 @torch.no_grad()
-def write_debug_image_grids(writer, epoch: int, model, loaders: Dict[str, Any], palette, device: torch.device) -> None:
-    """TensorBoard Images 탭에 train/val/test별 2x2 overlay grid를 기록한다."""
+def write_debug_image_grids(
+    writer,
+    epoch: int,
+    model,
+    loaders: Dict[str, Any],
+    palette,
+    device: torch.device,
+    write_gt: bool = True,
+) -> None:
+    """TensorBoard Images 탭에 train/val/test별 overlay grid를 기록한다."""
     for split, loader in loaders.items():
         if loader is None:
             continue
-        _write_debug_image_grid(writer, epoch, model, loader, palette, device, split)
+        _write_debug_image_grid(
+            writer, epoch, model, loader, palette, device, split, write_gt=write_gt
+        )
 
 
 @torch.no_grad()
-def _write_debug_image_grid(writer, epoch: int, model, loader, palette, device: torch.device, split: str) -> None:
+def _write_debug_image_grid(
+    writer,
+    epoch: int,
+    model,
+    loader,
+    palette,
+    device: torch.device,
+    split: str,
+    write_gt: bool = True,
+) -> None:
     """한 split에서 고정 샘플 여러 장을 grid로 묶어 기록한다."""
     try:
         iterator = iter(loader)
@@ -441,8 +469,19 @@ def _write_debug_image_grid(writer, epoch: int, model, loader, palette, device: 
         pred_overlays.append(overlay_mask(image_cpu[0], pred[0], palette))
 
     if gt_overlays:
-        writer.add_image(f"debug/{split}/gt_grid", make_image_grid(gt_overlays, columns=2), epoch, dataformats="HWC")
-        writer.add_image(f"debug/{split}/pred_grid", make_image_grid(pred_overlays, columns=2), epoch, dataformats="HWC")
+        if write_gt:
+            writer.add_image(
+                f"debug/{split}/gt_grid",
+                make_image_grid(gt_overlays, columns=2),
+                epoch,
+                dataformats="HWC",
+            )
+        writer.add_image(
+            f"debug/{split}/pred_grid",
+            make_image_grid(pred_overlays, columns=2),
+            epoch,
+            dataformats="HWC",
+        )
 
 
 def save_checkpoint(path: Path, model, optimizer, epoch: int, cfg: Dict[str, Any], best_miou: float) -> None:
@@ -539,7 +578,16 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
     model_cfg = cfg.get("model", {})
     model_name = model_cfg.get("name", "model") if isinstance(model_cfg, dict) else str(model_cfg)
     base_channels = model_cfg.get("base_channels", "") if isinstance(model_cfg, dict) else ""
-    weight_init = model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default")) if isinstance(model_cfg, dict) else cfg.get("weight_init", "pytorch_default")
+    activation = (
+        model_cfg.get("activation", cfg.get("activation", "relu"))
+        if isinstance(model_cfg, dict)
+        else cfg.get("activation", "relu")
+    )
+    weight_init = (
+        model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default"))
+        if isinstance(model_cfg, dict)
+        else cfg.get("weight_init", "pytorch_default")
+    )
     image_size = cfg.get("image_size", "")
     loss_name = str(cfg.get("loss", ""))
 
@@ -548,6 +596,7 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
     metadata_cfg["device"] = str(device)
     metadata_cfg["model_name"] = str(model_name)
     metadata_cfg["base_channels"] = base_channels
+    metadata_cfg["activation"] = activation
     metadata_cfg["weight_init"] = weight_init
     metadata_cfg["loss"] = loss_name
     metadata_cfg["image_size"] = image_size
@@ -559,6 +608,7 @@ def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: t
         f"- loss: `{loss_name}`",
         f"- class_weights: `{cfg.get('class_weights', None)}`",
         f"- base_channels: `{base_channels}`",
+        f"- activation: `{activation}`",
         f"- weight_init: `{weight_init}`",
         f"- batch_size: `{cfg.get('batch_size', '')}`",
         f"- learning_rate: `{cfg.get('learning_rate', '')}`",
@@ -582,7 +632,16 @@ def _write_hparams(writer, cfg: Dict[str, Any], best_miou: float) -> None:
     model_cfg = cfg.get("model", {})
     model_name = model_cfg.get("name", "model") if isinstance(model_cfg, dict) else str(model_cfg)
     base_channels = model_cfg.get("base_channels", "") if isinstance(model_cfg, dict) else ""
-    weight_init = model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default")) if isinstance(model_cfg, dict) else cfg.get("weight_init", "pytorch_default")
+    activation = (
+        model_cfg.get("activation", cfg.get("activation", "relu"))
+        if isinstance(model_cfg, dict)
+        else cfg.get("activation", "relu")
+    )
+    weight_init = (
+        model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default"))
+        if isinstance(model_cfg, dict)
+        else cfg.get("weight_init", "pytorch_default")
+    )
     image_size = cfg.get("image_size", "")
     loss_name = str(cfg.get("loss", ""))
 
@@ -592,6 +651,7 @@ def _write_hparams(writer, cfg: Dict[str, Any], best_miou: float) -> None:
         "loss": loss_name,
         "class_weights": str(cfg.get("class_weights", None)),
         "base_channels": str(base_channels),
+        "activation": str(activation),
         "weight_init": str(weight_init),
         "in_channels": str(model_cfg.get("in_channels", cfg.get("in_channels", ""))) if isinstance(model_cfg, dict) else "",
         "batch_size": str(cfg.get("batch_size", "")),

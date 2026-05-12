@@ -26,6 +26,8 @@ model:
   name: unet
   in_channels: 3
   base_channels: 32
+  # Options: relu, leaky_relu, elu, gelu, silu
+  activation: relu
   # Options: pytorch_default, he_normal, he_uniform, xavier_uniform, xavier_normal
   weight_init: he_normal
 

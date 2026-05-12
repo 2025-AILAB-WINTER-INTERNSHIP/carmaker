@@ -600,17 +600,20 @@ iou/class_2
 
 ### TensorBoard Image Tags
 
-TensorBoard Images 탭에는 validation sample overlay가 기록된다.
+TensorBoard Images 탭에는 고정 debug sample overlay가 기록된다.
 
 ```text
-debug/0/gt_overlay
-debug/0/pred_overlay
-debug/1/gt_overlay
-debug/1/pred_overlay
-...
+debug/train/gt_grid
+debug/train/pred_grid
+debug/val/gt_grid
+debug/val/pred_grid
+debug/test/gt_grid
+debug/test/pred_grid
 ```
 
-최대 4개 sample이 기록된다. `gt_overlay`는 정답 mask overlay이고, `pred_overlay`는 모델 예측 mask overlay이다.
+각 split에서 최대 `debug_image_count`개 sample이 grid로 기록된다. `gt_grid`는 정답 mask overlay이고, `pred_grid`는 모델 예측 mask overlay이다.
+
+debug sample은 고정되어 있으므로 `gt_grid`는 첫 epoch에만 기록한다. `pred_grid`는 모델 예측 변화를 보기 위해 첫 epoch과 `image_log_interval`마다 기록한다.
 
 ### 어떤 Metric을 우선 볼 것인가
 
@@ -671,7 +674,7 @@ cameras: front,left,rear,right
 use_raw_post_processed: false
 
 image_size: [1920, 1080]
-num_workers: 2
+num_workers: 4
 batch_size: 1
 
 val_ratio: 0.2
@@ -679,7 +682,7 @@ test_ratio: 0.1
 stratify_by_camera: true
 seed: 42
 
-epochs: 30
+epochs: 16
 learning_rate: 0.001
 weight_decay: 0.0001
 
@@ -687,11 +690,13 @@ model:
   name: unet
   in_channels: 3
   base_channels: 32
+  activation: relu
+  weight_init: he_normal
 
 loss: focal
 class_weights: [5.0, 15.0, 10.0]
-checkpoint_interval: 10
-image_log_interval: 5
+checkpoint_interval: 4
+image_log_interval: 1
 run_dir: ../runs
 ```
 
@@ -736,6 +741,25 @@ model:
 model:
   name: tiny_fcn
 ```
+
+activation function도 config에서 바꿀 수 있다. 기본값은 `relu`이다.
+
+```yaml
+model:
+  activation: relu
+```
+
+지원 activation:
+
+```text
+relu
+leaky_relu
+elu
+gelu
+silu
+```
+
+`weight_init: he_normal` 또는 `he_uniform`을 사용할 때 `leaky_relu`는 Kaiming gain도 `leaky_relu` 기준으로 맞춘다. `gelu`, `silu`, `elu`는 기존 ReLU gain을 사용한다.
 
 새 모델을 추가하려면 다음 순서로 수정한다.
 
