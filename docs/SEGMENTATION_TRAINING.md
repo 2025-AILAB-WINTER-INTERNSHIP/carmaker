@@ -688,10 +688,11 @@ model:
   in_channels: 3
   base_channels: 32
 
-loss: cross_entropy
+loss: focal
+class_weights: [5.0, 15.0, 10.0]
 checkpoint_interval: 10
 image_log_interval: 5
-run_dir: ../runs/unet_carmaker
+run_dir: ../runs
 ```
 
 원본 1920x1080 이미지를 그대로 사용하므로 GPU memory가 부족할 수 있다. 부족하면 먼저 `base_channels`를 줄인다.
@@ -749,7 +750,7 @@ model:
 기본:
 
 ```yaml
-loss: cross_entropy
+loss: focal
 ```
 
 지원 loss:
@@ -759,6 +760,7 @@ cross_entropy
 dice
 ce_dice
 focal
+focal_dice
 ```
 
 추천 순서:
@@ -768,20 +770,65 @@ focal
 2. weighted cross_entropy
 3. ce_dice
 4. focal
+5. focal_dice
 ```
 
 class imbalance가 심하면 class weight를 사용할 수 있다.
 
 ```yaml
-class_weights: [0.2, 2.0, 3.0]
+class_weights: [5.0, 15.0, 10.0]
 ```
 
 의미:
 
 ```text
-background weight = 0.2
-lane weight       = 2.0
-landmark weight   = 3.0
+background weight = 5.0
+lane weight       = 15.0
+landmark weight   = 10.0
+```
+
+`class_weights`는 모든 loss에 똑같이 적용되지 않는다.
+
+```text
+class_weights 적용:
+- cross_entropy
+- ce_dice의 CrossEntropy 항
+- focal
+- focal_dice의 Focal 항
+
+class_weights 미적용:
+- dice
+- ce_dice의 Dice 항
+- focal_dice의 Dice 항
+```
+
+현재 DiceLoss는 class별 Dice를 같은 비중으로 평균낸다.
+
+```text
+Dice_c = (2 * sum(p_c * y_c) + smooth) / (sum(p_c) + sum(y_c) + smooth)
+DiceLoss = 1 - mean_c(Dice_c)
+```
+
+FocalLoss는 정답 class 확률이 낮은 어려운 픽셀의 기여도를 더 크게 남긴다.
+
+```text
+CE = -log(p_t)
+FocalLoss = (1 - p_t)^gamma * CE
+```
+
+focal_dice는 두 loss를 가중합으로 묶는다.
+
+```text
+focal_dice = 0.5 * FocalLoss + 1.0 * DiceLoss
+```
+
+추천 실험 순서:
+
+```text
+1. focal_dice + class_weights
+2. focal_dice + no class_weights
+3. ce_dice + class_weights
+4. focal + class_weights
 ```
 
 ## 주요 파일 역할
@@ -791,7 +838,7 @@ landmark weight   = 3.0
 | `src/segmentation/adapters.py` | CarMaker 데이터 구조와 manifest를 읽고 image/mask pair 목록 생성 |
 | `src/segmentation/dataset.py` | PNG 이미지와 mask를 읽고 PyTorch tensor로 변환, train/val/test split |
 | `src/segmentation/models.py` | U-Net, TinyFCN, model registry, `build_model` |
-| `src/segmentation/losses.py` | CrossEntropy, Dice, CE+Dice, Focal loss |
+| `src/segmentation/losses.py` | CrossEntropy, Dice, CE+Dice, Focal, Focal+Dice loss |
 | `src/segmentation/metrics.py` | mIoU, class IoU, Dice, Pixel Accuracy, PSNR |
 | `src/segmentation/utils/visualization.py` | mask colorize, overlay image 생성 |
 | `src/segmentation/tools/debug_dataset.py` | dataset pair와 mask 값 확인용 debug tool |

@@ -39,7 +39,11 @@ model:
 #   dice               Region-overlap loss.
 #   ce_dice            Cross entropy + Dice loss.
 #   focal              Focuses more on hard pixels/classes.
+#   focal_dice         Focal loss + Dice loss.
 loss: focal
+# class_weights is used directly by CrossEntropy/Focal terms only.
+# It affects: cross_entropy, ce_dice CE term, focal, focal_dice Focal term.
+# It does not affect the current DiceLoss term, which averages per-class Dice equally.
 class_weights: [5.0, 15.0, 10.0]
 
 checkpoint_interval: 4
