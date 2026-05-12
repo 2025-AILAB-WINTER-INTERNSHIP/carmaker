@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 # 이 ROS 패키지는 src/segmentation 안의 학습/추론 공용 코드를 import한다.
@@ -39,6 +40,8 @@ class SegmentationInferenceNode:
         # cv_bridge가 ROS Image를 OpenCV 배열로 바꿀 때 사용할 encoding.
         # CarMaker/ROS 카메라 이미지는 보통 bgr8이므로 기본값도 bgr8로 둔다.
         self.input_encoding = rospy.get_param("~input_encoding", "bgr8")
+        self.log_timing = parse_bool(rospy.get_param("~log_timing", True))
+        self.timing_log_interval = float(rospy.get_param("~timing_log_interval", 1.0))
 
         # 실제 모델 로딩과 PyTorch inference는 ROS와 분리된 SegmentationPredictor가 담당한다.
         # 이 노드는 topic 입출력만 얇게 연결하는 adapter 역할을 한다.
@@ -71,16 +74,32 @@ class SegmentationInferenceNode:
 
     def image_callback(self, msg: Image) -> None:
         try:
+            callback_start = time.perf_counter()
+
             # ROS Image -> OpenCV BGR image.
             # predictor는 내부에서 학습 때와 같은 RGB/resize/tensor 변환을 수행한다.
             image_bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.input_encoding)
+
+            inference_start = time.perf_counter()
             result = self.predictor.predict(image_bgr, color_order="bgr")
+            inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
             # class_map은 원본 입력 이미지 크기로 되돌려 publish한다.
             # 그래서 다른 노드가 같은 camera frame/header 기준으로 바로 맞춰 쓸 수 있다.
             class_msg = self.bridge.cv2_to_imgmsg(result.class_map, encoding="mono8")
             class_msg.header = msg.header
             self.class_map_pub.publish(class_msg)
+
+            if self.log_timing:
+                callback_ms = (time.perf_counter() - callback_start) * 1000.0
+                fps = 1000.0 / inference_ms if inference_ms > 0.0 else 0.0
+                rospy.loginfo_throttle(
+                    self.timing_log_interval,
+                    "segmentation timing: inference=%.2f ms callback=%.2f ms approx_fps=%.2f",
+                    inference_ms,
+                    callback_ms,
+                    fps,
+                )
         except (CvBridgeError, ValueError, RuntimeError) as exc:
             rospy.logerr_throttle(1.0, "segmentation inference failed: %s", exc)
 
@@ -89,6 +108,14 @@ def main() -> None:
     rospy.init_node("segmentation_inference_node")
     SegmentationInferenceNode()
     rospy.spin()
+
+
+def parse_bool(value) -> bool:
+    """roslaunch에서 문자열로 들어온 true/false 값을 안전하게 bool로 바꾼다."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
 
 if __name__ == "__main__":
     main()

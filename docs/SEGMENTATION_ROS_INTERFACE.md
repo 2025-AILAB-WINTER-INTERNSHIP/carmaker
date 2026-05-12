@@ -205,6 +205,8 @@ rosrun:    _checkpoint_path:=...
 | `class_map_topic` | `/segmentation/class_map` | publish할 class map topic |
 | `input_encoding` | `bgr8` | `CvBridge` 입력 변환 encoding |
 | `queue_size` | `1` | 오래된 프레임 누적을 줄이기 위한 ROS queue 크기 |
+| `log_timing` | `true` | inference latency와 대략적인 FPS를 ROS log에 출력 |
+| `timing_log_interval` | `1.0` | timing log throttle 간격, 초 단위 |
 
 ## Checkpoint와 Config
 
@@ -249,6 +251,20 @@ rostopic echo -n 1 /segmentation/class_map/encoding
 
 ```text
 mono8
+```
+
+추론 속도는 node log에서 확인한다.
+
+```text
+segmentation timing: inference=12.34 ms callback=14.20 ms approx_fps=81.04
+```
+
+launch에서 끄려면 다음처럼 실행한다.
+
+```bash
+roslaunch segmentation_ros segmentation_inference.launch \
+  checkpoint_path:=/absolute/path/to/best.pt \
+  log_timing:=false
 ```
 
 ## 다음 확장

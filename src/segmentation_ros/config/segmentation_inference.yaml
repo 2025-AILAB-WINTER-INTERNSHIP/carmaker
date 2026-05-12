@@ -13,3 +13,7 @@ class_map_topic: "/segmentation/class_map"
 
 input_encoding: "bgr8"
 queue_size: 1
+
+# Print inference latency/FPS to the ROS log for debugging.
+log_timing: true
+timing_log_interval: 1.0

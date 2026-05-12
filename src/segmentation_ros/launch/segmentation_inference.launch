@@ -5,6 +5,7 @@
   <arg name="image_size" default="" />
   <arg name="image_topic" default="/camera/image_raw" />
   <arg name="class_map_topic" default="/segmentation/class_map" />
+  <arg name="log_timing" default="true" />
 
   <node pkg="segmentation_ros" type="segmentation_inference_node.py" name="segmentation_inference_node" output="screen">
     <rosparam command="load" file="$(find segmentation_ros)/config/segmentation_inference.yaml" />
@@ -15,5 +16,6 @@
     <param name="image_size" value="$(arg image_size)" />
     <param name="image_topic" value="$(arg image_topic)" />
     <param name="class_map_topic" value="$(arg class_map_topic)" />
+    <param name="log_timing" value="$(arg log_timing)" />
   </node>
 </launch>
