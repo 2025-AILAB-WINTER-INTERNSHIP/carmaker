@@ -1,0 +1,57 @@
+feature_extractor:
+  bev:
+    x_range:
+      min: -10.0   # base_link 기준 좌우 최솟값 [m]
+      max:  10.0   # base_link 기준 좌우 최댓값 [m]
+    y_range:
+      min: -5.0    # base_link 기준 후방 [m]
+      max:  15.0   # base_link 기준 전방 [m]
+    resolution: 0.05  # [m/pixel]
+
+  extraction:
+    r_max: 15.0         # 특징점 최대 감지 거리 [m]
+    covariance_k: 1.0   # 방사 방향 공분산 스케일 계수
+
+  segmentation:
+    fallback_enabled: true  # segmentation 토픽 미수신 시 raw 이미지 threshold 사용
+    fallback_threshold: 1   # fallback 시 grayscale 임계값 (class_id >= 1)
+
+  channels:
+    - name: front
+      frame: front_optical_frame
+      seg_topic: /segmentation/front/class_image
+
+    - name: rear
+      frame: rear_optical_frame
+      seg_topic: /segmentation/rear/class_image
+
+    - name: left
+      frame: left_optical_frame
+      seg_topic: /segmentation/left/class_image
+
+    - name: right
+      frame: right_optical_frame
+      seg_topic: /segmentation/right/class_image
+
+# Phase 2: EKF (skeleton — values set at implementation)
+ekf:
+  dimension: 2                  # 2D (추후 3D 전환 시 3으로 변경)
+  frequency: 100.0              # [Hz]
+  state_buffer_duration: 0.5   # 지연 보상 버퍼 길이 [s]
+  imu_noise:
+    acc_std: 0.1                # [m/s^2]
+    gyro_std: 0.01              # [rad/s]
+  wheel_noise:
+    speed_std: 0.05             # [m/s]
+    slip_threshold: 0.5         # 슬립 판별 임계값 [m/s]
+  vision_noise:
+    base_std: 0.1               # 거리 0m 기준 [m]
+
+# Phase 3: MapMatcher (skeleton)
+map_matcher:
+  type: "icp"                   # "icp" | 추후 "ndt", "point_to_line" 추가
+  map_format: "osm"             # "osm" | 추후 "lanelet2", "pcd" 추가
+  map_file: ""                  # launch argument로 지정
+  search_radius: 20.0           # 지도 조회 반경 [m]
+  fitness_threshold: 0.5        # 매칭 유효 판정 임계값
+  max_iterations: 50            # ICP 반복 횟수

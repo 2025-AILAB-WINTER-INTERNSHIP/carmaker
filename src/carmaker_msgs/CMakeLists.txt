@@ -11,6 +11,8 @@ add_message_files(
   FILES
   Control_Signal.msg
   DynamicsInfo.msg
+  LocalFeature.msg
+  LocalFeatures.msg
   Object.msg
   ObjectState.msg
   Objects.msg

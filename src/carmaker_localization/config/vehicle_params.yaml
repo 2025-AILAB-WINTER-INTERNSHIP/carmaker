@@ -1,0 +1,8 @@
+# CarMaker Vehicle Parameters (Placeholder)
+# These values should be updated to match the specific vehicle model used in CarMaker.
+
+vehicle:
+  tire_radius: 0.31            # [m] - Effective tire radius
+  wheelbase: 2.7               # [m] - Distance between front and rear axles
+  track_width: 1.6             # [m] - Distance between left and right wheels
+  steering_ratio: 15.0         # [-] - Ratio between steering wheel angle and tire angle
