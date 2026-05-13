@@ -34,6 +34,22 @@ void LocalizationNodelet::onInit() {
     ekf_core_->setParameters(tire_radius, slip_thresh, wheel_std, Q);
     ekf_core_->setDivergenceThreshold(pnh.param("ekf/divergence_threshold", 100.0));
 
+    // Initial State Configuration (Array: [x, y, yaw_deg])
+    XmlRpc::XmlRpcValue init_state_val;
+    if (pnh.getParam("ekf/initial_state", init_state_val) && init_state_val.getType() == XmlRpc::XmlRpcValue::TypeArray && init_state_val.size() == 3) {
+
+        use_manual_initial_state_ = true;
+        init_x_ = static_cast<double>(init_state_val[0]);
+        init_y_ = static_cast<double>(init_state_val[1]);
+        double yaw_deg = static_cast<double>(init_state_val[2]);
+        init_yaw_ = yaw_deg * M_PI / 180.0;
+
+        NODELET_INFO("Manual initial state set: [%.2f, %.2f, %.2f deg]", init_x_, init_y_, yaw_deg);
+    } else {
+        use_manual_initial_state_ = false;
+        NODELET_INFO("No valid initial_state found (~ or empty). Will initialize from DynamicsInfo (GT).");
+    }
+
     std::string topic_pose = pnh.param("topics/publish/pose", std::string("/localization/pose"));
     std::string topic_odom = pnh.param("topics/publish/odom", std::string("/localization/odom"));
     std::string topic_map_correction = pnh.param("topics/publish/map_correction", std::string("/localization/map_correction"));
@@ -74,10 +90,10 @@ void LocalizationNodelet::onInit() {
 
     map_correction_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_map_correction, 10);
 
-    // Dynamic SVM Canvas Bounds
+    // SVM Canvas Bounds
     svm_x_min_ = 1e9; svm_x_max_ = -1e9;
     svm_y_min_ = 1e9; svm_y_max_ = -1e9;
-    
+
     XmlRpc::XmlRpcValue channel_list;
     if (pnh.getParam("feature_extractor/channels", channel_list) && channel_list.getType() == XmlRpc::XmlRpcValue::TypeArray) {
         for (int i = 0; i < channel_list.size(); ++i) {
@@ -92,23 +108,24 @@ void LocalizationNodelet::onInit() {
             }
         }
     }
-    
+
     // Fallback if no channels
     if (svm_x_min_ > svm_x_max_) { svm_x_min_ = -3.0; svm_x_max_ = 7.68; }
     if (svm_y_min_ > svm_y_max_) { svm_y_min_ = -3.0; svm_y_max_ = 3.0; }
 
     svm_res_ = pnh.param("feature_extractor/bev/resolution", 0.05);
+    fusion_ = pnh.param("feature_extractor/fusion", false);
 
     int svm_h = std::ceil((svm_x_max_ - svm_x_min_) / svm_res_);
     int svm_w = std::ceil((svm_y_max_ - svm_y_min_) / svm_res_);
     svm_canvas_ = cv::Mat::zeros(svm_h, svm_w, CV_8UC3);
 
-    double v_front = pnh.param("svm/vehicle/front_edge", 4.68);
-    double v_rear = pnh.param("svm/vehicle/rear_edge", 0.0);
-    double front_off = pnh.param("svm/vehicle/seam_front_offset", -1.0);
-    double rear_off = pnh.param("svm/vehicle/seam_rear_offset", 0.5);
-    double slope_front = pnh.param("svm/vehicle/seam_slope_front", 0.8);
-    double slope_rear = pnh.param("svm/vehicle/seam_slope_rear", 1.8);
+    double v_front = pnh.param("vehicle/front_edge", 4.68);
+    double v_rear = pnh.param("vehicle/rear_edge", 0.0);
+    double front_off = pnh.param("svm/seam_front_offset", -0.5);
+    double rear_off = pnh.param("svm/seam_rear_offset", 0.5);
+    double slope_front = pnh.param("svm/seam_slope_front", 1.0);
+    double slope_rear = pnh.param("svm/seam_slope_rear", 1.0);
 
     double v_fc_x = v_front + front_off;
     double v_rc_x = v_rear + rear_off;
@@ -146,9 +163,14 @@ void LocalizationNodelet::onInit() {
     svm_masks_["right"] = (index_map == 4);
 
     if (channel_list.getType() == XmlRpc::XmlRpcValue::TypeArray) {
-        channels_.reserve(channel_list.size());
+        if (channel_list.size() != 4) {
+            NODELET_ERROR("This package is hardcoded for exactly 4 cameras. Found %d channels.", channel_list.size());
+            return;
+        }
 
-        for (int i = 0; i < channel_list.size(); ++i) {
+        channels_.reserve(4);
+
+        for (int i = 0; i < 4; ++i) {
             XmlRpc::XmlRpcValue& ch_cfg = channel_list[i];
 
             channels_.emplace_back();
@@ -176,17 +198,24 @@ void LocalizationNodelet::onInit() {
 
             ros::NodeHandle pnh("~");
             std::string features_prefix = pnh.param("topics/publish/features_prefix", std::string("/localization/features"));
-            ch.feature_pub = nh.advertise<carmaker_msgs::LocalFeatures>(features_prefix + "/" + ch.name + "/local_features", 10);
+            ch.feature_pub = nh.advertise<carmaker_msgs::LocalFeatures>(features_prefix + "/" + ch.name, 10);
 
-            ch.seg_sub = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh, input_topic, 5);
-            ch.info_sub = std::make_unique<message_filters::Subscriber<sensor_msgs::CameraInfo>>(nh, info_topic, 5);
+            seg_subs_[i] = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh, input_topic, 5);
+            info_subs_[i] = nh.subscribe<sensor_msgs::CameraInfo>(info_topic, 1, boost::bind(&LocalizationNodelet::infoCallback, this, _1, i));
 
-            ch.sync = std::make_unique<message_filters::Synchronizer<Channel::SyncPolicy>>(Channel::SyncPolicy(10), *ch.seg_sub, *ch.info_sub);
-            ch.sync->registerCallback(boost::bind(&LocalizationNodelet::imageCallback, this, _1, _2, i));
-
-            NODELET_INFO("Configured Localization Channel: [%s]", ch.name.c_str());
+            NODELET_INFO("Configured Localization Channel %d: [%s]", i, ch.name.c_str());
         }
+
+        sync_all_ = std::make_unique<message_filters::Synchronizer<SyncPolicy4>>(
+            SyncPolicy4(10),
+            *seg_subs_[0], *seg_subs_[1], *seg_subs_[2], *seg_subs_[3]);
+
+        sync_all_->registerCallback(boost::bind(&LocalizationNodelet::imagesCallback, this, _1, _2, _3, _4));
     }
+}
+
+void LocalizationNodelet::infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx) {
+    latest_infos_[idx] = msg;
 }
 
 void LocalizationNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg) {
@@ -207,22 +236,36 @@ void LocalizationNodelet::ekfTimerCallback(const ros::TimerEvent& event) {
     if (last_ekf_time_ <= 0.0) {
         last_ekf_time_ = current_time;
         Eigen::Matrix<double, STATE_DIM, 1> x0 = Eigen::Matrix<double, STATE_DIM, 1>::Zero();
-        x0(X) = latest_dynamics_.Car_x;
-        x0(Y) = latest_dynamics_.Car_y;
-        x0(PSI) = latest_dynamics_.Car_Yaw;
-        x0(VX) = latest_dynamics_.Car_vx;
-        x0(VY) = latest_dynamics_.Car_vy;
+
+        if (use_manual_initial_state_) {
+            x0(X) = init_x_;
+            x0(Y) = init_y_;
+            x0(PSI) = init_yaw_;
+            x0(VX) = 0.0;
+            x0(VY) = 0.0;
+        } else {
+            x0(X) = latest_dynamics_.Car_x;
+            x0(Y) = latest_dynamics_.Car_y;
+            x0(PSI) = latest_dynamics_.Car_Yaw;
+            x0(VX) = latest_dynamics_.Car_vx;
+            x0(VY) = latest_dynamics_.Car_vy;
+        }
         x0(SW) = 1.0;
+
         Eigen::Matrix<double, STATE_DIM, STATE_DIM> P0 = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 0.1;
         ekf_core_->init(x0, P0);
+        NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f]", x0(X), x0(Y), x0(PSI));
         return;
     }
 
     double dt = current_time - last_ekf_time_;
-    if (dt <= 0.0 || dt > 1.0) {
-        last_ekf_time_ = current_time;
+    if (dt < 0.0 || dt > 1.0) {
+        NODELET_WARN("Time jump detected (dt: %.3f). Resetting EKF...", dt);
+        last_ekf_time_ = 0.0;
         return;
     }
+
+    if (dt == 0.0) return;
 
     Eigen::Matrix<double, 6, 1> u;
     u << latest_dynamics_.Sensor_Inertial_0_Acc_B_x,
@@ -265,115 +308,144 @@ void LocalizationNodelet::publishEkfState(const ros::Time& stamp) {
 
     nav_msgs::Odometry odom_msg;
     odom_msg.header = pose_msg.header;
-    odom_msg.child_frame_id = "base_link";
+    odom_msg.child_frame_id = "Fr1A";
     odom_msg.pose = pose_msg.pose;
     odom_msg.twist.twist.linear.x = x(VX);
     odom_msg.twist.twist.linear.y = x(VY);
     odom_msg.twist.twist.angular.z = x(PSIDOT);
     odom_pub_.publish(odom_msg);
-
-    visualizer_->publishEkfState(pose_msg);
 }
 
-void LocalizationNodelet::imageCallback(const sensor_msgs::ImageConstPtr& seg_msg,
-                                        const sensor_msgs::CameraInfoConstPtr& info_msg,
-                                        size_t ch_idx) {
-    Channel& ch = channels_[ch_idx];
+void LocalizationNodelet::imagesCallback(
+        const sensor_msgs::ImageConstPtr& img0,
+        const sensor_msgs::ImageConstPtr& img1,
+        const sensor_msgs::ImageConstPtr& img2,
+        const sensor_msgs::ImageConstPtr& img3) {
 
-    if (!ch.lut_initialized) {
-        geometry_msgs::TransformStamped tf;
-        try {
-            tf = tf_buffer_->lookupTransform("base_link", ch.frame, ros::Time(0));
-            ch.extractor->updateLUT(info_msg, tf);
-            ch.lut_initialized = true;
-            NODELET_INFO("LUT initialized for %s", ch.name.c_str());
-        } catch (tf2::TransformException& ex) {
-            ROS_WARN_THROTTLE(2.0, "TF lookup failed for %s: %s", ch.frame.c_str(), ex.what());
+    const sensor_msgs::ImageConstPtr imgs[4] = {img0, img1, img2, img3};
+
+    // Ensure we have CameraInfo for all channels
+    for (int i = 0; i < 4; ++i) {
+        if (!latest_infos_[i]) {
+            NODELET_WARN_THROTTLE(2.0, "Waiting for CameraInfo on channel %d...", i);
             return;
         }
     }
+    const sensor_msgs::CameraInfoConstPtr infos[4] = {latest_infos_[0], latest_infos_[1], latest_infos_[2], latest_infos_[3]};
 
-    cv::Mat bev_image;
-    auto features = ch.extractor->process(seg_msg, info_msg, bev_image);
+    carmaker_msgs::LocalFeatures combined;
+    combined.header = img0->header;
+    combined.camera_name = "combined";
 
-    if (!bev_image.empty() && svm_masks_.count(ch.name) > 0) {
-        std::lock_guard<std::mutex> lock(svm_mutex_);
-        if (svm_canvas_.empty()) {
-            int h = std::ceil((svm_x_max_ - svm_x_min_) / svm_res_);
-            int w = std::ceil((svm_y_max_ - svm_y_min_) / svm_res_);
-            svm_canvas_ = cv::Mat::zeros(h, w, bev_image.type());
+    bool all_lut_ready = true;
+
+    for (size_t i = 0; i < 4; ++i) {
+        Channel& ch = channels_[i];
+        if (!ch.lut_initialized) {
+            geometry_msgs::TransformStamped tf;
+            try {
+                tf = tf_buffer_->lookupTransform("Fr1A", ch.frame, ros::Time(0));
+                ch.extractor->updateLUT(infos[i], tf);
+                ch.lut_initialized = true;
+                NODELET_INFO("LUT initialized for %s", ch.name.c_str());
+            } catch (tf2::TransformException& ex) {
+                ROS_WARN_THROTTLE(2.0, "TF lookup failed for %s: %s", ch.frame.c_str(), ex.what());
+                all_lut_ready = false;
+                continue;
+            }
         }
-
-        // Calculate offset in global canvas
-        double roi_x_max = ch.bev_x_range[1];
-        double roi_y_max = ch.bev_y_range[1];
-        int r_off = std::round((svm_x_max_ - roi_x_max) / svm_res_);
-        int c_off = std::round((svm_y_max_ - roi_y_max) / svm_res_);
-
-        int h = bev_image.rows;
-        int w = bev_image.cols;
-
-        // Ensure within bounds
-        if (r_off >= 0 && c_off >= 0 && r_off + h <= svm_canvas_.rows && c_off + w <= svm_canvas_.cols) {
-            // Get the corresponding hard-cut mask for this camera
-            cv::Mat global_mask = svm_masks_[ch.name];
-            cv::Mat roi_mask = global_mask(cv::Rect(c_off, r_off, w, h));
-
-            // Copy to canvas using the hard-cut mask
-            cv::Mat canvas_roi = svm_canvas_(cv::Rect(c_off, r_off, w, h));
-            bev_image.copyTo(canvas_roi, roi_mask);
-        }
-
-        ros::NodeHandle pnh("~");
-        visualizer_->publishSvmImage(svm_canvas_);
     }
 
-    if (!features.features.empty()) {
-        ch.feature_pub.publish(features);
-        visualizer_->publishFeatures(features);
-        ch.processed_count++;
+    if (!all_lut_ready) return;
 
-        if (map_loader_ && matcher_) {
-            auto ekf_pose = ekf_core_->getState();
-            Eigen::Isometry2d initial_guess = Eigen::Isometry2d::Identity();
-            initial_guess.translation() = Eigen::Vector2d(ekf_pose(X), ekf_pose(Y));
-            initial_guess.linear() = Eigen::Rotation2Dd(ekf_pose(PSI)).toRotationMatrix();
+    for (size_t i = 0; i < 4; ++i) {
+        Channel& ch = channels_[i];
+        cv::Mat bev_image;
+        auto features = ch.extractor->process(imgs[i], infos[i], bev_image);
 
-            auto ref_features = map_loader_->queryNear(ekf_pose(X), ekf_pose(Y), search_radius_);
+        if (!bev_image.empty() && svm_masks_.count(ch.name) > 0) {
+            std::lock_guard<std::mutex> lock(svm_mutex_);
+            if (svm_canvas_.empty()) {
+                int h = std::ceil((svm_x_max_ - svm_x_min_) / svm_res_);
+                int w = std::ceil((svm_y_max_ - svm_y_min_) / svm_res_);
+                svm_canvas_ = cv::Mat::zeros(h, w, bev_image.type());
+            }
 
-            if (!ref_features.empty()) {
-                auto match_result = matcher_->match(features.features, ref_features, initial_guess);
-                if (match_result.success) {
-                    Eigen::Vector3d z;
-                    z << match_result.transform.translation().x(),
-                            match_result.transform.translation().y(),
-                            Eigen::Rotation2Dd(match_result.transform.linear()).angle();
+            double roi_x_max = ch.bev_x_range[1];
+            double roi_y_max = ch.bev_y_range[1];
+            int r_off = std::round((svm_x_max_ - roi_x_max) / svm_res_);
+            int c_off = std::round((svm_y_max_ - roi_y_max) / svm_res_);
 
-                    double img_timestamp = seg_msg->header.stamp.toSec();
-                    {
-                        std::lock_guard<std::mutex> lock(ekf_mutex_);
-                        ekf_core_->updateVision(img_timestamp, z, match_result.covariance);
-                    }
+            int h = bev_image.rows;
+            int w = bev_image.cols;
 
-                    geometry_msgs::PoseWithCovarianceStamped correction_msg;
-                    correction_msg.header.stamp = seg_msg->header.stamp;
-                    correction_msg.header.frame_id = "map";
-                    correction_msg.pose.pose.position.x = z(0);
-                    correction_msg.pose.pose.position.y = z(1);
-                    tf2::Quaternion q;
-                    q.setRPY(0, 0, z(2));
-                    correction_msg.pose.pose.orientation = tf2::toMsg(q);
+            if (r_off >= 0 && c_off >= 0 && r_off + h <= svm_canvas_.rows && c_off + w <= svm_canvas_.cols) {
+                cv::Mat global_mask = svm_masks_[ch.name];
+                cv::Mat roi_mask = global_mask(cv::Rect(c_off, r_off, w, h));
+                cv::Mat canvas_roi = svm_canvas_(cv::Rect(c_off, r_off, w, h));
+                bev_image.copyTo(canvas_roi, roi_mask);
+            }
+        }
 
-                    for (int r = 0; r < 3; ++r) {
-                        for (int c = 0; c < 3; ++c) {
-                            int idx = (r == 2 ? 5 : r) * 6 + (c == 2 ? 5 : c);
-                            correction_msg.pose.covariance[idx] = match_result.covariance(r, c);
-                        }
-                    }
-                    map_correction_pub_.publish(correction_msg);
-                    visualizer_->publishMapCorrection(correction_msg);
+        if (!features.features.empty()) {
+            ch.feature_pub.publish(features);
+            visualizer_->publishFeatures(features);
+            ch.processed_count++;
+
+            if (fusion_) {
+                combined.features.insert(combined.features.end(), features.features.begin(), features.features.end());
+            } else if (map_loader_ && matcher_) {
+                performCorrection(features);
+            }
+        }
+    }
+
+    visualizer_->publishSvmImage(svm_canvas_);
+
+    if (fusion_ && !combined.features.empty() && map_loader_ && matcher_) {
+        performCorrection(combined);
+    }
+}
+
+void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& features) {
+    auto ekf_pose = ekf_core_->getState();
+    Eigen::Isometry2d initial_guess = Eigen::Isometry2d::Identity();
+    initial_guess.translation() = Eigen::Vector2d(ekf_pose(X), ekf_pose(Y));
+    initial_guess.linear() = Eigen::Rotation2Dd(ekf_pose(PSI)).toRotationMatrix();
+
+    auto ref_features = map_loader_->queryNear(ekf_pose(X), ekf_pose(Y), search_radius_);
+
+    if (!ref_features.empty()) {
+        auto match_result = matcher_->match(features.features, ref_features, initial_guess);
+        if (match_result.success) {
+            Eigen::Vector3d z;
+            z << match_result.transform.translation().x(),
+                 match_result.transform.translation().y(),
+                 Eigen::Rotation2Dd(match_result.transform.linear()).angle();
+
+            double img_timestamp = features.header.stamp.toSec();
+            {
+                std::lock_guard<std::mutex> lock(ekf_mutex_);
+                ekf_core_->updateVision(img_timestamp, z, match_result.covariance);
+            }
+
+            geometry_msgs::PoseWithCovarianceStamped correction_msg;
+            correction_msg.header.stamp = features.header.stamp;
+            correction_msg.header.frame_id = "map";
+            correction_msg.pose.pose.position.x = z(0);
+            correction_msg.pose.pose.position.y = z(1);
+            tf2::Quaternion q;
+            q.setRPY(0, 0, z(2));
+            correction_msg.pose.pose.orientation = tf2::toMsg(q);
+
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 3; ++c) {
+                    int idx = (r == 2 ? 5 : r) * 6 + (c == 2 ? 5 : c);
+                    correction_msg.pose.covariance[idx] = match_result.covariance(r, c);
                 }
             }
+            map_correction_pub_.publish(correction_msg);
+            visualizer_->publishMapCorrection(correction_msg);
         }
     }
 }

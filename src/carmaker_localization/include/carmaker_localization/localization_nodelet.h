@@ -10,6 +10,7 @@
 #include <mutex>
 #include <atomic>
 #include <memory>
+#include <cmath>
 
 #include "carmaker_localization/feature_extractor.h"
 #include "carmaker_localization/ekf_core.h"
@@ -31,11 +32,6 @@ struct Channel {
     std::vector<double> bev_x_range;
     std::vector<double> bev_y_range;
 
-    std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> seg_sub;
-    std::unique_ptr<message_filters::Subscriber<sensor_msgs::CameraInfo>> info_sub;
-    typedef message_filters::sync_policies::ExactTime<sensor_msgs::Image, sensor_msgs::CameraInfo> SyncPolicy;
-    std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync;
-
     ros::Publisher feature_pub;
 
     std::atomic<uint64_t> processed_count{0};
@@ -50,9 +46,6 @@ struct Channel {
         lut_initialized(other.lut_initialized),
         bev_x_range(std::move(other.bev_x_range)),
         bev_y_range(std::move(other.bev_y_range)),
-        seg_sub(std::move(other.seg_sub)),
-        info_sub(std::move(other.info_sub)),
-        sync(std::move(other.sync)),
         feature_pub(std::move(other.feature_pub)),
         processed_count(other.processed_count.load()) {}
 };
@@ -68,11 +61,27 @@ private:
     void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
     void ekfTimerCallback(const ros::TimerEvent& event);
     void publishEkfState(const ros::Time& stamp);
-    void imageCallback(const sensor_msgs::ImageConstPtr& seg_msg,
-                        const sensor_msgs::CameraInfoConstPtr& info_msg,
-                        size_t ch_idx);
+    void imagesCallback(
+        const sensor_msgs::ImageConstPtr& img0,
+        const sensor_msgs::ImageConstPtr& img1,
+        const sensor_msgs::ImageConstPtr& img2,
+        const sensor_msgs::ImageConstPtr& img3);
+
+    void performCorrection(const carmaker_msgs::LocalFeatures& features);
+    void infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx);
 
     std::vector<Channel> channels_;
+    bool fusion_ = false;
+
+    std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> seg_subs_[4];
+    ros::Subscriber info_subs_[4];
+    sensor_msgs::CameraInfoConstPtr latest_infos_[4];
+
+    typedef message_filters::sync_policies::ExactTime<
+        sensor_msgs::Image, sensor_msgs::Image,
+        sensor_msgs::Image, sensor_msgs::Image> SyncPolicy4;
+
+    std::unique_ptr<message_filters::Synchronizer<SyncPolicy4>> sync_all_;
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     std::shared_ptr<Visualizer> visualizer_;
@@ -101,6 +110,9 @@ private:
     double svm_x_min_ = -3.0;
     double svm_y_max_ = 3.0;
     double svm_y_min_ = -3.0;
+
+    bool use_manual_initial_state_ = false;
+    double init_x_ = 0.0, init_y_ = 0.0, init_yaw_ = 0.0;
 };
 
 } // namespace carmaker_localization

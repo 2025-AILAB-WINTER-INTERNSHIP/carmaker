@@ -41,7 +41,7 @@ private:
 
     // Look-Up Table for remap
     cv::Mat map1_, map2_;
-    cv::Mat cartesian_lut_x_, cartesian_lut_y_; // Precomputed X,Y in base_link
+    cv::Mat cartesian_lut_x_, cartesian_lut_y_; // Precomputed X,Y in Fr1A
 
     bool lut_initialized_;
     bool has_optimal_point_;

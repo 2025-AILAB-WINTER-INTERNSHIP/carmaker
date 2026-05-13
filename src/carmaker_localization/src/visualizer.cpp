@@ -1,5 +1,6 @@
 #include "carmaker_localization/visualizer.h"
 #include <cv_bridge/cv_bridge.h>
+#include <tf2/LinearMath/Quaternion.h>
 
 namespace carmaker_localization {
 
@@ -9,16 +10,18 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
     std::string features_prefix = pnh.param("topics/publish/features_prefix", std::string("/localization/features"));
 
     svm_pub_ = nh_.advertise<sensor_msgs::Image>(topic_svm, 1);
-    feature_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(features_prefix + "/points_overlay", 1);
+    feature_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(features_prefix + "/point_cloud", 1);
     ekf_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>("/localization/debug/ekf_markers", 1);
     map_match_marker_pub_ = nh_.advertise<visualization_msgs::Marker>("/localization/debug/map_match_overlay", 1);
+
+    resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
 }
 
 void Visualizer::publishSvmImage(const cv::Mat& svm_image) {
     if (svm_pub_.getNumSubscribers() > 0 && !svm_image.empty()) {
         std_msgs::Header header;
         header.stamp = ros::Time::now();
-        header.frame_id = "base_link";
+        header.frame_id = "Fr1A";
         cv_bridge::CvImage cv_img(header, "bgr8", svm_image);
         svm_pub_.publish(cv_img.toImageMsg());
     }
@@ -41,7 +44,7 @@ void Visualizer::publishFeatures(const carmaker_msgs::LocalFeatures& features) {
         m.header = features.header;
         m.ns = "features_" + features.camera_name;
         m.id = id++;
-        m.type = visualization_msgs::Marker::SPHERE;
+        m.type = visualization_msgs::Marker::CUBE;
         m.action = visualization_msgs::Marker::ADD;
 
         m.pose.position.x = feat.x;
@@ -49,9 +52,9 @@ void Visualizer::publishFeatures(const carmaker_msgs::LocalFeatures& features) {
         m.pose.position.z = 0.0;
         m.pose.orientation.w = 1.0;
 
-        m.scale.x = 0.2;
-        m.scale.y = 0.2;
-        m.scale.z = 0.2;
+        m.scale.x = resolution_;
+        m.scale.y = resolution_;
+        m.scale.z = 0.01; // 바닥에 납작하게 붙은 형태로 시각화
 
         if (feat.class_id == 1) { // Lane
             m.color.r = 1.0; m.color.g = 1.0; m.color.b = 0.0; m.color.a = 0.8;
@@ -62,6 +65,45 @@ void Visualizer::publishFeatures(const carmaker_msgs::LocalFeatures& features) {
         }
 
         marker_array.markers.push_back(m);
+
+        // Covariance Ellipse Marker
+        visualization_msgs::Marker cov;
+        cov.header = features.header;
+        cov.ns = "features_cov_" + features.camera_name;
+        cov.id = id++;
+        cov.type = visualization_msgs::Marker::CYLINDER;
+        cov.action = visualization_msgs::Marker::ADD;
+
+        double c_xx = feat.covariance[0];
+        double c_xy = feat.covariance[1];
+        double c_yy = feat.covariance[3];
+
+        double trace = c_xx + c_yy;
+        double det = c_xx * c_yy - c_xy * c_xy;
+        double det_term = std::max(0.0, std::pow(trace / 2.0, 2) - det);
+        double l1 = trace / 2.0 + std::sqrt(det_term);
+        double l2 = trace / 2.0 - std::sqrt(det_term);
+        double angle = 0.5 * std::atan2(2.0 * c_xy, c_xx - c_yy);
+
+        cov.pose.position.x = feat.x;
+        cov.pose.position.y = feat.y;
+        cov.pose.position.z = 0.0;
+
+        tf2::Quaternion q;
+        q.setRPY(0, 0, angle);
+        cov.pose.orientation.x = q.x();
+        cov.pose.orientation.y = q.y();
+        cov.pose.orientation.z = q.z();
+        cov.pose.orientation.w = q.w();
+
+        cov.scale.x = std::sqrt(std::max(0.001, l1)) * 2.0;
+        cov.scale.y = std::sqrt(std::max(0.001, l2)) * 2.0;
+        cov.scale.z = 0.005;
+
+        cov.color = m.color;
+        cov.color.a = 0.15;
+
+        marker_array.markers.push_back(cov);
     }
 
     feature_marker_pub_.publish(marker_array);

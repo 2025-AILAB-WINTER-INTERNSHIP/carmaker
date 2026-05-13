@@ -13,6 +13,8 @@ topics:
     dynamics: "/dynamics_info"
 
 feature_extractor:
+  fusion: true # True : 개별 채널별 특징점 융합 후 매칭 수행, False : 개별 채널 별 매칭 수행
+
   bev:
     resolution: 0.05  # [m/pixel]
 
@@ -50,18 +52,18 @@ feature_extractor:
       bev_y_range: [-3.0, 0.0]
 
 svm:
-  vehicle:
-    front_edge: 4.68
-    rear_edge: 0.0
-    seam_front_offset: -1.0
-    seam_rear_offset: 0.5
-    seam_slope_front: 0.8
-    seam_slope_rear: 1.8
+  seam_front_offset: -0.5
+  seam_rear_offset: 0.5
+  seam_slope_front: 1.0
+  seam_slope_rear: 1.0
 
 ekf:
   dimension: 2                  # 2D (추후 3D 전환 시 3으로 변경)
   frequency: 100.0              # ekf state 업데이트 주기 [Hz]
   state_buffer_duration: 0.5    # state_buffer_duration : state_buffer의 지속 시간, 지연 보상 버퍼 길이 [s]
+
+  initial_state: ~              # 초기 상태 설정: [x(m), y(m), yaw(deg)]. GT 사용 시 ~ (null)
+
   imu_noise:
     acc_std: 0.1                # imu_noise : imu의 노이즈 [m/s^2]
     gyro_std: 0.01              # gyro_std : gyro의 노이즈 [rad/s]

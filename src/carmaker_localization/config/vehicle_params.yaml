@@ -2,7 +2,18 @@
 # These values should be updated to match the specific vehicle model used in CarMaker.
 
 vehicle:
+  # Vehicle Kinematics
   tire_radius: 0.31            # [m] - Effective tire radius
   wheelbase: 2.7               # [m] - Distance between front and rear axles
   track_width: 1.6             # [m] - Distance between left and right wheels
   steering_ratio: 15.0         # [-] - Ratio between steering wheel angle and tire angle
+
+  # Sensor Extrinsics (Relative to Fr1A / rear bumper center at z=0)
+  rear_axle_offset_x: 0.5      # [m] - Rear axle X offset from Fr1A
+  imu_offset_x: 1.35           # [m] - IMU X offset from Fr1A
+  imu_offset_y: 0.0            # [m] - IMU Y offset from Fr1A
+  imu_offset_z: 0.5            # [m] - IMU Z offset from Fr1A
+
+  # Vehicle Dimensions (Relative to Fr1A)
+  front_edge: 4.68             # [m] - Front edge of the vehicle from Fr1A
+  rear_edge: 0.0               # [m] - Rear edge of the vehicle from Fr1A

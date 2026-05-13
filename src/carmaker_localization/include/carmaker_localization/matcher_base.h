@@ -25,9 +25,9 @@ public:
 
     /**
      * @brief Match observed features with reference map features
-     * @param observed Features from sensors (in base_link)
+     * @param observed Features from sensors (in Fr1A)
      * @param reference Features from map (in map/world)
-     * @param initial_guess Initial pose of base_link in map
+     * @param initial_guess Initial pose of Fr1A in map
      * @return Result of matching
      */
     virtual MatchResult match(

@@ -4,6 +4,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <ros/ros.h>
+#include <cmath>
 #include "carmaker_localization/state_buffer.h"
 
 namespace carmaker_localization {
@@ -47,11 +48,16 @@ public:
      */
     void predict(double dt, const Eigen::Matrix<double, 6, 1>& u);
 
-    void setParameters(double tire_radius, double slip_threshold, double wheel_speed_std, const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& Q) {
+    void setParameters(double tire_radius, double slip_threshold, double wheel_speed_std, const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& Q, 
+                        double rear_axle_offset_x = 0.5, double imu_offset_x = 1.35, double imu_offset_y = 0.0, double imu_offset_z = 0.5) {
         tire_radius_ = tire_radius;
         slip_threshold_ = slip_threshold;
         wheel_speed_std_ = wheel_speed_std;
         Q_ = Q;
+        rear_axle_offset_x_ = rear_axle_offset_x;
+        imu_offset_x_ = imu_offset_x;
+        imu_offset_y_ = imu_offset_y;
+        imu_offset_z_ = imu_offset_z;
     }
 
     void setDivergenceThreshold(double threshold) {
@@ -83,6 +89,10 @@ private:
     double slip_threshold_ = 0.5;
     double wheel_speed_std_ = 0.05;
     double divergence_threshold_ = 100.0; // Trace(P) limit
+    double rear_axle_offset_x_ = 0.5;
+    double imu_offset_x_ = 1.35;
+    double imu_offset_y_ = 0.0;
+    double imu_offset_z_ = 0.5;
 
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> P_init_; // Store for recovery
 

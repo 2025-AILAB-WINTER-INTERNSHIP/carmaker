@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <cmath>
 #include <carmaker_msgs/LocalFeature.h>
 
 namespace carmaker_localization {

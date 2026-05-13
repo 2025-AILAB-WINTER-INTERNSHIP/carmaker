@@ -31,12 +31,17 @@ void EkfCore::predictInternal(double dt, const Eigen::Matrix<double, 6, 1>& u, b
     double s = std::sin(x_(PSI));
     double psidot_eff = wz - x_(BGZ);
 
+    // IMU Lever-arm correction (Centripetal acceleration compensation from Fr1A to IMU)
+    // a_base = a_imu + w^2 * r
+    double ax_base = ax + psidot_eff * psidot_eff * imu_offset_x_;
+    double ay_base = ay + psidot_eff * psidot_eff * imu_offset_y_;
+
     x_(X) += (x_(VX) * c - x_(VY) * s) * dt;
     x_(Y) += (x_(VX) * s + x_(VY) * c) * dt;
     x_(PSI) = normalizeAngle(x_(PSI) + psidot_eff * dt);
 
-    x_(VX) += (ax - x_(BAX) + x_(VY) * psidot_eff) * dt;
-    x_(VY) += (ay - x_(BAY) - x_(VX) * psidot_eff) * dt;
+    x_(VX) += (ax_base - x_(BAX) + x_(VY) * psidot_eff) * dt;
+    x_(VY) += (ay_base - x_(BAY) - x_(VX) * psidot_eff) * dt;
     x_(PSIDOT) = psidot_eff;
     x_(DELTA) = steer;
 
@@ -49,10 +54,10 @@ void EkfCore::predictInternal(double dt, const Eigen::Matrix<double, 6, 1>& u, b
     F(PSI, BGZ) = -dt;
     F(VX, VY)  = psidot_eff * dt;
     F(VX, BAX) = -dt;
-    F(VX, BGZ) = -x_(VY) * dt;
+    F(VX, BGZ) = (-2.0 * psidot_eff * imu_offset_x_ - x_(VY)) * dt;
     F(VY, VX)  = -psidot_eff * dt;
     F(VY, BAY) = -dt;
-    F(VY, BGZ) = x_(VX) * dt;
+    F(VY, BGZ) = (-2.0 * psidot_eff * imu_offset_y_ + x_(VX)) * dt;
     F(PSIDOT, PSIDOT) = 0.0;
     F(PSIDOT, BGZ)    = -1.0;
     F(DELTA, DELTA)   = 0.0;
@@ -67,12 +72,16 @@ void EkfCore::predictInternal(double dt, const Eigen::Matrix<double, 6, 1>& u, b
     const double MIN_SW = 0.1;
     if (x_(SW) < MIN_SW) x_(SW) = MIN_SW;
 
-    double h_vx = x_(VX) / x_(SW);
+    // Kinematic Lever-arm correction
+    // Since Fr1A is on the centerline (Y=0) of the rear bumper, and rear axle is also on the centerline (Y=0),
+    // there is NO Lever-arm effect on the X-velocity between Fr1A and rear axle!
+    double expected_v_rear = x_(VX);
+    double h_vx = expected_v_rear / x_(SW);
     double y = v_raw - h_vx;
 
     Eigen::Matrix<double, 1, STATE_DIM> H = Eigen::Matrix<double, 1, STATE_DIM>::Zero();
     H(VX) = 1.0 / x_(SW);
-    H(SW) = -x_(VX) / (x_(SW) * x_(SW));
+    H(SW) = -expected_v_rear / (x_(SW) * x_(SW));
 
     double v_wheel_scaled = v_raw * x_(SW);
     double slip_diff = std::abs(v_wheel_scaled - x_(VX));
@@ -130,7 +139,11 @@ void EkfCore::updateVision(double timestamp,
 
     // Divergence detection: Check trace of covariance
     if (frame.P.trace() > divergence_threshold_) {
-        ROS_ERROR_THROTTLE(1.0, "EKF Divergence detected (trace: %f)! Resetting to initial covariance.", frame.P.trace());
+        ROS_WARN("EKF Divergence! Re-initializing with latest Vision pose.");
+        frame.x(X) = z(0);
+        frame.x(Y) = z(1);
+        frame.x(PSI) = z(2);
+        // Keep velocity states as they are to avoid sudden stops, but reset covariance
         frame.P = P_init_;
     }
 

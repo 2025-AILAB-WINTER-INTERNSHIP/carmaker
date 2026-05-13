@@ -27,6 +27,7 @@ private:
     ros::Publisher feature_marker_pub_;
     ros::Publisher ekf_marker_pub_;
     ros::Publisher map_match_marker_pub_;
+    double resolution_;
 };
 
 } // namespace carmaker_localization
