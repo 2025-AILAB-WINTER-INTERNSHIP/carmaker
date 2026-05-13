@@ -139,59 +139,57 @@ carmaker_msgs::LocalFeatures FeatureExtractor::process(
     cv::Mat bev_class;
     cv::remap(cv_seg->image, bev_class, map1_, map2_, cv::INTER_NEAREST);
 
-    // Create a color visualization for out_bev_image based on class_id
     out_bev_image = cv::Mat::zeros(bev_cfg_.height, bev_cfg_.width, CV_8UC3);
-    for (int v = 0; v < bev_cfg_.height; ++v) {
-        for (int u = 0; u < bev_cfg_.width; ++u) {
-            uint8_t id = bev_class.at<uint8_t>(v, u);
-            if (id == 1) out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 255); // Red
-            else if (id == 2) out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 255, 0); // Green
-            else if (id > 2) out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 255, 255); // White
-        }
-    }
 
-    if (cv::countNonZero(bev_class) == 0) return features;
+    cv::Mat mask = bev_class > 0;
+    if (cv::countNonZero(mask) == 0) return features;
 
     ros::NodeHandle pnh("~");
     double r_max = pnh.param("feature_extractor/extraction/r_max", 15.0);
     double cov_k = pnh.param("feature_extractor/extraction/covariance_k", 1.0);
-    double f = info_msg->K[0]; // fx
-    if (f <= 0.0) f = 500.0;
 
-    for (int v = 0; v < bev_cfg_.height; ++v) {
-        for (int u = 0; u < bev_cfg_.width; ++u) {
-            uint8_t class_id = bev_class.at<uint8_t>(v, u);
-            if (class_id > 0) {
-                float x = cartesian_lut_x_.at<float>(v, u);
-                float y = cartesian_lut_y_.at<float>(v, u);
-                float r = std::sqrt(x*x + y*y);
+    std::vector<cv::Point> non_zero_points;
+    cv::findNonZero(mask, non_zero_points);
+    features.features.reserve(non_zero_points.size());
 
-                if (r > r_max) continue;
-                if (r < 0.01) continue;
+    for (const auto& pt : non_zero_points) {
+        int u = pt.x;
+        int v = pt.y;
+        uint8_t class_id = bev_class.at<uint8_t>(v, u);
 
-                float e_r_x = x / r;
-                float e_r_y = y / r;
-                float e_t_x = -y / r;
-                float e_t_y = x / r;
+        if (class_id == 1) out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 255, 255); // White
+        else if (class_id == 2) out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(76, 76, 255); // Coral
 
-                float dx_opt = (has_optimal_point_) ? (x - optimal_point_.x) : 0.0f;
-                float dy_opt = (has_optimal_point_) ? (y - optimal_point_.y) : 0.0f;
-                float dist_opt_sq = dx_opt*dx_opt + dy_opt*dy_opt;
+        float x = cartesian_lut_x_.at<float>(v, u);
+        float y = cartesian_lut_y_.at<float>(v, u);
+        float r = std::sqrt(x*x + y*y);
 
-                float sigma_r_sq = cov_k * (dist_opt_sq + 1.0) / (f * f);
-                float sigma_t_sq = bev_cfg_.resolution * bev_cfg_.resolution;
+        if (r > r_max) continue;
+        if (r < 0.01) continue;
 
-                carmaker_msgs::LocalFeature f_msg;
-                f_msg.x = x;
-                f_msg.y = y;
-                f_msg.cov_xx = sigma_r_sq * e_r_x * e_r_x + sigma_t_sq * e_t_x * e_t_x;
-                f_msg.cov_xy = sigma_r_sq * e_r_x * e_r_y + sigma_t_sq * e_t_x * e_t_y;
-                f_msg.cov_yy = sigma_r_sq * e_r_y * e_r_y + sigma_t_sq * e_t_y * e_t_y;
-                f_msg.class_id = class_id;
+        float e_r_x = x / r;
+        float e_r_y = y / r;
+        float e_t_x = -y / r;
+        float e_t_y = x / r;
 
-                features.features.push_back(f_msg);
-            }
-        }
+        float dx_opt = (has_optimal_point_) ? (x - optimal_point_.x) : 0.0f;
+        float dy_opt = (has_optimal_point_) ? (y - optimal_point_.y) : 0.0f;
+        float dist_opt_sq = dx_opt*dx_opt + dy_opt*dy_opt;
+
+        float base_sigma_m_per_px = bev_cfg_.resolution;
+        float sigma_r = base_sigma_m_per_px * (1.0f + cov_k * dist_opt_sq);
+        float sigma_r_sq = sigma_r * sigma_r;
+        float sigma_t_sq = bev_cfg_.resolution * bev_cfg_.resolution;
+
+        carmaker_msgs::LocalFeature f_msg;
+        f_msg.x = x;
+        f_msg.y = y;
+        f_msg.cov_xx = sigma_r_sq * e_r_x * e_r_x + sigma_t_sq * e_t_x * e_t_x;
+        f_msg.cov_xy = sigma_r_sq * e_r_x * e_r_y + sigma_t_sq * e_t_x * e_t_y;
+        f_msg.cov_yy = sigma_r_sq * e_r_y * e_r_y + sigma_t_sq * e_t_y * e_t_y;
+        f_msg.class_id = class_id;
+
+        features.features.push_back(f_msg);
     }
 
     return features;
