@@ -22,7 +22,7 @@ public:
     explicit StateBuffer(double duration_sec = 0.5);
 
     void addFrame(const StateFrame& frame);
-    
+
     /**
      * @brief Find the closest frame at or before timestamp
      */

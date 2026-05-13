@@ -20,20 +20,21 @@ struct BevConfig {
 
 class FeatureExtractor {
 public:
-    explicit FeatureExtractor(const ros::NodeHandle& nh);
+    explicit FeatureExtractor(const ros::NodeHandle& nh, const std::string& camera_name,
+                              const std::vector<double>& x_range, const std::vector<double>& y_range);
     ~FeatureExtractor() = default;
 
     /**
      * @brief Process incoming image and camera info
      */
     carmaker_msgs::LocalFeatures process(
-        const sensor_msgs::ImageConstPtr& img_msg,
+        const sensor_msgs::ImageConstPtr& seg_msg,
         const sensor_msgs::CameraInfoConstPtr& info_msg,
-        const sensor_msgs::ImageConstPtr& seg_msg = nullptr);
+        cv::Mat& out_bev_image);
 
 private:
     void updateLUT(const sensor_msgs::CameraInfoConstPtr& info,
-                   const geometry_msgs::TransformStamped& tf);
+                    const geometry_msgs::TransformStamped& tf);
 
     ros::NodeHandle nh_;
     BevConfig bev_cfg_;
@@ -43,6 +44,8 @@ private:
     cv::Mat cartesian_lut_x_, cartesian_lut_y_; // Precomputed X,Y in base_link
 
     bool lut_initialized_;
+    bool has_optimal_point_;
+    cv::Point2f optimal_point_;
     std::string camera_name_;
 };
 
