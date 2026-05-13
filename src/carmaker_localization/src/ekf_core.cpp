@@ -13,7 +13,7 @@ void EkfCore::init(const Eigen::Matrix<double, STATE_DIM, 1>& x0,
     buffer_.clear();
 }
 
-void EkfCore::predict(double dt, const Eigen::Matrix<double, 6, 1>& u) {
+void EkfCore::prediction(double dt, const Eigen::Matrix<double, 6, 1>& u) {
     predictInternal(dt, u, false);
 }
 
@@ -111,7 +111,7 @@ void EkfCore::predictInternal(double dt, const Eigen::Matrix<double, 6, 1>& u, b
     }
 }
 
-void EkfCore::updateVision(double timestamp,
+void EkfCore::correction(double timestamp,
                             const Eigen::Vector3d& z,
                             const Eigen::Matrix3d& R) {
     StateFrame frame;

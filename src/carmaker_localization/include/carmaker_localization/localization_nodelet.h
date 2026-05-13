@@ -7,6 +7,7 @@
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/exact_time.h>
 #include <tf2_ros/transform_listener.h>
+#include <tf2_ros/transform_broadcaster.h>
 #include <mutex>
 #include <atomic>
 #include <memory>
@@ -60,7 +61,7 @@ private:
 
     void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
     void ekfTimerCallback(const ros::TimerEvent& event);
-    void publishEkfState(const ros::Time& stamp);
+    void publishEstimatedState(const ros::Time& stamp);
     void imagesCallback(
         const sensor_msgs::ImageConstPtr& img0,
         const sensor_msgs::ImageConstPtr& img1,
@@ -84,6 +85,7 @@ private:
     std::unique_ptr<message_filters::Synchronizer<SyncPolicy4>> sync_all_;
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<Visualizer> visualizer_;
 
     std::shared_ptr<EkfCore> ekf_core_;
@@ -113,6 +115,8 @@ private:
 
     bool use_manual_initial_state_ = false;
     double init_x_ = 0.0, init_y_ = 0.0, init_yaw_ = 0.0;
+    std::string global_frame_;
+    std::string prediction_frame_;
 };
 
 } // namespace carmaker_localization

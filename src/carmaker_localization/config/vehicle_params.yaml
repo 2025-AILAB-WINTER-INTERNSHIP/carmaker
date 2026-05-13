@@ -17,3 +17,5 @@ vehicle:
   # Vehicle Dimensions (Relative to Fr1A)
   front_edge: 4.68             # [m] - Front edge of the vehicle from Fr1A
   rear_edge: 0.0               # [m] - Rear edge of the vehicle from Fr1A
+  width: 1.8                   # [m] - Width of the vehicle
+  length: 4.8                  # [m] - Length of the vehicle

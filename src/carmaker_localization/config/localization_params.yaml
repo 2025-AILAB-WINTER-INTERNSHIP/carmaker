@@ -7,10 +7,16 @@ topics:
     debug:
       svm_image: "/localization/debug/svm_image"
       points_overlay: "/localization/debug/points_overlay"
-      ekf_markers: "/localization/debug/ekf_markers"
-      map_match_overlay: "/localization/debug/map_match_overlay"
+      estimated_markers: "/localization/debug/estimated_markers"
+      observed_markers: "/localization/debug/observed_markers"
+      gt_trajectory: "/localization/debug/gt_trajectory"
+      pred_trajectory: "/localization/debug/pred_trajectory"
   subscribe:
     dynamics: "/dynamics_info"
+
+frames:
+  global: "map"
+  prediction: "Fr1A_pred"
 
 feature_extractor:
   fusion: true # True : 개별 채널별 특징점 융합 후 매칭 수행, False : 개별 채널 별 매칭 수행

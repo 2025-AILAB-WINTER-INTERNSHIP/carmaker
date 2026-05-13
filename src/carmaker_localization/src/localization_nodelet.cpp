@@ -14,7 +14,11 @@ void LocalizationNodelet::onInit() {
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>();
     visualizer_ = std::make_shared<Visualizer>(nh);
+
+    global_frame_ = pnh.param("frames/global", std::string("map"));
+    prediction_frame_ = pnh.param("frames/prediction", std::string("Fr1A_pred"));
 
     int dim = pnh.param("ekf/dimension", 2);
     if (dim != 2) {
@@ -222,6 +226,9 @@ void LocalizationNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoCons
     std::lock_guard<std::mutex> lock(dyn_mutex_);
     latest_dynamics_ = *msg;
     dynamics_received_ = true;
+
+    // Publish GT trajectory for debugging
+    visualizer_->publishGtPose(*msg);
 }
 
 void LocalizationNodelet::ekfTimerCallback(const ros::TimerEvent& event) {
@@ -269,25 +276,25 @@ void LocalizationNodelet::ekfTimerCallback(const ros::TimerEvent& event) {
 
     Eigen::Matrix<double, 6, 1> u;
     u << latest_dynamics_.Sensor_Inertial_0_Acc_B_x,
-         latest_dynamics_.Sensor_Inertial_0_Acc_B_y,
-         latest_dynamics_.Sensor_Inertial_0_Omega_B_z,
-         latest_dynamics_.Vhcl_RL_rotv,
-         latest_dynamics_.Vhcl_RR_rotv,
-         latest_dynamics_.Steer_WhlAng;
+            latest_dynamics_.Sensor_Inertial_0_Acc_B_y,
+            latest_dynamics_.Sensor_Inertial_0_Omega_B_z,
+            latest_dynamics_.Vhcl_RL_rotv,
+            latest_dynamics_.Vhcl_RR_rotv,
+            latest_dynamics_.Steer_WhlAng;
 
-    ekf_core_->predict(dt, u);
+    ekf_core_->prediction(dt, u);
     last_ekf_time_ = current_time;
 
-    publishEkfState(ros::Time(current_time));
+    publishEstimatedState(ros::Time(current_time));
 }
 
-void LocalizationNodelet::publishEkfState(const ros::Time& stamp) {
+void LocalizationNodelet::publishEstimatedState(const ros::Time& stamp) {
     auto x = ekf_core_->getState();
     auto P = ekf_core_->getCovariance();
 
     geometry_msgs::PoseWithCovarianceStamped pose_msg;
     pose_msg.header.stamp = stamp;
-    pose_msg.header.frame_id = "map";
+    pose_msg.header.frame_id = global_frame_;
     pose_msg.pose.pose.position.x = x(X);
     pose_msg.pose.pose.position.y = x(Y);
     pose_msg.pose.pose.position.z = 0.0;
@@ -303,17 +310,31 @@ void LocalizationNodelet::publishEkfState(const ros::Time& stamp) {
     }
     pose_msg.pose.covariance[35] = P(PSI, PSI);
 
+    // Set frame_id for visualization before publishing
+    pose_msg.header.frame_id = global_frame_;
+
     pose_pub_.publish(pose_msg);
-    visualizer_->publishEkfState(pose_msg);
+    visualizer_->publishEstimatedState(pose_msg);
 
     nav_msgs::Odometry odom_msg;
     odom_msg.header = pose_msg.header;
-    odom_msg.child_frame_id = "Fr1A";
+    odom_msg.child_frame_id = prediction_frame_;
     odom_msg.pose = pose_msg.pose;
     odom_msg.twist.twist.linear.x = x(VX);
     odom_msg.twist.twist.linear.y = x(VY);
     odom_msg.twist.twist.angular.z = x(PSIDOT);
     odom_pub_.publish(odom_msg);
+
+    // 3. Broadcast TF: global -> prediction (To isolate prediction from GT)
+    geometry_msgs::TransformStamped tf_msg;
+    tf_msg.header.stamp = stamp;
+    tf_msg.header.frame_id = global_frame_;
+    tf_msg.child_frame_id = prediction_frame_;
+    tf_msg.transform.translation.x = x(X);
+    tf_msg.transform.translation.y = x(Y);
+    tf_msg.transform.translation.z = 0.0;
+    tf_msg.transform.rotation = pose_msg.pose.pose.orientation;
+    tf_broadcaster_->sendTransform(tf_msg);
 }
 
 void LocalizationNodelet::imagesCallback(
@@ -389,6 +410,7 @@ void LocalizationNodelet::imagesCallback(
 
         if (!features.features.empty()) {
             ch.feature_pub.publish(features);
+            features.header.frame_id = prediction_frame_;
             visualizer_->publishFeatures(features);
             ch.processed_count++;
 
@@ -420,18 +442,18 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         if (match_result.success) {
             Eigen::Vector3d z;
             z << match_result.transform.translation().x(),
-                 match_result.transform.translation().y(),
-                 Eigen::Rotation2Dd(match_result.transform.linear()).angle();
+                    match_result.transform.translation().y(),
+                    Eigen::Rotation2Dd(match_result.transform.linear()).angle();
 
             double img_timestamp = features.header.stamp.toSec();
             {
                 std::lock_guard<std::mutex> lock(ekf_mutex_);
-                ekf_core_->updateVision(img_timestamp, z, match_result.covariance);
+                ekf_core_->correction(img_timestamp, z, match_result.covariance);
             }
 
             geometry_msgs::PoseWithCovarianceStamped correction_msg;
             correction_msg.header.stamp = features.header.stamp;
-            correction_msg.header.frame_id = "map";
+            correction_msg.header.frame_id = global_frame_;
             correction_msg.pose.pose.position.x = z(0);
             correction_msg.pose.pose.position.y = z(1);
             tf2::Quaternion q;
@@ -445,7 +467,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
                 }
             }
             map_correction_pub_.publish(correction_msg);
-            visualizer_->publishMapCorrection(correction_msg);
+            visualizer_->publishCorrectionState(correction_msg);
         }
     }
 }

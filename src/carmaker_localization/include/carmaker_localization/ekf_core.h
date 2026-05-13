@@ -46,7 +46,7 @@ public:
      * @param dt Time step
      * @param u Input [ax, ay, wz, v_rl, v_rr, steer]
      */
-    void predict(double dt, const Eigen::Matrix<double, 6, 1>& u);
+    void prediction(double dt, const Eigen::Matrix<double, 6, 1>& u);
 
     void setParameters(double tire_radius, double slip_threshold, double wheel_speed_std, const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& Q, 
                         double rear_axle_offset_x = 0.5, double imu_offset_x = 1.35, double imu_offset_y = 0.0, double imu_offset_z = 0.5) {
@@ -67,9 +67,9 @@ public:
     /**
      * @brief Update step using Absolute Pose from MapMatcher
      */
-    void updateVision(double timestamp,
-                        const Eigen::Vector3d& z,
-                        const Eigen::Matrix3d& R);
+    void correction(double timestamp,
+                    const Eigen::Vector3d& z,
+                    const Eigen::Matrix3d& R);
 
     // Getters
     Eigen::Matrix<double, STATE_DIM, 1> getState() const { return x_; }
