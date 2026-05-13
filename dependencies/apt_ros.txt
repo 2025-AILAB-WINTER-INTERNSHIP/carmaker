@@ -32,3 +32,6 @@ python3-catkin-tools # ros1
 # =============================================================================
 # Add extra project-specific packages here.
 # Example: ros-${ROS_DISTRO}-pcl-ros # runtime
+ros-${ROS_DISTRO}-foxglove-bridge # runtime
+ros-${ROS_DISTRO}-pcl-ros # runtime
+ros-${ROS_DISTRO}-pcl-conversions # runtime
