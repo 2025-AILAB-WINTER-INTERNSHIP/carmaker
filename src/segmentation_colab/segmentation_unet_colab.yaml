@@ -9,10 +9,9 @@ manifest: /content/drive/MyDrive/carmaker_segmentation/data/csv/manifest.csv
 cameras: front,left,rear,right
 use_raw_post_processed: false
 
-# 1920x1080 is supported, but many free Colab GPUs run out of memory at that
-# size. Start with 960x540, then increase if GPU memory allows.
-image_size: [960, 540]
-num_workers: 2
+# Original CarMaker image size. This matches the local training config.
+image_size: [1920, 1080]
+num_workers: 4
 batch_size: 1
 val_ratio: 0.2
 test_ratio: 0.1
@@ -38,4 +37,5 @@ image_log_interval: 1
 # TensorBoard debug grids use one tag per split. Inside each grid, camera
 # samples are arranged by column, so 8 means up to 8 rows per camera.
 debug_image_count: 8
+# Base directory. train.py creates a {loss}_ep{epochs}_{timestamp} subfolder.
 run_dir: /content/drive/MyDrive/carmaker_segmentation/runs

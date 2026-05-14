@@ -15,6 +15,7 @@ import atexit
 import importlib.util
 import json
 import random
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -596,17 +597,27 @@ def _resolve_run_dir(cfg: Dict[str, Any], explicit_run_dir: bool = False) -> Pat
     """실험별 run directory를 결정한다.
 
     --run-dir를 직접 주면 해당 폴더를 그대로 사용한다.
-    config의 run_dir는 base directory로 보고, 그 아래 timestamp/model/loss 기반 폴더를 자동 생성한다.
+    config의 run_dir는 base directory로 보고, 그 아래 {loss}_ep{epochs}_{timestamp} 폴더를 자동 생성한다.
     """
     base_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs")).expanduser().resolve()
     if explicit_run_dir:
         base_dir.mkdir(parents=True, exist_ok=True)
         return base_dir
 
+    loss_name = _run_name_part(str(cfg.get("loss", "loss")))
+    epochs = int(cfg.get("epochs", 30))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = base_dir / timestamp
+    run_dir = base_dir / f"{loss_name}_ep{epochs}_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=False)
     return run_dir
+
+
+def _run_name_part(value: str) -> str:
+    """Make a config value safe and readable as one path segment."""
+    value = value.strip().lower()
+    value = re.sub(r"\s+", "-", value)
+    value = re.sub(r"[^a-z0-9_.+-]+", "-", value)
+    return value.strip("-") or "unknown"
 
 
 def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: torch.device) -> None:

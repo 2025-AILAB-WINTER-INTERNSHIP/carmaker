@@ -274,10 +274,13 @@ python3 src/segmentation/train.py \
   --run-dir src/segmentation/runs/unet_raw_seed42_exp01
 ```
 
+`--run-dir`를 직접 지정하지 않으면 config의 `run_dir`를 base directory로 사용하고,
+그 아래에 `{loss}_ep{epochs}_{timestamp}` 형식의 run directory를 자동 생성한다.
+
 결과:
 
 ```text
-src/segmentation/runs/unet_carmaker/
+src/segmentation/runs/focal_ep16_20260514_175830/
   checkpoints/
     best.pt
     last.pt
@@ -440,13 +443,14 @@ TensorBoard 로그는 `run_dir` 아래에 저장된다.
 config:
 
 ```yaml
-run_dir: ../runs/unet_carmaker
+run_dir: ../runs
 ```
 
-일반적으로 다음 위치에 event 파일이 생긴다.
+`--run-dir`를 직접 지정하지 않으면 `train.py`가 `{loss}_ep{epochs}_{timestamp}` 형식의
+하위 폴더를 만들고, 그 안에 event 파일을 저장한다.
 
 ```text
-src/segmentation/runs/unet_carmaker/events.out.tfevents...
+src/segmentation/runs/focal_ep16_20260514_175830/events.out.tfevents...
 ```
 
 학습이 끝난 뒤에도 TensorBoard를 다시 실행하면 과거 로그를 볼 수 있다.
