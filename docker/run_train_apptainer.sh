@@ -1,0 +1,44 @@
+#!/bin/bash
+#SBATCH --job-name=carmaker_unet
+#SBATCH --partition=partition-3090-intel
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=00:30:00
+#SBATCH --output=/home/ailab/AILabSSD/99_Management/slurm-logs/%x_%j.out
+#SBATCH --error=/home/ailab/AILabSSD/99_Management/slurm-logs/%x_%j.err
+#SBATCH --comment=leehwansoo
+
+set -euo pipefail
+
+# Path Configurations
+SIF_IMAGE="/home/ailab/AILabSSD/01_SlurmWorkspace/2026-intern-unet.sif"
+HOST_WORKSPACE="/home/ailab/AILabSSD/04_Shared_Repository/2026-intern/carmaker"
+HOST_REAL_DATA_ROOT=$(readlink -f /home/ailab/AILabSSD/04_Shared_Repository/2026-intern/dataset)
+HOST_RUN_ROOT="/home/ailab/AILabSSD/99_Management/tb_runs/2026-intern/"
+
+# Internal Container Paths
+CONTAINER_DATA_ROOT="/workspace/src/carmaker_image/data"
+
+[ -f "${SIF_IMAGE}" ] || { echo "SIF not found: ${SIF_IMAGE}"; exit 1; }
+
+echo "Starting Apptainer Training Container..."
+echo " - SIF: ${SIF_IMAGE}"
+echo " - Data: ${HOST_REAL_DATA_ROOT} -> ${CONTAINER_DATA_ROOT}"
+echo " - Runs: ${HOST_RUN_ROOT} -> /runs"
+
+# Execution
+apptainer exec --nv \
+    --bind ${HOST_WORKSPACE}:/workspace \
+    --bind ${HOST_REAL_DATA_ROOT}:${CONTAINER_DATA_ROOT}:ro \
+    --bind ${HOST_RUN_ROOT}:/runs \
+    ${SIF_IMAGE} \
+    python3 /workspace/src/segmentation/train.py \
+    --config /workspace/src/segmentation/config/segmentation_unet.yaml \
+    --data-root ${CONTAINER_DATA_ROOT} \
+    --manifest /workspace/src/carmaker_image/data/csv/manifest.csv \
+    --run-dir /runs \
+    --tensorboard \
+    --tensorboard-host 0.0.0.0 \
+    --tensorboard-port 6006

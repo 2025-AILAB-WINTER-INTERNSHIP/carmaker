@@ -1,0 +1,22 @@
+# 1. Base Image: CUDA 12.1 + cuDNN 8 + Ubuntu 20.04
+FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu20.04
+
+# 기본 시스템 패키지 설치
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git wget ca-certificates build-essential \
+    python3-pip python3-setuptools python3-dev \
+    libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1 \
+    libjpeg-turbo8 fontconfig \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --upgrade pip setuptools wheel
+RUN python3 -m pip install --no-cache-dir 'typing-extensions==4.4.0'
+
+# 2. 학습용 Python 패키지 설치
+RUN python3 -m pip install --no-cache-dir \
+    torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+RUN python3 -m pip install --no-cache-dir \
+    opencv-python matplotlib tensorboard pyyaml tqdm numpy
+
+WORKDIR /workspace
