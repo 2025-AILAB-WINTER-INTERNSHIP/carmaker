@@ -30,4 +30,5 @@ catkin_package(
   CATKIN_DEPENDS
   message_runtime
   std_msgs
+  sensor_msgs
 )

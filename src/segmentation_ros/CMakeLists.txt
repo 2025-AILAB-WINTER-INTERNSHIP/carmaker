@@ -5,9 +5,16 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   sensor_msgs
   cv_bridge
+  carmaker_msgs
 )
 
-catkin_package()
+catkin_package(
+  CATKIN_DEPENDS
+  rospy
+  sensor_msgs
+  cv_bridge
+  carmaker_msgs
+)
 
 catkin_install_python(PROGRAMS
   scripts/segmentation_inference_node.py

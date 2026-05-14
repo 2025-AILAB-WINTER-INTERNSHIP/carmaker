@@ -8,6 +8,21 @@ config_path: ""
 
 device: ""
 image_size: ""
+
+# ROS I/O mode.
+#
+# bundle:
+#   Subscribe to carmaker_msgs/CameraBundle from the image synchronizer.
+#   Publish another CameraBundle with the same header/names/infos, but with images
+#   replaced by mono8 segmentation class maps.
+#
+# image:
+#   Subscribe to one sensor_msgs/Image and publish one mono8 sensor_msgs/Image class map.
+input_mode: "bundle"
+
+bundle_topic: "/synced/bundle"
+class_map_bundle_topic: "/segmentation/class_map_bundle"
+
 image_topic: "/camera/image_raw"
 class_map_topic: "/segmentation/class_map"
 
