@@ -18,6 +18,13 @@ void ImageSynchronizerNodelet::onInit() {
     pnh_.param<double>("settings/sync_slop_sec", slop, 0.05);
     pnh_.param<double>("settings/info_timeout_sec", info_timeout_, 2.0);
     pnh_.param<std::string>("settings/master_channel", master_name, "front");
+    pnh_.param<bool>("settings/use_bundle", use_bundle_, false);
+
+    if (use_bundle_) {
+        std::string bundle_topic = pnh_.param<std::string>("settings/bundle_topic", "/synced/bundle");
+        bundle_pub_ = nh_.advertise<carmaker_msgs::CameraBundle>(bundle_topic, 1);
+        NODELET_INFO("Bundle Output Enabled: %s", bundle_topic.c_str());
+    }
 
     // 2. Setup Diagnostics
     diagnostic_updater_.setHardwareID("carmaker_image_sync");
@@ -67,8 +74,10 @@ void ImageSynchronizerNodelet::onInit() {
                 channels_[i].last_info_time = ros::Time::now();
             });
 
-        ch.img_pub  = nh_.advertise<sensor_msgs::Image>(out_img, 1);
-        ch.info_pub = nh_.advertise<sensor_msgs::CameraInfo>(out_info, 1);
+        if (!use_bundle_) {
+            ch.img_pub  = nh_.advertise<sensor_msgs::Image>(out_img, 1);
+            ch.info_pub = nh_.advertise<sensor_msgs::CameraInfo>(out_info, 1);
+        }
 
         if (ch.name == master_name) master_index_ = i;
         NODELET_INFO("Configured Channel [%s]: %s -> %s", ch.name.c_str(), in_img.c_str(), out_img.c_str());
@@ -118,8 +127,43 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
         }
     }
 
-    for (size_t i = 0; i < images.size(); ++i) {
-        publishWithSync(i, images[i], sync_time);
+    // 4. Output Selection
+    if (use_bundle_) {
+        carmaker_msgs::CameraBundle bundle;
+        bundle.header.stamp = sync_time;
+        bundle.header.frame_id = images[master_index_]->header.frame_id;
+        bundle.names.reserve(images.size());
+        bundle.images.reserve(images.size());
+        bundle.infos.reserve(images.size());
+
+        for (size_t i = 0; i < images.size(); ++i) {
+            // Add Name
+            bundle.names.push_back(channels_[i].name);
+
+            // Add Image
+            auto synced_img = boost::make_shared<sensor_msgs::Image>(*images[i]);
+            synced_img->header.stamp = sync_time;
+            bundle.images.push_back(*synced_img);
+
+            // Add CameraInfo
+            std::lock_guard<std::mutex> lock(info_mutex_);
+            if (channels_[i].has_info && (ros::Time::now() - channels_[i].last_info_time).toSec() < info_timeout_) {
+                auto info = channels_[i].last_info;
+                info.header.stamp = sync_time;
+                bundle.infos.push_back(info);
+            } else {
+                bundle.infos.emplace_back(); // Empty if missing or stale
+                if (channels_[i].has_info) {
+                    NODELET_WARN_THROTTLE(10.0, "[%s] CameraInfo stale (>%.1fs), bundling empty info.", channels_[i].name.c_str(), info_timeout_);
+                }
+            }
+        }
+        bundle_pub_.publish(bundle);
+    } else {
+        // Publish individual topics as before
+        for (size_t i = 0; i < images.size(); ++i) {
+            publishWithSync(i, images[i], sync_time);
+        }
     }
 }
 

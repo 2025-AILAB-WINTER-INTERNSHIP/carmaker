@@ -9,6 +9,7 @@
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <diagnostic_updater/diagnostic_updater.h>
+#include <carmaker_msgs/CameraBundle.h>
 
 #include <mutex>
 #include <vector>
@@ -80,6 +81,7 @@ private:
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
     ros::Timer diag_timer_;
+    ros::Publisher bundle_pub_;
 
     // Channels, Data
     std::vector<CameraChannel> channels_;
@@ -93,6 +95,7 @@ private:
     // Advanced Settings
     size_t master_index_ = 0;
     double info_timeout_ = 2.0;
+    bool use_bundle_ = false;
 
     // Diagnostics
     diagnostic_updater::Updater diagnostic_updater_;

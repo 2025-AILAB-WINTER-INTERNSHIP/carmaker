@@ -17,6 +17,7 @@ add_message_files(
   ObjectState.msg
   Objects.msg
   UAQ_Out.msg
+  CameraBundle.msg
 )
 
 generate_messages(

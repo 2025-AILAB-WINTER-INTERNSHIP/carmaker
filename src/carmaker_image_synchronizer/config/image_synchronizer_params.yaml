@@ -9,6 +9,8 @@ settings:
   info_timeout_sec: 2.0     # Max age for cached CameraInfo
   sync_slop_sec: 0.05       # Max time difference between images
   queue_size: 10            # Message filter queue size
+  use_bundle: true          # Toggle for gathering all images into a single topic
+  bundle_topic: "/synced/bundle" # Topic name for the gathered bundle
 
 # Channel Definition & Mapping
 channels:
