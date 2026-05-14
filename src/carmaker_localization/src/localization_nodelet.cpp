@@ -27,16 +27,27 @@ void LocalizationNodelet::onInit() {
 
     double buffer_duration = pnh.param("ekf/state_buffer_duration", 0.5);
     ekf_core_ = std::make_shared<EkfCore>(buffer_duration);
-    double tire_radius = pnh.param("vehicle/tire_radius", 0.31);
+    double tire_radius = pnh.param("vehicle/tire_radius", 0.327);
     double slip_thresh = pnh.param("ekf/wheel_noise/slip_threshold", 0.5);
     double wheel_std = pnh.param("ekf/wheel_noise/speed_std", 0.05);
 
+    imu_id_ = pnh.param("ekf/imu/imu_id", 0);
+    double imu_x = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_x", 2.29); // Usually same as cg_offset_x
+    double imu_y = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_y", 0.0);
+    double imu_z = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_z", 0.298);
+
+    double rear_axle_x = pnh.param("vehicle/rear_axle_offset_x", 0.79);
+    double wheelbase = pnh.param("vehicle/wheelbase", 3.0);
+    double track_width = pnh.param("vehicle/track_width", 1.655);
+
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 1e-4;
-    Q(VX, VX) = std::pow(pnh.param("ekf/imu_noise/acc_std", 0.1), 2);
+    Q(VX, VX) = std::pow(pnh.param("ekf/imu/acc_std", 0.1), 2);
     Q(VY, VY) = Q(VX, VX);
-    Q(PSIDOT, PSIDOT) = std::pow(pnh.param("ekf/imu_noise/gyro_std", 0.01), 2);
-    ekf_core_->setParameters(tire_radius, slip_thresh, wheel_std, Q);
+    Q(PSIDOT, PSIDOT) = std::pow(pnh.param("ekf/imu/gyro_std", 0.01), 2);
+    ekf_core_->setParameters(tire_radius, slip_thresh, wheel_std, Q, wheelbase, track_width, rear_axle_x, imu_x, imu_y, imu_z);
     ekf_core_->setDivergenceThreshold(pnh.param("ekf/divergence_threshold", 100.0));
+
+    NODELET_INFO("Selected IMU: %d (offset_x: %.2f)", imu_id_, imu_x);
 
     // Initial State Configuration (Array: [x, y, yaw_deg])
     XmlRpc::XmlRpcValue init_state_val;
@@ -56,7 +67,6 @@ void LocalizationNodelet::onInit() {
 
     std::string topic_pose = pnh.param("topics/publish/pose", std::string("/localization/pose"));
     std::string topic_odom = pnh.param("topics/publish/odom", std::string("/localization/odom"));
-    std::string topic_map_correction = pnh.param("topics/publish/map_correction", std::string("/localization/map_correction"));
     std::string topic_dynamics = pnh.param("topics/subscribe/dynamics", std::string("/dynamics_info"));
 
     dynamics_sub_ = nh.subscribe(topic_dynamics, 100, &LocalizationNodelet::dynamicsCallback, this);
@@ -64,7 +74,7 @@ void LocalizationNodelet::onInit() {
     pose_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_pose, 10);
 
     double ekf_freq = pnh.param("ekf/frequency", 100.0);
-    ekf_timer_ = nh.createTimer(ros::Duration(1.0 / ekf_freq), &LocalizationNodelet::ekfTimerCallback, this);
+    prediction_timer_ = nh.createTimer(ros::Duration(1.0 / ekf_freq), &LocalizationNodelet::predictionCallback, this);
 
     std::string map_type = pnh.param("map_matcher/map_format", std::string("osm"));
     std::string map_file = pnh.param("map_matcher/map_file", std::string(""));
@@ -92,7 +102,10 @@ void LocalizationNodelet::onInit() {
         matcher_ = std::make_shared<IcpMatcher>(fitness_threshold, max_iterations, vision_base_std);
     }
 
-    map_correction_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_map_correction, 10);
+    std::string topic_estimation_data = pnh.param("topics/publish/data/estimation_pose", std::string("/localization/data/estimation_pose"));
+    std::string topic_correction_data = pnh.param("topics/publish/data/correction_pose", std::string("/localization/data/correction_pose"));
+    estimation_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_estimation_data, 10);
+    correction_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_correction_data, 10);
 
     // SVM Canvas Bounds
     svm_x_min_ = 1e9; svm_x_max_ = -1e9;
@@ -124,8 +137,8 @@ void LocalizationNodelet::onInit() {
     int svm_w = std::ceil((svm_y_max_ - svm_y_min_) / svm_res_);
     svm_canvas_ = cv::Mat::zeros(svm_h, svm_w, CV_8UC3);
 
-    double v_front = pnh.param("vehicle/front_edge", 4.68);
-    double v_rear = pnh.param("vehicle/rear_edge", 0.0);
+    double v_front = pnh.param("vehicle/length", 4.635);
+    double v_rear = 0;
     double front_off = pnh.param("svm/seam_front_offset", -0.5);
     double rear_off = pnh.param("svm/seam_rear_offset", 0.5);
     double slope_front = pnh.param("svm/seam_slope_front", 1.0);
@@ -200,10 +213,6 @@ void LocalizationNodelet::onInit() {
             ch.bev_x_range = x_range;
             ch.bev_y_range = y_range;
 
-            ros::NodeHandle pnh("~");
-            std::string features_prefix = pnh.param("topics/publish/features_prefix", std::string("/localization/features"));
-            ch.feature_pub = nh.advertise<carmaker_msgs::LocalFeatures>(features_prefix + "/" + ch.name, 10);
-
             seg_subs_[i] = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh, input_topic, 5);
             info_subs_[i] = nh.subscribe<sensor_msgs::CameraInfo>(info_topic, 1, boost::bind(&LocalizationNodelet::infoCallback, this, _1, i));
 
@@ -226,22 +235,19 @@ void LocalizationNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoCons
     std::lock_guard<std::mutex> lock(dyn_mutex_);
     latest_dynamics_ = *msg;
     dynamics_received_ = true;
-
-    // Publish GT trajectory for debugging
-    visualizer_->publishGtPose(*msg);
 }
 
-void LocalizationNodelet::ekfTimerCallback(const ros::TimerEvent& event) {
+void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     std::lock_guard<std::mutex> dyn_lock(dyn_mutex_);
     if (!dynamics_received_) return;
 
-    std::lock_guard<std::mutex> ekf_lock(ekf_mutex_);
+    std::lock_guard<std::mutex> estimation_lock(estimation_mutex_);
 
     double current_time = event.current_real.toSec();
     if (current_time == 0.0) current_time = ros::Time::now().toSec();
 
-    if (last_ekf_time_ <= 0.0) {
-        last_ekf_time_ = current_time;
+    if (last_prediction_time_ <= 0.0) {
+        last_prediction_time_ = current_time;
         Eigen::Matrix<double, STATE_DIM, 1> x0 = Eigen::Matrix<double, STATE_DIM, 1>::Zero();
 
         if (use_manual_initial_state_) {
@@ -265,30 +271,48 @@ void LocalizationNodelet::ekfTimerCallback(const ros::TimerEvent& event) {
         return;
     }
 
-    double dt = current_time - last_ekf_time_;
+    double dt = current_time - last_prediction_time_;
     if (dt < 0.0 || dt > 1.0) {
         NODELET_WARN("Time jump detected (dt: %.3f). Resetting EKF...", dt);
-        last_ekf_time_ = 0.0;
+        last_prediction_time_ = 0.0;
         return;
     }
 
     if (dt == 0.0) return;
 
-    Eigen::Matrix<double, 6, 1> u;
-    u << latest_dynamics_.Sensor_Inertial_0_Acc_B_x,
-            latest_dynamics_.Sensor_Inertial_0_Acc_B_y,
-            latest_dynamics_.Sensor_Inertial_0_Omega_B_z,
-            latest_dynamics_.Vhcl_RL_rotv,
-            latest_dynamics_.Vhcl_RR_rotv,
-            latest_dynamics_.Steer_WhlAng;
+    // 1. EKF Prediction (Constant Acceleration)
+    ekf_core_->prediction(timestamp);
 
-    ekf_core_->prediction(dt, u);
-    last_ekf_time_ = current_time;
+    // 2. IMU Observation Correction
+    // Correcting [ax, ay, yaw_rate]
+    Eigen::Matrix3d R_imu = Eigen::Matrix3d::Identity();
+    R_imu(0, 0) = std::pow(pnh.param("ekf/imu/acc_std", 0.1), 2);
+    R_imu(1, 1) = R_imu(0, 0);
+    R_imu(2, 2) = std::pow(pnh.param("ekf/imu/gyro_std", 0.01), 2);
 
-    publishEstimatedState(ros::Time(current_time));
+    ekf_core_->correctImu(latest_dynamics_.Sensor_Inertial_0_Acc_B_x,
+                          latest_dynamics_.Sensor_Inertial_0_Acc_B_y,
+                          latest_dynamics_.Sensor_Inertial_0_Omega_B_z,
+                          R_imu, timestamp);
+
+    // 3. Wheel Speed Observation Correction
+    // Simple differential drive model for vx, assuming vy = 0 (non-holonomic)
+    double v_left = latest_dynamics_.Vhcl_RL_rotv * tire_radius_;
+    double v_right = latest_dynamics_.Vhcl_RR_rotv * tire_radius_;
+    double vx_wheel = (v_left + v_right) / 2.0;
+    
+    Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
+    R_wheel(0, 0) = std::pow(pnh.param("ekf/wheel_noise/speed_std", 0.05), 2);
+    R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint (vy ~ 0)
+
+    ekf_core_->correctVelocity(vx_wheel, 0.0, R_wheel, timestamp);
+
+    // 4. Publish Final Estimation
+    publishEstimation(ros::Time(current_time));
+    last_prediction_time_ = current_time;
 }
 
-void LocalizationNodelet::publishEstimatedState(const ros::Time& stamp) {
+void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     auto x = ekf_core_->getState();
     auto P = ekf_core_->getCovariance();
 
@@ -314,7 +338,8 @@ void LocalizationNodelet::publishEstimatedState(const ros::Time& stamp) {
     pose_msg.header.frame_id = global_frame_;
 
     pose_pub_.publish(pose_msg);
-    visualizer_->publishEstimatedState(pose_msg);
+    estimation_data_pub_.publish(pose_msg);
+    visualizer_->publishEstimation(pose_msg);
 
     nav_msgs::Odometry odom_msg;
     odom_msg.header = pose_msg.header;
@@ -409,9 +434,16 @@ void LocalizationNodelet::imagesCallback(
         }
 
         if (!features.features.empty()) {
-            ch.feature_pub.publish(features);
+            // Publish for Data Analysis
+            if (feature_data_pubs_.find(ch.name) == feature_data_pubs_.end()) {
+                ros::NodeHandle pnh("~");
+                std::string prefix = pnh.param("topics/publish/data/features_prefix", std::string("/localization/data/features"));
+                feature_data_pubs_[ch.name] = nh.advertise<carmaker_msgs::LocalFeatures>(prefix + "/" + ch.name, 10);
+            }
+            feature_data_pubs_[ch.name].publish(features);
+
             features.header.frame_id = prediction_frame_;
-            visualizer_->publishFeatures(features);
+            visualizer_->publishObservation(ch.name, features);
             ch.processed_count++;
 
             if (fusion_) {
@@ -445,12 +477,11 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
                     match_result.transform.translation().y(),
                     Eigen::Rotation2Dd(match_result.transform.linear()).angle();
 
-            double img_timestamp = features.header.stamp.toSec();
-            {
-                std::lock_guard<std::mutex> lock(ekf_mutex_);
-                ekf_core_->correction(img_timestamp, z, match_result.covariance);
-            }
+            // 5. EKF Correction (Vision/Map)
+            Eigen::Matrix3d R_map = match_result.covariance;
+            ekf_core_->correctPose(z(0), z(1), z(2), R_map, features.header.stamp.toSec());
 
+            // 6. Final Logging and Debug Visualization
             geometry_msgs::PoseWithCovarianceStamped correction_msg;
             correction_msg.header.stamp = features.header.stamp;
             correction_msg.header.frame_id = global_frame_;
@@ -466,8 +497,8 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
                     correction_msg.pose.covariance[idx] = match_result.covariance(r, c);
                 }
             }
-            map_correction_pub_.publish(correction_msg);
-            visualizer_->publishCorrectionState(correction_msg);
+            correction_data_pub_.publish(correction_msg);
+            visualizer_->publishCorrection(correction_msg);
         }
     }
 }

@@ -1,21 +1,40 @@
-# CarMaker Vehicle Parameters (Placeholder)
+# CarMaker Vehicle Parameters
 # These values should be updated to match the specific vehicle model used in CarMaker.
 
 vehicle:
+  # Vehicle Dimensions (Relative to Fr1A)
+  width: 1.9                    # [m] - Width of the vehicle
+  length: 4.635                 # [m] - Length of the vehicle
+  height: 1.605                 # [m] - Height of the vehicle
+
   # Vehicle Kinematics
-  tire_radius: 0.31            # [m] - Effective tire radius
-  wheelbase: 2.7               # [m] - Distance between front and rear axles
-  track_width: 1.6             # [m] - Distance between left and right wheels
-  steering_ratio: 15.0         # [-] - Ratio between steering wheel angle and tire angle
+  rear_axle_offset_x: 0.79      # [m] - Rear axle X offset from Fr1A
+  center_offset_x: 2.3175       # [m] - Geometric center for visualization from Fr1A (length/2)
+  cg_offset_x: 2.29             # [m] - Center of Gravity from Fr1A
+  front_axle_offset_x: 3.79     # [m] - Front axle X offset from Fr1A
+
+  # 축간거리: 앞바퀴 축과 뒷바퀴 축 사이의 거리
+  wheelbase: 3.0                # [m] - Distance between front and rear axles
+
+  # 윤거(타이어 중심 간 거리): 차량 너비 - 타이어 폭
+  # - 1.9m (너비) - 0.245m (타이어 폭) = 1.655m
+  track_width: 1.655            # [m] - Distance between left and right wheels
+
+  # 타이어 계산 (RT 245/35R19)
+  # - 단면폭 (Width): 245 mm = 0.245 m
+  # - 편평비 (Aspect Ratio): 35% (0.35)
+  # - 사이드월 높이 (Sidewall): 245 * 0.35 = 85.75 mm = 0.08575 m
+  # - 휠 직경 (Rim Diameter): 19 inch = 19 * 25.4 mm = 482.6 mm = 0.4826 m
+  # - 전체 직경 (Total Diameter): (사이드월 * 2) + 휠 직경 = 654.1 mm (0.6541 m)
+  # - 타이어 반지름 (Radius): 654.1 / 2 = 327.05 mm (약 0.327 m)
+  tire_radius: 0.327            # [m] - Effective rolling radius
 
   # Sensor Extrinsics (Relative to Fr1A / rear bumper center at z=0)
-  rear_axle_offset_x: 0.5      # [m] - Rear axle X offset from Fr1A
-  imu_offset_x: 1.35           # [m] - IMU X offset from Fr1A
-  imu_offset_y: 0.0            # [m] - IMU Y offset from Fr1A
-  imu_offset_z: 0.5            # [m] - IMU Z offset from Fr1A
-
-  # Vehicle Dimensions (Relative to Fr1A)
-  front_edge: 4.68             # [m] - Front edge of the vehicle from Fr1A
-  rear_edge: 0.0               # [m] - Rear edge of the vehicle from Fr1A
-  width: 1.8                   # [m] - Width of the vehicle
-  length: 4.8                  # [m] - Length of the vehicle
+  imu_0:
+    offset_x: 2.29
+    offset_y: 0.0
+    offset_z: 0.298
+  imu_1:
+    offset_x: 3.79
+    offset_y: 0.0
+    offset_z: 0.298

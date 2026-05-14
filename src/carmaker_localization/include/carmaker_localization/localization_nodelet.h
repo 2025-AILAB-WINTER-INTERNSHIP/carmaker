@@ -33,8 +33,6 @@ struct Channel {
     std::vector<double> bev_x_range;
     std::vector<double> bev_y_range;
 
-    ros::Publisher feature_pub;
-
     std::atomic<uint64_t> processed_count{0};
 
     Channel() = default;
@@ -47,7 +45,6 @@ struct Channel {
         lut_initialized(other.lut_initialized),
         bev_x_range(std::move(other.bev_x_range)),
         bev_y_range(std::move(other.bev_y_range)),
-        feature_pub(std::move(other.feature_pub)),
         processed_count(other.processed_count.load()) {}
 };
 
@@ -60,8 +57,8 @@ private:
     virtual void onInit() override;
 
     void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
-    void ekfTimerCallback(const ros::TimerEvent& event);
-    void publishEstimatedState(const ros::Time& stamp);
+    void predictionCallback(const ros::TimerEvent& event);
+    void publishEstimation(const ros::Time& stamp);
     void imagesCallback(
         const sensor_msgs::ImageConstPtr& img0,
         const sensor_msgs::ImageConstPtr& img1,
@@ -92,16 +89,23 @@ private:
     ros::Subscriber dynamics_sub_;
     ros::Publisher odom_pub_;
     ros::Publisher pose_pub_;
-    ros::Timer ekf_timer_;
-    double last_ekf_time_ = 0.0;
-    std::mutex ekf_mutex_;
+    ros::Timer prediction_timer_;
+    double last_prediction_time_ = 0.0;
+    std::mutex estimation_mutex_;
     std::mutex dyn_mutex_;
     carmaker_msgs::DynamicsInfo latest_dynamics_;
     bool dynamics_received_ = false;
+    std::string global_frame_, prediction_frame_;
+
+    int imu_id_ = 0;
+    struct ImuOffset { double x, y, z; };
+    std::map<int, ImuOffset> imu_offsets_;
 
     std::shared_ptr<MapLoaderBase> map_loader_;
     std::shared_ptr<MatcherBase> matcher_;
-    ros::Publisher map_correction_pub_;
+    ros::Publisher estimation_data_pub_;
+    ros::Publisher correction_data_pub_;
+    std::map<std::string, ros::Publisher> feature_data_pubs_;
     double search_radius_ = 20.0;
 
     cv::Mat svm_canvas_;
@@ -115,8 +119,6 @@ private:
 
     bool use_manual_initial_state_ = false;
     double init_x_ = 0.0, init_y_ = 0.0, init_yaw_ = 0.0;
-    std::string global_frame_;
-    std::string prediction_frame_;
 };
 
 } // namespace carmaker_localization

@@ -2,15 +2,16 @@ topics:
   publish:
     pose: "/localization/pose"
     odom: "/localization/odom"
-    map_correction: "/localization/map_correction"
-    features_prefix: "/localization/features"
+    data:
+      estimation_pose: "/localization/data/estimation_pose"
+      correction_pose: "/localization/data/correction_pose"
+      features_prefix: "/localization/data/features"
     debug:
       svm_image: "/localization/debug/svm_image"
-      points_overlay: "/localization/debug/points_overlay"
-      estimated_markers: "/localization/debug/estimated_markers"
-      observed_markers: "/localization/debug/observed_markers"
-      gt_trajectory: "/localization/debug/gt_trajectory"
-      pred_trajectory: "/localization/debug/pred_trajectory"
+      observation_prefix: "/localization/debug/observation"
+      estimation_markers: "/localization/debug/estimation_markers"
+      correction_markers: "/localization/debug/correction_markers"
+      estimation_trajectory: "/localization/debug/estimation_trajectory"
   subscribe:
     dynamics: "/dynamics_info"
 
@@ -70,9 +71,10 @@ ekf:
 
   initial_state: ~              # 초기 상태 설정: [x(m), y(m), yaw(deg)]. GT 사용 시 ~ (null)
 
-  imu_noise:
-    acc_std: 0.1                # imu_noise : imu의 노이즈 [m/s^2]
-    gyro_std: 0.01              # gyro_std : gyro의 노이즈 [rad/s]
+  imu:
+    imu_id: 0                   # 0 또는 1 선택 (0: 차량 중심, 1: 차량 앞 바퀴 축)
+    acc_std: 0.1                # acc_std : 가속도 노이즈 [m/s^2]
+    gyro_std: 0.01              # gyro_std : 자이로 노이즈 [rad/s]
   wheel_noise:
     speed_std: 0.05             # speed_std : encoder 노이즈 [m/s]
     slip_threshold: 0.5         # slip_threshold : 휠 슬립 임계값 [%]
