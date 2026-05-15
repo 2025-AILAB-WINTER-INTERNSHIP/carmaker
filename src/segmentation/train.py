@@ -157,6 +157,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         # Multi-GPU 환경에서 Confusion Matrix 동기화를 위해 버퍼로 관리할 수 있으나,
         # Lightning에서는 validation_step_outputs를 모아서 처리하는 것이 일반적이다.
         self.validation_step_outputs = []
+        self.test_step_outputs = []
 
     def forward(self, x):
         return self.model(x)
@@ -204,6 +205,66 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             batch_size=image.shape[0],
         )
         return output
+
+    def test_step(self, batch, batch_idx):
+        image = batch["image"]
+        mask = batch["mask"]
+        logits = self(image)
+        loss = self.criterion(logits, mask)
+
+        pred = torch.argmax(logits, dim=1)
+        matrix = confusion_matrix(pred, mask, self.num_classes).to(self.device)
+        psnr = mask_psnr(pred, mask, max_value=float(self.num_classes - 1))
+
+        output = {
+            "test_loss": loss,
+            "matrix": matrix,
+            "psnr": psnr,
+        }
+        self.test_step_outputs.append(output)
+
+        self.log(
+            "test/loss",
+            loss,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=image.shape[0],
+        )
+        return output
+
+    def on_test_epoch_end(self):
+        if not self.test_step_outputs:
+            return
+
+        all_matrices = torch.stack([x["matrix"] for x in self.test_step_outputs])
+        total_matrix = torch.sum(all_matrices, dim=0)
+
+        if self.trainer.world_size > 1:
+            total_matrix = self.all_gather(total_matrix).sum(dim=0)
+
+        scores = segmentation_scores(total_matrix.cpu())
+
+        # Log metrics (do not sync here; already aggregated)
+        self.log("test/miou", scores["miou"], prog_bar=True, sync_dist=False)
+        self.log("test/dice", scores["dice"], prog_bar=True, sync_dist=False)
+
+        psnrs = [x["psnr"] for x in self.test_step_outputs if np.isfinite(x["psnr"])]
+        if psnrs:
+            avg_psnr = torch.tensor(psnrs).mean()
+            self.log("test/psnr", avg_psnr, sync_dist=False)
+
+        if self.global_rank == 0:
+            writer = self.logger.experiment
+            _write_confusion_matrix_text(
+                writer,
+                "test/confusion_matrix",
+                self.current_epoch,
+                total_matrix,
+                self.class_names,
+            )
+
+        self.test_step_outputs.clear()
 
     def on_validation_epoch_end(self):
         if not self.validation_step_outputs:
