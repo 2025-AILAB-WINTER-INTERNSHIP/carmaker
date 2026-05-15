@@ -174,6 +174,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             on_epoch=True,
             prog_bar=True,
             sync_dist=True,
+            batch_size=image.shape[0],
         )
         return loss
 
@@ -194,7 +195,14 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         }
         self.validation_step_outputs.append(output)
 
-        self.log("val/loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log(
+            "val/loss",
+            loss,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=image.shape[0],
+        )
         return output
 
     def on_validation_epoch_end(self):
@@ -209,15 +217,15 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
         scores = segmentation_scores(total_matrix.cpu())
 
-        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=True)
-        self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=True)
+        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=False)
+        self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False)
 
         psnrs = [
             x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
         ]
         if psnrs:
             avg_psnr = torch.tensor(psnrs).mean()
-            self.log("val/psnr", avg_psnr, sync_dist=True)
+            self.log("val/psnr", avg_psnr, sync_dist=False)
 
         if self.global_rank == 0:
             writer = self.logger.experiment
