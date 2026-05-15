@@ -14,6 +14,7 @@ import argparse
 import atexit
 import importlib.util
 import json
+import os
 import random
 import re
 import subprocess
@@ -522,19 +523,25 @@ def main() -> None:
             f"[profiler] enabled: limiting run to {max_epochs} epochs and {limit_batches} batches"
         )
 
+    # Determine distributed settings before creating the Trainer
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    strategy = (
+        DDPStrategy(find_unused_parameters=False)
+        if (world_size > 1 or torch.cuda.device_count() > 1)
+        else "auto"
+    )
+
     trainer = L.Trainer(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices="auto",
-        strategy=DDPStrategy(find_unused_parameters=False)
-        if torch.cuda.device_count() > 1
-        else "auto",
+        strategy=strategy,
         max_epochs=max_epochs,
         limit_train_batches=limit_batches,
         accumulate_grad_batches=int(t_cfg.get("accumulate_grad_batches", 1)),
         profiler=profiler,
         logger=logger,
         callbacks=[checkpoint_callback, lr_monitor, image_callback],
-        precision="16-mixed" if torch.cuda.is_available() else 32,  # 혼합 정밀도 학습
+        precision="16-mixed" if torch.cuda.is_available() else 32,
         log_every_n_steps=log_every_n_steps,
     )
 
