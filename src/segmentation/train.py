@@ -484,9 +484,10 @@ def main() -> None:
         save_dir=str(run_dir.parent), name=run_dir.name, version=""
     )
 
-    # TensorBoard Text 탭에 최종 config 기록
-    config_str = yaml.dump(cfg, default_flow_style=False, allow_unicode=True)
-    logger.experiment.add_text("config", f"```yaml\n{config_str}\n```", 0)
+    # TensorBoard Text 탭에 최종 config 기록 (마스터 프로세스만 수행)
+    if int(os.environ.get("RANK", "0")) == 0:
+        config_str = yaml.dump(cfg, default_flow_style=False, allow_unicode=True)
+        logger.experiment.add_text("config", f"```yaml\n{config_str}\n```", 0)
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
@@ -766,7 +767,7 @@ def _resolve_run_dir(
     epochs = int(t_cfg.get("max_epochs", cfg.get("max_epochs", cfg.get("epochs", 30))))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = base_dir / f"{loss_name}_ep{epochs}_{timestamp}"
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 
 
