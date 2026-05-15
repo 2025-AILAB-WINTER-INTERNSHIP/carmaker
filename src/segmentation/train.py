@@ -423,6 +423,10 @@ def load_config(path: str | Path) -> Dict[str, Any]:
 
 
 def main() -> None:
+    # RTX 3090 (Ampere) 이상의 GPU에서 Tensor Core를 활용하여 연산 속도를 최적화합니다.
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision("high")
+
     args = parse_args()
 
     # 1) config 로드
