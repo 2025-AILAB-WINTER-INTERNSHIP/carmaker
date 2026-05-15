@@ -13,21 +13,40 @@ use_raw_post_processed: false
 # much heavier than 512x512, so start with batch_size: 1.
 image_size: [1920, 1080]
 num_workers: 4
-batch_size: 1
+batch_size: 2
 val_ratio: 0.2
 test_ratio: 0.1
 stratify_by_camera: true
 seed: 42
 
-epochs: 16
-learning_rate: 0.001
+# --- Trainer & Profiling ---
+trainer:
+  max_epochs: 50
+  accumulate_grad_batches: 2  # Gradient accumulation steps
+  limit_train_batches: 1.0    # Training data usage (1.0 = 100%, float for %, int for count)
+  log_every_n_steps: 50
+  # 프로파일러 설정: null(비활성), 'simple'(간단히), 'advanced'(상세히)
+  # 프로파일러가 켜져 있으면(null이 아니면) 아래 'on_profiling' 설정이 적용되어 학습이 조기 종료됩니다.
+  profiler: simple            # null, 'simple', 'advanced'
+
+  # 프로파일링 모드 오버라이드: profiler가 활성화된 경우에만 적용되는 제한 설정입니다.
+  # 전체 학습 대신 짧은 루프만 실행하여 성능 병목을 빠르게 확인하기 위함입니다.
+  on_profiling:
+    max_epochs: 1             # 프로파일링 시 실행할 최대 에포크
+    limit_batches: 10         # 에포크당 실행할 최대 배치(Step) 수
+
+learning_rate: 0.01
 weight_decay: 0.0001
+lr_scheduler: cosine  # Options: cosine, none
+
 model:
   name: unet
   in_channels: 3
   base_channels: 32
   # Options: relu, leaky_relu, elu, gelu, silu
   activation: relu
+  # Options: batch, group, instance, none
+  norm: group
   # Options: pytorch_default, he_normal, he_uniform, xavier_uniform, xavier_normal
   weight_init: he_normal
 
@@ -42,17 +61,18 @@ model:
 #   ce_dice            Cross entropy + Dice loss.
 #   focal              Focuses more on hard pixels/classes.
 #   focal_dice         Focal loss + Dice loss.
-loss: focal
+loss: focal_dice
 # class_weights is used directly by CrossEntropy/Focal terms only.
 # It affects: cross_entropy, ce_dice CE term, focal, focal_dice Focal term.
 # It does not affect the DiceLoss term.
-class_weights: [5.0, 15.0, 10.0]
+class_weights: [1.0, 5.0, 1.5]
 # Dice terms ignore background by default so lane/landmark dominate overlap loss.
 dice_exclude_classes: [0]
 
 checkpoint_interval: 4
 image_log_interval: 1
 debug_image_count: 8
+
 # Base directory. train.py creates a {loss}_ep{epochs}_{timestamp} subfolder for each run.
 # Model/image/loss metadata is written inside TensorBoard under run/config and HParams.
 run_dir: ../runs

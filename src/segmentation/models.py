@@ -12,14 +12,20 @@ import torch.nn.functional as F
 class ConvBlock(nn.Module):
     """U-Net에서 반복적으로 쓰는 3x3 Conv block."""
 
-    def __init__(self, in_channels: int, out_channels: int, activation: str = "relu") -> None:
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        activation: str = "relu",
+        norm_type: str = "batch",
+    ) -> None:
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
+            build_norm(norm_type, out_channels),
             build_activation(activation),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
+            build_norm(norm_type, out_channels),
             build_activation(activation),
         )
 
@@ -40,22 +46,23 @@ class UNet(nn.Module):
         num_classes: int = 3,
         base_channels: int = 32,
         activation: str = "relu",
+        norm_type: str = "batch",
     ) -> None:
         super().__init__()
-        self.enc1 = ConvBlock(in_channels, base_channels, activation=activation)
-        self.enc2 = ConvBlock(base_channels, base_channels * 2, activation=activation)
-        self.enc3 = ConvBlock(base_channels * 2, base_channels * 4, activation=activation)
-        self.enc4 = ConvBlock(base_channels * 4, base_channels * 8, activation=activation)
-        self.bottleneck = ConvBlock(base_channels * 8, base_channels * 16, activation=activation)
+        self.enc1 = ConvBlock(in_channels, base_channels, activation=activation, norm_type=norm_type)
+        self.enc2 = ConvBlock(base_channels, base_channels * 2, activation=activation, norm_type=norm_type)
+        self.enc3 = ConvBlock(base_channels * 2, base_channels * 4, activation=activation, norm_type=norm_type)
+        self.enc4 = ConvBlock(base_channels * 4, base_channels * 8, activation=activation, norm_type=norm_type)
+        self.bottleneck = ConvBlock(base_channels * 8, base_channels * 16, activation=activation, norm_type=norm_type)
 
         self.up4 = nn.ConvTranspose2d(base_channels * 16, base_channels * 8, kernel_size=2, stride=2)
-        self.dec4 = ConvBlock(base_channels * 16, base_channels * 8, activation=activation)
+        self.dec4 = ConvBlock(base_channels * 16, base_channels * 8, activation=activation, norm_type=norm_type)
         self.up3 = nn.ConvTranspose2d(base_channels * 8, base_channels * 4, kernel_size=2, stride=2)
-        self.dec3 = ConvBlock(base_channels * 8, base_channels * 4, activation=activation)
+        self.dec3 = ConvBlock(base_channels * 8, base_channels * 4, activation=activation, norm_type=norm_type)
         self.up2 = nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2)
-        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2, activation=activation)
+        self.dec2 = ConvBlock(base_channels * 4, base_channels * 2, activation=activation, norm_type=norm_type)
         self.up1 = nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2)
-        self.dec1 = ConvBlock(base_channels * 2, base_channels, activation=activation)
+        self.dec1 = ConvBlock(base_channels * 2, base_channels, activation=activation, norm_type=norm_type)
 
         self.head = nn.Conv2d(base_channels, num_classes, kernel_size=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -95,20 +102,21 @@ class TinyFCN(nn.Module):
         num_classes: int = 3,
         base_channels: int = 32,
         activation: str = "relu",
+        norm_type: str = "batch",
     ) -> None:
         super().__init__()
         self.encoder = nn.Sequential(
-            ConvBlock(in_channels, base_channels, activation=activation),
+            ConvBlock(in_channels, base_channels, activation=activation, norm_type=norm_type),
             nn.MaxPool2d(2),
-            ConvBlock(base_channels, base_channels * 2, activation=activation),
+            ConvBlock(base_channels, base_channels * 2, activation=activation, norm_type=norm_type),
             nn.MaxPool2d(2),
-            ConvBlock(base_channels * 2, base_channels * 4, activation=activation),
+            ConvBlock(base_channels * 2, base_channels * 4, activation=activation, norm_type=norm_type),
         )
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(base_channels * 4, base_channels * 2, kernel_size=2, stride=2),
-            ConvBlock(base_channels * 2, base_channels * 2, activation=activation),
+            ConvBlock(base_channels * 2, base_channels * 2, activation=activation, norm_type=norm_type),
             nn.ConvTranspose2d(base_channels * 2, base_channels, kernel_size=2, stride=2),
-            ConvBlock(base_channels, base_channels, activation=activation),
+            ConvBlock(base_channels, base_channels, activation=activation, norm_type=norm_type),
             nn.Conv2d(base_channels, num_classes, kernel_size=1),
         )
 
@@ -143,6 +151,30 @@ def build_activation(name: str) -> nn.Module:
     raise ValueError(f"Unknown activation '{name}'. Available options: {options}")
 
 
+def build_norm(name: str, num_channels: int) -> nn.Module:
+    """Build a normalization layer from config.
+
+    'group' uses a fixed 8 groups (or fewer if num_channels is small).
+    'instance' uses affine=True by default.
+    """
+    key = name.lower().replace("-", "_")
+    if key in {"batch", "bn"}:
+        return nn.BatchNorm2d(num_channels)
+    if key in {"instance", "in"}:
+        return nn.InstanceNorm2d(num_channels, affine=True)
+    if key in {"group", "gn"}:
+        # num_groups=8 is a standard default for base_channels=32.
+        num_groups = 8
+        if num_channels < num_groups or num_channels % num_groups != 0:
+            num_groups = num_channels
+        return nn.GroupNorm(num_groups, num_channels)
+    if key in {"none", "identity", ""}:
+        return nn.Identity()
+
+    options = ", ".join(["batch", "group", "instance", "none"])
+    raise ValueError(f"Unknown norm_type '{name}'. Available options: {options}")
+
+
 def build_model(config: Dict[str, Any], num_classes: int) -> nn.Module:
     """Build a segmentation model from config.
 
@@ -172,6 +204,7 @@ def build_model(config: Dict[str, Any], num_classes: int) -> nn.Module:
         "num_classes": num_classes,
         "base_channels": int(model_cfg.get("base_channels", config.get("base_channels", 32))),
         "activation": str(model_cfg.get("activation", config.get("activation", "relu"))),
+        "norm_type": str(model_cfg.get("norm", config.get("norm", "batch"))),
     }
     model = MODEL_REGISTRY[name](**params)
     initialize_weights(

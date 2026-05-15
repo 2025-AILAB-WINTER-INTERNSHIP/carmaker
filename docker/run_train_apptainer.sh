@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=carmaker_unet
+#SBATCH --job-name=carmaker_unet_multi_gpu
 #SBATCH --partition=partition-3090-intel
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=8
 #SBATCH --time=00:30:00
 #SBATCH --output=/home/ailab/AILabSSD/99_Management/slurm-logs/%x_%j.out
@@ -37,8 +37,5 @@ apptainer exec --nv \
     python3 /workspace/src/segmentation/train.py \
     --config /workspace/src/segmentation/config/segmentation_unet.yaml \
     --data-root ${CONTAINER_DATA_ROOT} \
-    --manifest /workspace/src/carmaker_image/data/csv/manifest.csv \
-    --run-dir /runs \
-    --tensorboard \
-    --tensorboard-host 0.0.0.0 \
-    --tensorboard-port 6006
+    --manifest ${CONTAINER_DATA_ROOT}/csv/manifest.csv \
+    --run-base /runs

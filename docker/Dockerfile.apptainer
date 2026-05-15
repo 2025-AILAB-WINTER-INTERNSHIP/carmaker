@@ -7,16 +7,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git wget ca-certificates build-essential \
     python3-pip python3-setuptools python3-dev \
     libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1 \
+    libgl1-mesa-glx \
     libjpeg-turbo8 fontconfig \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --upgrade pip setuptools wheel
 RUN python3 -m pip install --no-cache-dir 'typing-extensions==4.4.0'
 
-# 2. 학습용 Python 패키지 설치
+# 2. PyTorch 및 핵심 학습 프레임워크 설치
 RUN python3 -m pip install --no-cache-dir \
     torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+
+# 3. 추가 라이브러리 설치 (Lightning, OpenCV, Utils 등)
 RUN python3 -m pip install --no-cache-dir \
-    opencv-python matplotlib tensorboard pyyaml tqdm numpy
+    pytorch-lightning==2.4.0 \
+    torchmetrics \
+    opencv-python \
+    matplotlib \
+    tensorboard \
+    pyyaml \
+    tqdm \
+    numpy \
+    pandas
 
 WORKDIR /workspace

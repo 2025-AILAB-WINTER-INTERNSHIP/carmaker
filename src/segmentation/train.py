@@ -18,6 +18,7 @@ import random
 import re
 import subprocess
 import sys
+import yaml
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -27,10 +28,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-try:
-    from tqdm.auto import tqdm
-except Exception:
-    tqdm = None
 
 try:
     from .adapters import CarmakerSegmentationAdapter
@@ -48,6 +45,225 @@ except ImportError:
     from models import build_model
     from utils.visualization import make_image_grid, overlay_mask
 
+try:
+    import lightning.pytorch as L
+    from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+    from lightning.pytorch.loggers import TensorBoardLogger
+except ImportError:
+    try:
+        import pytorch_lightning as L
+        from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+        from pytorch_lightning.loggers import TensorBoardLogger
+    except ImportError:
+        L = None
+
+
+class SegmentationDataModule(L.LightningDataModule if L else object):
+    """PyTorch Lightning용 DataModule.
+
+    Adapter 생성, Dataset Split, DataLoader 구성을 담당한다.
+    """
+    def __init__(self, cfg: Dict[str, Any], adapter: CarmakerSegmentationAdapter):
+        super().__init__()
+        self.cfg = cfg
+        self.adapter = adapter
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+
+    def setup(self, stage: str | None = None):
+        # Dataset 생성
+        full_dataset = SegmentationDataset(
+            adapter=self.adapter,
+            image_size=tuple(self.cfg.get("image_size", [512, 512])),
+        )
+
+        overfit_count = int(self.cfg.get("overfit_count", 0))
+        if overfit_count > 0:
+            full_dataset.samples = full_dataset.samples[:overfit_count]
+
+        if len(full_dataset) == 0:
+            raise RuntimeError("No training samples found.")
+
+        # Train / Val / Test Split
+        self.train_dataset, self.val_dataset, self.test_dataset = split_dataset(
+            full_dataset,
+            val_ratio=float(self.cfg.get("val_ratio", 0.2)),
+            seed=int(self.cfg.get("seed", 42)),
+            test_ratio=float(self.cfg.get("test_ratio", 0.1)),
+            stratify_by_camera=bool(self.cfg.get("stratify_by_camera", True)),
+        )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=int(self.cfg.get("batch_size", 4)),
+            shuffle=True,
+            num_workers=int(self.cfg.get("num_workers", 2)),
+            pin_memory=torch.cuda.is_available(),
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=int(self.cfg.get("batch_size", 4)),
+            shuffle=False,
+            num_workers=int(self.cfg.get("num_workers", 2)),
+            pin_memory=torch.cuda.is_available(),
+        )
+
+    def test_dataloader(self):
+        if not self.test_dataset:
+            return None
+        return DataLoader(
+            self.test_dataset,
+            batch_size=int(self.cfg.get("batch_size", 4)),
+            shuffle=False,
+            num_workers=int(self.cfg.get("num_workers", 2)),
+            pin_memory=torch.cuda.is_available(),
+        )
+
+
+class SegmentationLightningModule(L.LightningModule if L else object):
+    """PyTorch Lightning용 Module.
+
+    모델, 손실 함수, 최적화 및 메트릭 계산 로직을 포함한다.
+    """
+    def __init__(self, cfg: Dict[str, Any], num_classes: int, palette: Any, class_names: list[str]):
+        super().__init__()
+        self.save_hyperparameters(ignore=["palette"])
+        self.cfg = cfg
+        self.num_classes = num_classes
+        self.palette = palette
+        self.class_names = class_names
+
+        self.model = build_model(cfg, num_classes=num_classes)
+        self.criterion = build_loss(
+            name=str(cfg.get("loss", "cross_entropy")),
+            num_classes=num_classes,
+            class_weights=cfg.get("class_weights"),
+            dice_exclude_classes=cfg.get("dice_exclude_classes", [0]),
+        )
+
+        # Multi-GPU 환경에서 Confusion Matrix 동기화를 위해 버퍼로 관리할 수 있으나,
+        # Lightning에서는 validation_step_outputs를 모아서 처리하는 것이 일반적이다.
+        self.validation_step_outputs = []
+
+    def forward(self, x):
+        return self.model(x)
+
+    def training_step(self, batch, batch_idx):
+        image = batch["image"]
+        mask = batch["mask"]
+        logits = self(image)
+        loss = self.criterion(logits, mask)
+
+        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        image = batch["image"]
+        mask = batch["mask"]
+        logits = self(image)
+        loss = self.criterion(logits, mask)
+
+        pred = torch.argmax(logits, dim=1)
+        matrix = confusion_matrix(pred, mask, self.num_classes).to(self.device)
+        psnr = mask_psnr(pred, mask, max_value=float(self.num_classes - 1))
+
+        output = {
+            "val_loss": loss,
+            "matrix": matrix,
+            "psnr": psnr,
+        }
+        self.validation_step_outputs.append(output)
+
+        self.log("val/loss", loss, on_epoch=True, prog_bar=True, sync_dist=True)
+        return output
+
+    def on_validation_epoch_end(self):
+        if not self.validation_step_outputs:
+            return
+
+        all_matrices = torch.stack([x["matrix"] for x in self.validation_step_outputs])
+        total_matrix = torch.sum(all_matrices, dim=0)
+
+        if self.trainer.world_size > 1:
+            total_matrix = self.all_gather(total_matrix).sum(dim=0)
+
+        scores = segmentation_scores(total_matrix.cpu())
+
+        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=True)
+        self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=True)
+
+        psnrs = [x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])]
+        if psnrs:
+            avg_psnr = torch.tensor(psnrs).mean()
+            self.log("val/psnr", avg_psnr, sync_dist=True)
+
+        if self.global_rank == 0:
+            writer = self.logger.experiment
+            _write_confusion_matrix_text(
+                writer, "val/confusion_matrix", self.current_epoch, total_matrix, self.class_names
+            )
+            for key, value in scores.items():
+                if key.startswith("iou/"):
+                    writer.add_scalar(f"val/{key}", value, self.current_epoch)
+
+        self.validation_step_outputs.clear()
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=float(self.cfg.get("learning_rate", 1e-3)),
+            weight_decay=float(self.cfg.get("weight_decay", 1e-4)),
+        )
+
+        scheduler_type = str(self.cfg.get("lr_scheduler", "none")).lower()
+        if scheduler_type == "cosine":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=self.trainer.max_epochs,
+                eta_min=float(self.cfg.get("learning_rate", 1e-3)) * 0.01,
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "epoch",
+                },
+            }
+
+        return optimizer
+
+
+class ImageLoggingCallback(L.Callback if L else object):
+    """매 validation epoch마다 샘플 이미지를 TensorBoard에 로깅하는 콜백."""
+    def __init__(self, debug_loaders, palette):
+        super().__init__()
+        self.debug_loaders = debug_loaders
+        self.palette = palette
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if pl_module.global_rank != 0:
+            return
+
+        epoch = trainer.current_epoch
+        image_log_interval = int(pl_module.cfg.get("image_log_interval", 5))
+
+        if epoch == 0 or (epoch + 1) % image_log_interval == 0:
+            writer = trainer.logger.experiment
+            write_debug_image_grids(
+                writer,
+                epoch + 1,
+                pl_module.model,
+                self.debug_loaders,
+                self.palette,
+                pl_module.device,
+                write_gt=(epoch == 0),
+            )
+
+
 
 SEGMENTATION_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = SEGMENTATION_ROOT.parent
@@ -64,8 +280,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--data-root", default="")
     parser.add_argument("--manifest", default="")
-    parser.add_argument("--run-dir", default="")
-    parser.add_argument("--epochs", type=int, default=0)
+    parser.add_argument("--run-dir", default="", help="Explicit run directory (disables automatic naming)")
+    parser.add_argument("--run-base", default="", help="Base directory for automatic run_dir naming")
+    parser.add_argument("--max-epochs", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=-1)
     parser.add_argument("--device", default="")
@@ -73,8 +290,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tensorboard", action="store_true")
     parser.add_argument("--tensorboard-port", type=int, default=6006)
     parser.add_argument("--tensorboard-host", default="0.0.0.0")
+    parser.add_argument("--profiler", default="")
+    parser.add_argument("--limit-batches", type=float, default=-1.0, help="limit_train_batches (float or int)")
+    parser.add_argument("--accumulate", type=int, default=0, help="accumulate_grad_batches")
     return parser.parse_args()
-
 
 def load_config(path: str | Path) -> Dict[str, Any]:
     """YAML 또는 JSON config 파일을 읽어서 dict로 반환한다."""
@@ -105,15 +324,13 @@ def main() -> None:
 
     # 2) device / output directory 준비
     # CUDA가 가능하면 GPU를 쓰고, 아니면 CPU로 fallback한다.
-    device = torch.device(cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu"))
-    run_dir = _resolve_run_dir(cfg, explicit_run_dir=bool(args.run_dir))
+    # Lightning에서는 accelerator='auto'로 설정하면 자동으로 선택한다.
+    run_dir = _resolve_run_dir(cfg, explicit_run_dir=bool(args.run_dir), run_base=args.run_base)
     cfg["run_dir"] = str(run_dir)
-    checkpoint_dir = run_dir / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     _maybe_start_tensorboard(args, run_dir)
 
     # 3) Adapter 생성
-    # Adapter는 CSV와 폴더 구조를 읽어서 image_path / mask_path pair 목록을 만든다.
     adapter = CarmakerSegmentationAdapter(
         data_root=cfg.get("data_root", str(DEFAULT_DATA_ROOT)),
         manifest=cfg.get("manifest") or None,
@@ -122,275 +339,92 @@ def main() -> None:
         use_mask_post_processed=True,
     )
 
-    # 4) Dataset 생성
-    # Dataset은 실제 PNG를 읽고 image tensor [3,H,W], mask tensor [H,W]로 변환한다.
-    dataset = SegmentationDataset(
-        adapter=adapter,
-        image_size=tuple(cfg.get("image_size", [512, 512])),
-    )
+    # 4) DataModule 및 LightningModule 생성
+    data_module = SegmentationDataModule(cfg, adapter)
+    # setup()을 미리 호출하여 데이터셋 정보를 가져온다.
+    data_module.setup()
 
-    # overfit smoke test:
-    # 전체 dataset에서 앞 N개만 사용해서 모델이 작은 데이터라도 외울 수 있는지 확인한다.
-    if args.overfit_count > 0:
-        dataset.samples = dataset.samples[: args.overfit_count]
-
-    if len(dataset) == 0:
-        raise RuntimeError(
-            "No training samples found. Run extract_bag_images.py and apply_mask.py first, "
-            "or pass --data-root/--manifest explicitly."
-        )
-
-    # 5) train / validation / test split
-    # seed를 고정해서 매번 같은 split이 나오게 한다.
-    train_dataset, val_dataset, test_dataset = split_dataset(
-        dataset,
-        val_ratio=float(cfg.get("val_ratio", 0.2)),
-        seed=int(cfg.get("seed", 42)),
-        test_ratio=float(cfg.get("test_ratio", 0.1)),
-        stratify_by_camera=bool(cfg.get("stratify_by_camera", True)),
-    )
-
-    # 6) DataLoader 생성
-    # DataLoader는 Dataset에서 sample을 가져와 batch 형태로 묶어준다.
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=int(cfg.get("batch_size", 4)),
-        shuffle=True,
-        num_workers=int(cfg.get("num_workers", 2)),
-        pin_memory=device.type == "cuda",
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=int(cfg.get("batch_size", 4)),
-        shuffle=False,
-        num_workers=int(cfg.get("num_workers", 2)),
-        pin_memory=device.type == "cuda",
-    )
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=int(cfg.get("batch_size", 4)),
-        shuffle=False,
-        num_workers=int(cfg.get("num_workers", 2)),
-        pin_memory=device.type == "cuda",
+    model = SegmentationLightningModule(
+        cfg=cfg,
+        num_classes=adapter.num_classes,
+        palette=adapter.palette,
+        class_names=adapter.class_names,
     )
 
     # TensorBoard debug image용 loader.
-    # 학습용 train_loader는 shuffle=True지만, debug 이미지는 카메라별 고정 샘플을 봐야 epoch별 변화가 보인다.
+    # Lightning Callback에서 사용할 수 있도록 준비한다.
     debug_image_count = int(cfg.get("debug_image_count", 4))
     debug_loaders = {
-        "train": _make_debug_loader_by_camera_grid(train_dataset, debug_image_count, device),
-        "val": _make_debug_loader_by_camera_grid(val_dataset, debug_image_count, device),
-        "test": _make_debug_loader_by_camera_grid(test_dataset, debug_image_count, device),
+        "train": _make_debug_loader_by_camera_grid(data_module.train_dataset, debug_image_count, torch.device("cpu")),
+        "val": _make_debug_loader_by_camera_grid(data_module.val_dataset, debug_image_count, torch.device("cpu")),
+        "test": _make_debug_loader_by_camera_grid(data_module.test_dataset, debug_image_count, torch.device("cpu")),
     }
 
-    # 7) model / loss / optimizer 생성
-    # build_model과 build_loss를 쓰면 config만 바꿔 모델과 loss를 교체할 수 있다.
-    model = build_model(cfg, num_classes=adapter.num_classes).to(device)
-    criterion = build_loss(
-        name=str(cfg.get("loss", "cross_entropy")),
-        num_classes=adapter.num_classes,
-        class_weights=cfg.get("class_weights"),
-        dice_exclude_classes=cfg.get("dice_exclude_classes", [0]),
-        device=device,
+    # 5) Lightning Trainer 설정
+    # Multi-GPU 설정을 포함한다.
+    logger = TensorBoardLogger(save_dir=str(run_dir.parent), name=run_dir.name, version="")
+
+    # TensorBoard Text 탭에 최종 config 기록
+    config_str = yaml.dump(cfg, default_flow_style=False, allow_unicode=True)
+    logger.experiment.add_text("config", f"```yaml\n{config_str}\n```", 0)
+
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=run_dir / "checkpoints",
+        filename="best",
+        monitor="val/miou",
+        mode="max",
+        save_last=True,
+        every_n_epochs=1,
     )
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(cfg.get("learning_rate", 1e-3)),
-        weight_decay=float(cfg.get("weight_decay", 1e-4)),
+    lr_monitor = LearningRateMonitor(logging_interval="epoch")
+    image_callback = ImageLoggingCallback(debug_loaders, adapter.palette)
+
+    # 6) Trainer 실행
+    t_cfg = cfg.get("trainer", {})
+    profiler = t_cfg.get("profiler", cfg.get("profiler"))
+
+    # 기본값 설정 (trainer 섹션 우선, 없으면 탑레벨 확인)
+    max_epochs = int(t_cfg.get("max_epochs", cfg.get("max_epochs", cfg.get("epochs", 30))))
+    limit_batches = t_cfg.get("limit_train_batches", cfg.get("limit_train_batches", 1.0))
+    log_every_n_steps = int(t_cfg.get("log_every_n_steps", cfg.get("log_every_n_steps", 50)))
+
+    # 프로파일링 모드일 경우 오버라이드
+    if profiler:
+        p_cfg = t_cfg.get("on_profiling", {})
+        max_epochs = int(p_cfg.get("max_epochs", cfg.get("profiler_max_epochs", 1)))
+        limit_batches = p_cfg.get("limit_batches", cfg.get("profiler_limit_batches", 5))
+        print(f"[profiler] enabled: limiting run to {max_epochs} epochs and {limit_batches} batches")
+
+    trainer = L.Trainer(
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices="auto",
+        strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
+        find_unused_parameters=False,
+        max_epochs=max_epochs,
+        limit_train_batches=limit_batches,
+        accumulate_grad_batches=int(t_cfg.get("accumulate_grad_batches", 1)),
+        profiler=profiler,
+        logger=logger,
+        callbacks=[checkpoint_callback, lr_monitor, image_callback],
+        precision="16-mixed" if torch.cuda.is_available() else 32, # 혼합 정밀도 학습
+        log_every_n_steps=log_every_n_steps,
     )
 
-    # 8) TensorBoard writer / checkpoint 기준값 준비
-    writer = _make_writer(run_dir)
-    _write_run_metadata(writer, cfg, adapter.num_classes, device)
-    best_miou = -1.0
-    epochs = int(cfg.get("epochs", 30))
     print(
-        f"[train] samples={len(train_dataset)} val={len(val_dataset)} "
-        f"test={len(test_dataset)} device={device} run_dir={run_dir}"
+        f"[train] samples={len(data_module.train_dataset)} val={len(data_module.val_dataset)} "
+        f"test={len(data_module.test_dataset)} run_dir={run_dir}"
     )
 
-    # 9) epoch loop
-    epoch_bar = _progress(range(1, epochs + 1), desc="epochs", total=epochs)
-    for epoch in epoch_bar:
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, epoch)
-        val = validate(model, val_loader, criterion, adapter.num_classes, device, epoch)
-        _set_progress_postfix(
-            epoch_bar,
-            train_loss=f"{train_loss:.4f}",
-            val_loss=f"{val['loss']:.4f}",
-            miou=f"{val['miou']:.4f}",
-            dice=f"{val['dice']:.4f}",
-        )
+    # 7) 학습 시작
+    trainer.fit(model, datamodule=data_module)
 
-        # TensorBoard Scalars에 loss/metric을 기록한다.
-        _write_scalars(writer, epoch, train_loss, val, optimizer, adapter.class_names)
+    # 8) 테스트 실행 (best checkpoint 로드)
+    if data_module.test_dataset and len(data_module.test_dataset) > 0:
+        trainer.test(model, datamodule=data_module, ckpt_path="best")
 
-        # TensorBoard Images에 train/val/test별 overlay grid를 기록한다.
-        # GT grid는 고정 샘플이라 첫 epoch에만 쓰고, pred grid만 주기적으로 갱신한다.
-        if writer and (epoch == 1 or epoch % int(cfg.get("image_log_interval", 5)) == 0):
-            write_debug_image_grids(
-                writer,
-                epoch,
-                model,
-                debug_loaders,
-                adapter.palette,
-                device,
-                write_gt=epoch == 1,
-            )
-
-        # validation mIoU가 최고일 때 best checkpoint를 갱신한다.
-        if val["miou"] > best_miou:
-            best_miou = val["miou"]
-            save_checkpoint(checkpoint_dir / "best.pt", model, optimizer, epoch, cfg, best_miou)
-
-        # 긴 학습 중간에도 복구 지점을 남기기 위한 주기적 checkpoint.
-        if epoch % int(cfg.get("checkpoint_interval", 10)) == 0:
-            save_checkpoint(checkpoint_dir / f"epoch_{epoch:03d}.pt", model, optimizer, epoch, cfg, best_miou)
-
-    # 마지막 epoch 상태도 항상 저장한다.
-    save_checkpoint(checkpoint_dir / "last.pt", model, optimizer, epochs, cfg, best_miou)
-    if len(test_dataset) > 0:
-        best_checkpoint = checkpoint_dir / "best.pt"
-        if best_checkpoint.exists():
-            checkpoint = _load_checkpoint(best_checkpoint, device)
-            model.load_state_dict(checkpoint["model_state"])
-        test = validate(model, test_loader, criterion, adapter.num_classes, device, split="test")
-        _write_eval_scalars(writer, "test", epochs, test, adapter.class_names)
-        print(
-            f"[test] loss={test['loss']:.4f} miou={test['miou']:.4f} "
-            f"dice={test['dice']:.4f}"
-        )
-    if writer:
-        _write_hparams(writer, cfg, best_miou)
-        writer.close()
-    print(f"[train] done best_miou={best_miou:.4f} run_dir={run_dir}")
+    print(f"[train] done run_dir={run_dir}")
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device: torch.device, epoch: int = 0) -> float:
-    """train_loader를 한 번 순회하며 model weight를 업데이트한다."""
-    model.train()
-    total_loss = 0.0
-    total_items = 0
-
-    progress = _progress(loader, desc=f"train {epoch:03d}" if epoch else "train", leave=False)
-    for batch in progress:
-        # DataLoader batch 형식:
-        # image: [B, 3, H, W], mask: [B, H, W]
-        image = batch["image"].to(device, non_blocking=True)
-        mask = batch["mask"].to(device, non_blocking=True)
-
-        optimizer.zero_grad(set_to_none=True)
-
-        # logits: [B, C, H, W]
-        # CrossEntropyLoss target은 class id mask [B, H, W] 형태를 기대한다.
-        logits = model(image)
-        loss = criterion(logits, mask)
-
-        loss.backward()
-        optimizer.step()
-
-        batch_size = image.shape[0]
-        total_loss += float(loss.item()) * batch_size
-        total_items += batch_size
-        _set_progress_postfix(progress, loss=f"{total_loss / max(total_items, 1):.4f}")
-
-    return total_loss / max(total_items, 1)
-
-
-@torch.no_grad()
-def validate(
-    model,
-    loader,
-    criterion,
-    num_classes: int,
-    device: torch.device,
-    epoch: int = 0,
-    split: str = "val",
-) -> Dict[str, Any]:
-    """validation set에서 loss와 segmentation metric을 계산한다."""
-    model.eval()
-    total_loss = 0.0
-    total_items = 0
-    matrix = torch.zeros((num_classes, num_classes), dtype=torch.int64, device=device)
-    psnr_values = []
-    camera_matrices = defaultdict(lambda: torch.zeros((num_classes, num_classes), dtype=torch.int64, device=device))
-    camera_loss_totals = defaultdict(float)
-    camera_items = defaultdict(int)
-    camera_psnr_values = defaultdict(list)
-
-    progress = _progress(loader, desc=f"{split} {epoch:03d}" if epoch else split, leave=False)
-    for batch in progress:
-        image = batch["image"].to(device, non_blocking=True)
-        mask = batch["mask"].to(device, non_blocking=True)
-
-        logits = model(image)
-        loss = criterion(logits, mask)
-
-        # 각 픽셀에서 score가 가장 높은 class를 prediction으로 선택한다.
-        pred = torch.argmax(logits, dim=1)
-
-        # confusion matrix를 누적해 mIoU / Dice / Accuracy를 안정적으로 계산한다.
-        matrix += confusion_matrix(pred, mask, num_classes).to(device)
-        psnr_values.append(mask_psnr(pred, mask, max_value=float(num_classes - 1)))
-
-        cameras = [str(camera) or "unknown" for camera in batch.get("camera", [])]
-        if cameras:
-            for camera in sorted(set(cameras)):
-                sample_indices = [idx for idx, value in enumerate(cameras) if value == camera]
-                index_tensor = torch.tensor(sample_indices, dtype=torch.long, device=device)
-                camera_logits = logits.index_select(0, index_tensor)
-                camera_mask = mask.index_select(0, index_tensor)
-                camera_pred = pred.index_select(0, index_tensor)
-                camera_loss = criterion(camera_logits, camera_mask)
-                camera_count = len(sample_indices)
-
-                camera_matrices[camera] += confusion_matrix(camera_pred, camera_mask, num_classes).to(device)
-                camera_loss_totals[camera] += float(camera_loss.item()) * camera_count
-                camera_items[camera] += camera_count
-                camera_psnr_values[camera].append(
-                    mask_psnr(camera_pred, camera_mask, max_value=float(num_classes - 1))
-                )
-
-        batch_size = image.shape[0]
-        total_loss += float(loss.item()) * batch_size
-        total_items += batch_size
-        _set_progress_postfix(progress, loss=f"{total_loss / max(total_items, 1):.4f}")
-
-    scores = segmentation_scores(matrix.cpu())
-    scores["loss"] = total_loss / max(total_items, 1)
-
-    # pred와 GT가 완전히 같으면 PSNR은 inf가 될 수 있으므로 평균에서는 finite 값만 사용한다.
-    finite_psnr = [v for v in psnr_values if np.isfinite(v)]
-    scores["psnr"] = float(np.mean(finite_psnr)) if finite_psnr else float("inf")
-    scores["_confusion_matrix"] = matrix.cpu()
-    scores["by_camera"] = _camera_scores(camera_matrices, camera_loss_totals, camera_items, camera_psnr_values)
-    return scores
-
-
-def _camera_scores(camera_matrices, camera_loss_totals, camera_items, camera_psnr_values) -> Dict[str, Dict[str, float]]:
-    """Build metric dictionaries for each camera."""
-    by_camera: Dict[str, Dict[str, float]] = {}
-    for camera in sorted(camera_matrices.keys()):
-        scores = segmentation_scores(camera_matrices[camera].cpu())
-        scores["loss"] = camera_loss_totals[camera] / max(camera_items[camera], 1)
-        finite_psnr = [value for value in camera_psnr_values[camera] if np.isfinite(value)]
-        scores["psnr"] = float(np.mean(finite_psnr)) if finite_psnr else float("inf")
-        by_camera[camera] = scores
-    return by_camera
-
-
-def _progress(iterable, **kwargs):
-    """Return a tqdm progress bar when available, otherwise the original iterable."""
-    if tqdm is None:
-        return iterable
-    kwargs.setdefault("dynamic_ncols", True)
-    return tqdm(iterable, **kwargs)
-
-
-def _set_progress_postfix(progress, **values) -> None:
-    """Update tqdm postfix only when the iterable is actually a tqdm instance."""
-    if hasattr(progress, "set_postfix"):
-        progress.set_postfix(**values)
 
 
 def _make_debug_loader_by_camera_grid(dataset, debug_image_count: int, device: torch.device):
@@ -524,36 +558,6 @@ def _write_debug_image_grid(
         )
 
 
-def save_checkpoint(path: Path, model, optimizer, epoch: int, cfg: Dict[str, Any], best_miou: float) -> None:
-    """model/optimizer/config를 checkpoint 파일로 저장한다."""
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state": model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-            "config": cfg,
-            "best_miou": best_miou,
-        },
-        path,
-    )
-
-
-def _load_checkpoint(path: Path, device: torch.device) -> Dict[str, Any]:
-    """Load a checkpoint across PyTorch versions."""
-    try:
-        return torch.load(path, map_location=device, weights_only=False)
-    except TypeError:
-        return torch.load(path, map_location=device)
-
-
-def _make_writer(run_dir: Path):
-    """TensorBoard SummaryWriter를 만든다. tensorboard가 없으면 학습은 계속 진행한다."""
-    try:
-        from torch.utils.tensorboard import SummaryWriter
-    except Exception as exc:
-        print(f"[warn] TensorBoard disabled: {exc}")
-        return None
-    return SummaryWriter(log_dir=str(run_dir))
 
 
 def _maybe_start_tensorboard(args: argparse.Namespace, run_dir: Path) -> subprocess.Popen | None:
@@ -593,19 +597,32 @@ def _maybe_start_tensorboard(args: argparse.Namespace, run_dir: Path) -> subproc
     return process
 
 
-def _resolve_run_dir(cfg: Dict[str, Any], explicit_run_dir: bool = False) -> Path:
+def _terminate_process(process: subprocess.Popen) -> None:
+    """종료 시 백그라운드 프로세스를 정리한다."""
+    if process.poll() is None:
+        process.terminate()
+
+
+def _resolve_run_dir(cfg: Dict[str, Any], explicit_run_dir: bool = False, run_base: str = "") -> Path:
     """실험별 run directory를 결정한다.
 
     --run-dir를 직접 주면 해당 폴더를 그대로 사용한다.
+    --run-base가 있으면 이를 부모로 보고 그 아래 {loss}_ep{epochs}_{timestamp} 폴더를 자동 생성한다.
     config의 run_dir는 base directory로 보고, 그 아래 {loss}_ep{epochs}_{timestamp} 폴더를 자동 생성한다.
     """
-    base_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs")).expanduser().resolve()
     if explicit_run_dir:
+        base_dir = Path(cfg.get("run_dir")).expanduser().resolve()
         base_dir.mkdir(parents=True, exist_ok=True)
         return base_dir
 
+    if run_base:
+        base_dir = Path(run_base).expanduser().resolve()
+    else:
+        base_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs")).expanduser().resolve()
+
     loss_name = _run_name_part(str(cfg.get("loss", "loss")))
-    epochs = int(cfg.get("epochs", 30))
+    t_cfg = cfg.get("trainer", {})
+    epochs = int(t_cfg.get("max_epochs", cfg.get("max_epochs", cfg.get("epochs", 30))))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = base_dir / f"{loss_name}_ep{epochs}_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -620,187 +637,6 @@ def _run_name_part(value: str) -> str:
     return value.strip("-") or "unknown"
 
 
-def _write_run_metadata(writer, cfg: Dict[str, Any], num_classes: int, device: torch.device) -> None:
-    """TensorBoard에 run 설정을 text/hparams 형태로 기록한다."""
-    if not writer:
-        return
-
-    model_cfg = cfg.get("model", {})
-    model_name = model_cfg.get("name", "model") if isinstance(model_cfg, dict) else str(model_cfg)
-    base_channels = model_cfg.get("base_channels", "") if isinstance(model_cfg, dict) else ""
-    activation = (
-        model_cfg.get("activation", cfg.get("activation", "relu"))
-        if isinstance(model_cfg, dict)
-        else cfg.get("activation", "relu")
-    )
-    weight_init = (
-        model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default"))
-        if isinstance(model_cfg, dict)
-        else cfg.get("weight_init", "pytorch_default")
-    )
-    image_size = cfg.get("image_size", "")
-    loss_name = str(cfg.get("loss", ""))
-
-    metadata_cfg = dict(cfg)
-    metadata_cfg["num_classes"] = num_classes
-    metadata_cfg["device"] = str(device)
-    metadata_cfg["model_name"] = str(model_name)
-    metadata_cfg["base_channels"] = base_channels
-    metadata_cfg["activation"] = activation
-    metadata_cfg["weight_init"] = weight_init
-    metadata_cfg["loss"] = loss_name
-    metadata_cfg["image_size"] = image_size
-
-    metadata_lines = [
-        "## Run Summary",
-        f"- model: `{model_name}`",
-        f"- image_size: `{image_size}`",
-        f"- loss: `{loss_name}`",
-        f"- class_weights: `{cfg.get('class_weights', None)}`",
-        f"- dice_exclude_classes: `{cfg.get('dice_exclude_classes', [0])}`",
-        f"- base_channels: `{base_channels}`",
-        f"- activation: `{activation}`",
-        f"- weight_init: `{weight_init}`",
-        f"- batch_size: `{cfg.get('batch_size', '')}`",
-        f"- learning_rate: `{cfg.get('learning_rate', '')}`",
-        f"- weight_decay: `{cfg.get('weight_decay', '')}`",
-        f"- num_classes: `{num_classes}`",
-        f"- device: `{device}`",
-        "",
-        "## Full Config",
-        "```json",
-        json.dumps(metadata_cfg, indent=2, sort_keys=True, default=str),
-        "```",
-    ]
-    writer.add_text("run/config", "\n".join(metadata_lines), 0)
-
-    # HParams 탭에서도 핵심 설정을 빠르게 비교할 수 있게 남긴다.
-def _write_hparams(writer, cfg: Dict[str, Any], best_miou: float) -> None:
-    """TensorBoard HParams에 run 설정과 best mIoU를 기록한다."""
-    if not writer:
-        return
-
-    model_cfg = cfg.get("model", {})
-    model_name = model_cfg.get("name", "model") if isinstance(model_cfg, dict) else str(model_cfg)
-    base_channels = model_cfg.get("base_channels", "") if isinstance(model_cfg, dict) else ""
-    activation = (
-        model_cfg.get("activation", cfg.get("activation", "relu"))
-        if isinstance(model_cfg, dict)
-        else cfg.get("activation", "relu")
-    )
-    weight_init = (
-        model_cfg.get("weight_init", cfg.get("weight_init", "pytorch_default"))
-        if isinstance(model_cfg, dict)
-        else cfg.get("weight_init", "pytorch_default")
-    )
-    image_size = cfg.get("image_size", "")
-    loss_name = str(cfg.get("loss", ""))
-
-    hparams = {
-        "model": str(model_name),
-        "image_size": str(image_size),
-        "loss": loss_name,
-        "class_weights": str(cfg.get("class_weights", None)),
-        "dice_exclude_classes": str(cfg.get("dice_exclude_classes", [0])),
-        "base_channels": str(base_channels),
-        "activation": str(activation),
-        "weight_init": str(weight_init),
-        "in_channels": str(model_cfg.get("in_channels", cfg.get("in_channels", ""))) if isinstance(model_cfg, dict) else "",
-        "batch_size": str(cfg.get("batch_size", "")),
-        "num_workers": str(cfg.get("num_workers", "")),
-        "epochs": str(cfg.get("epochs", "")),
-        "learning_rate": str(cfg.get("learning_rate", "")),
-        "weight_decay": str(cfg.get("weight_decay", "")),
-        "val_ratio": str(cfg.get("val_ratio", "")),
-        "test_ratio": str(cfg.get("test_ratio", "")),
-        "stratify_by_camera": str(cfg.get("stratify_by_camera", "")),
-        "cameras": str(cfg.get("cameras", "")),
-        "use_raw_post_processed": str(cfg.get("use_raw_post_processed", "")),
-        "checkpoint_interval": str(cfg.get("checkpoint_interval", "")),
-        "image_log_interval": str(cfg.get("image_log_interval", "")),
-        "debug_image_count": str(cfg.get("debug_image_count", "")),
-        "seed": str(cfg.get("seed", "")),
-    }
-    writer.add_hparams(hparams, {"hparam/best_miou": float(best_miou)})
-
-
-def _terminate_process(process: subprocess.Popen) -> None:
-    if process.poll() is None:
-        process.terminate()
-
-
-def _write_scalars(writer, epoch: int, train_loss: float, val: Dict[str, Any], optimizer, class_names) -> None:
-    """TensorBoard Scalars 탭에 정량 지표를 기록한다."""
-    if not writer:
-        return
-
-    writer.add_scalar("train/loss", train_loss, epoch)
-    writer.add_scalar("val/loss", val["loss"], epoch)
-    writer.add_scalar("val/miou", val["miou"], epoch)
-    writer.add_scalar("val/dice", val["dice"], epoch)
-    writer.add_scalar("val/psnr", val["psnr"], epoch)
-    writer.add_scalar("train/lr", optimizer.param_groups[0]["lr"], epoch)
-    _write_confusion_matrix_text(writer, "val/confusion_matrix", epoch, val.get("_confusion_matrix"), class_names)
-
-    # class별 IoU는 val/iou/class_0, val/iou/class_1처럼 따로 기록한다.
-    for key, value in val.items():
-        if key.startswith("iou/"):
-            writer.add_scalar(f"val/{key}", value, epoch)
-
-    _write_score_scalars(writer, "val/all", epoch, val, include_classification_metrics=True)
-    for camera, scores in val.get("by_camera", {}).items():
-        _write_score_scalars(writer, f"val/{camera}", epoch, scores, include_classification_metrics=False)
-
-
-def _write_eval_scalars(writer, split: str, epoch: int, scores: Dict[str, Any], class_names) -> None:
-    """Write evaluation-only metrics such as final test scores."""
-    if not writer:
-        return
-
-    _write_score_scalars(writer, f"{split}/all", epoch, scores, include_classification_metrics=True)
-    _write_confusion_matrix_text(
-        writer,
-        f"{split}/confusion_matrix",
-        epoch,
-        scores.get("_confusion_matrix"),
-        class_names,
-    )
-    for key, value in scores.items():
-        if key.startswith("_"):
-            continue
-        if key == "by_camera":
-            for camera, camera_scores in value.items():
-                _write_score_scalars(
-                    writer,
-                    f"{split}/{camera}",
-                    epoch,
-                    camera_scores,
-                    include_classification_metrics=False,
-                )
-            continue
-        writer.add_scalar(f"{split}/{key}", value, epoch)
-
-
-def _write_score_scalars(
-    writer,
-    prefix: str,
-    epoch: int,
-    scores: Dict[str, float],
-    include_classification_metrics: bool = True,
-) -> None:
-    for key, value in scores.items():
-        if key.startswith("_") or key == "by_camera":
-            continue
-        if not include_classification_metrics and _is_classification_metric(key):
-            continue
-        if not isinstance(value, (int, float)):
-            continue
-        writer.add_scalar(f"{prefix}/{key}", value, epoch)
-
-
-def _is_classification_metric(key: str) -> bool:
-    """camera별 view에서는 전체 class 분석용 precision/recall/f1 계열을 숨긴다."""
-    return key.startswith(("precision/", "recall/", "f1/"))
 
 
 def _write_confusion_matrix_text(writer, tag: str, epoch: int, matrix, class_names) -> None:
@@ -837,15 +673,20 @@ def _apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
         cfg["manifest"] = args.manifest
     if args.run_dir:
         cfg["run_dir"] = args.run_dir
-    if args.epochs > 0:
-        cfg["epochs"] = args.epochs
+    if args.max_epochs > 0:
+        cfg.setdefault("trainer", {})["max_epochs"] = args.max_epochs
     if args.batch_size > 0:
         cfg["batch_size"] = args.batch_size
     if args.num_workers >= 0:
         cfg["num_workers"] = args.num_workers
     if args.device and args.device.lower() != "auto":
         cfg["device"] = args.device
-
+    if args.profiler:
+        cfg.setdefault("trainer", {})["profiler"] = args.profiler
+    if args.limit_batches >= 0:
+        cfg.setdefault("trainer", {})["limit_train_batches"] = args.limit_batches
+    if args.accumulate > 0:
+        cfg.setdefault("trainer", {})["accumulate_grad_batches"] = args.accumulate
 
 def _resolve_config_paths(cfg: Dict[str, Any], base_dir: Path) -> None:
     """config 내부 상대경로를 config 파일 위치 기준의 절대경로로 바꾼다."""
