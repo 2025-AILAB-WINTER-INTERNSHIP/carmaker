@@ -69,8 +69,8 @@ class_weights: [1.0, 5.0, 1.5]
 # Dice terms ignore background by default so lane/landmark dominate overlap loss.
 dice_exclude_classes: [0]
 
-checkpoint_interval: 4
-image_log_interval: 1
+checkpoint_interval: 5
+image_log_interval: 5
 debug_image_count: 8
 
 # Base directory. train.py creates a {loss}_ep{epochs}_{timestamp} subfolder for each run.

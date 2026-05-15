@@ -8,7 +8,7 @@
 #SBATCH --time=00:30:00
 #SBATCH --output=/home/ailab/AILabSSD/99_Management/slurm-logs/%x_%j.out
 #SBATCH --error=/home/ailab/AILabSSD/99_Management/slurm-logs/%x_%j.err
-#SBATCH --comment=leehwansoo
+#SBATCH --comment=submitter:leehwansoo
 
 set -euo pipefail
 
