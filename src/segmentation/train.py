@@ -157,8 +157,12 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
         # Multi-GPU 환경에서 Confusion Matrix 동기화를 위해 버퍼로 관리할 수 있으나,
         # Lightning에서는 validation_step_outputs를 모아서 처리하는 것이 일반적이다.
+        self.train_step_outputs = []
         self.validation_step_outputs = []
         self.test_step_outputs = []
+        # Worst Samples 추적을 위한 저장소
+        self.worst_samples = []
+        self.num_worst = int(cfg.get("debug_worst_sample_count", 4))
 
     def forward(self, x):
         return self.model(x)
@@ -169,16 +173,42 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         logits = self(image)
         loss = self.criterion(logits, mask)
 
+        # 화면(Progress Bar)용 로깅
+        opt = self.trainer.optimizers[0]
+        current_lr = opt.param_groups[0]["lr"]
+        self.log("train/lr", current_lr, on_step=False, on_epoch=True, prog_bar=True, logger=False)
+
+        # 실시간 스텝 로깅 (x축: Step)
         self.log(
-            "train/loss",
+            "train/loss_step",
             loss,
             on_step=True,
-            on_epoch=True,
+            on_epoch=False,
             prog_bar=True,
             sync_dist=True,
             batch_size=image.shape[0],
         )
+
+        # 에폭 평균 계산을 위해 저장
+        self.train_step_outputs.append(loss.detach())
         return loss
+
+    def on_train_epoch_end(self):
+        if not self.train_step_outputs:
+            return
+
+        avg_loss = torch.stack(self.train_step_outputs).mean()
+        if self.global_rank == 0:
+            writer = self.logger.experiment
+            # 훈련 손실 에폭 평균 로깅 (x축: Epoch)
+            writer.add_scalar("train/loss", avg_loss, self.current_epoch)
+
+            # 학습률 에폭 로깅 (x축: Epoch)
+            opt = self.trainer.optimizers[0]
+            current_lr = opt.param_groups[0]["lr"]
+            writer.add_scalar("train/lr", current_lr, self.current_epoch)
+
+        self.train_step_outputs.clear()
 
     def validation_step(self, batch, batch_idx):
         image = batch["image"]
@@ -197,6 +227,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         }
         self.validation_step_outputs.append(output)
 
+        # 화면(Progress Bar)용으로만 로깅하고, 텐서보드 기록(logger)은 나중에 에폭 끝에서 수동으로 수행합니다.
         self.log(
             "val/loss",
             loss,
@@ -204,7 +235,30 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             prog_bar=True,
             sync_dist=True,
             batch_size=image.shape[0],
+            logger=False,
         )
+
+        # Worst Sample 추적 로직 (에폭마다 최악의 샘플 후보를 수집)
+        with torch.no_grad():
+            pred_cpu = pred.cpu()
+            mask_cpu = mask.cpu()
+            for i in range(image.shape[0]):
+                # 개별 이미지의 mIoU 계산
+                img_matrix = confusion_matrix(pred_cpu[i:i+1], mask_cpu[i:i+1], self.num_classes)
+                img_scores = segmentation_scores(img_matrix)
+                miou = img_scores["miou"]
+
+                self.worst_samples.append({
+                    "miou": miou,
+                    "image": image[i].cpu(),
+                    "mask": mask_cpu[i],
+                    "pred": pred_cpu[i]
+                })
+
+            # 성적이 가장 나쁜 상위 N개만 유지 (메모리 효율)
+            self.worst_samples.sort(key=lambda x: x["miou"])
+            self.worst_samples = self.worst_samples[:self.num_worst]
+
         return output
 
     def test_step(self, batch, batch_idx):
@@ -279,18 +333,28 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
         scores = segmentation_scores(total_matrix.cpu())
 
-        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=False)
-        self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False)
-
-        psnrs = [
-            x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
-        ]
-        if psnrs:
-            avg_psnr = torch.tensor(psnrs).mean()
-            self.log("val/psnr", avg_psnr, sync_dist=False)
+        # 화면(Progress Bar)용 로깅 (로거 기록은 제외)
+        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=False, logger=False)
+        self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False, logger=False)
 
         if self.global_rank == 0:
             writer = self.logger.experiment
+
+            # Val Loss 평균 계산 및 수동 에폭 로깅
+            avg_val_loss = torch.stack([x["val_loss"] for x in self.validation_step_outputs]).mean()
+            writer.add_scalar("val/loss", avg_val_loss, self.current_epoch)
+
+            # 주요 지표들 수동 에폭 로깅 (x축을 current_epoch로 통일)
+            writer.add_scalar("val/miou", scores["miou"], self.current_epoch)
+            writer.add_scalar("val/dice", scores["dice"], self.current_epoch)
+
+            psnrs = [
+                x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
+            ]
+            if psnrs:
+                avg_psnr = torch.tensor(psnrs).mean()
+                writer.add_scalar("val/psnr", avg_psnr, self.current_epoch)
+
             _write_confusion_matrix_text(
                 writer,
                 "val/confusion_matrix",
@@ -300,9 +364,37 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             )
             for key, value in scores.items():
                 if key.startswith("iou/"):
+                    # x축을 에폭 단위로 기록
                     writer.add_scalar(f"val/{key}", value, self.current_epoch)
 
+            # Worst Samples 그리드 로깅
+            if self.worst_samples:
+                worst_overlays = []
+                for sample in self.worst_samples:
+                    # 정답(GT)과 예측(Pred)을 나란히 보여주는 오버레이 생성
+                    worst_overlays.append(overlay_mask(sample["image"], sample["pred"], self.palette))
+
+                writer.add_image(
+                    "debug/worst_samples",
+                    make_image_grid(worst_overlays, columns=4),
+                    self.current_epoch,
+                    dataformats="HWC"
+                )
+
         self.validation_step_outputs.clear()
+        self.worst_samples.clear()
+
+    def on_fit_end(self):
+        """학습 종료 시 하이퍼파라미터와 최종 성능 지표를 HParams 탭에 기록합니다."""
+        if self.global_rank == 0 and self.logger:
+            # 기록하고 싶은 주요 성능 지표들
+            metrics = {
+                "hparam/val_miou": self.trainer.callback_metrics.get("val/miou", 0),
+                "hparam/val_loss": self.trainer.callback_metrics.get("val/loss", 0),
+                "hparam/best_miou": self.trainer.checkpoint_callback.best_model_score or 0,
+            }
+            # Lightning의 하이퍼파라미터 저장소와 연동
+            self.logger.log_hyperparams(self.hparams, metrics)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -499,7 +591,7 @@ def main() -> None:
         monitor="val/miou",
         mode="max",
         save_last=True,
-        every_n_epochs=1,
+        every_n_epochs=int(cfg.get("checkpoint_interval", 1)),
     )
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     image_callback = ImageLoggingCallback(debug_loaders, adapter.palette)

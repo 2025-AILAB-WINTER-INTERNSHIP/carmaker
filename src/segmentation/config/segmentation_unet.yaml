@@ -72,6 +72,7 @@ dice_exclude_classes: [0]
 checkpoint_interval: 5
 image_log_interval: 5
 debug_image_count: 8
+debug_worst_sample_count: 4
 
 # Base directory. train.py creates a {loss}_ep{epochs}_{timestamp} subfolder for each run.
 # Model/image/loss metadata is written inside TensorBoard under run/config and HParams.
