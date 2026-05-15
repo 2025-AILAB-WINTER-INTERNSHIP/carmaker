@@ -34,8 +34,8 @@ apptainer exec --nv \
     --bind ${HOST_REAL_DATA_ROOT}:${CONTAINER_DATA_ROOT}:ro \
     --bind ${HOST_RUN_ROOT}:/runs \
     ${SIF_IMAGE} \
-    torchrun --nproc_per_node=${SLURM_GPUS_ON_NODE:-2} \
-        python3 /workspace/src/segmentation/train.py \
+    torchrun --standalone --nproc_per_node=${SLURM_GPUS_ON_NODE:-2} \
+        /workspace/src/segmentation/train.py \
         --config /workspace/src/segmentation/config/segmentation_unet.yaml \
         --data-root ${CONTAINER_DATA_ROOT} \
         --manifest ${CONTAINER_DATA_ROOT}/csv/manifest.csv \
