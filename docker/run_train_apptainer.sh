@@ -8,12 +8,12 @@
 #SBATCH --time=00:30:00
 #SBATCH --output=/home/ailab/AILabSSD/99_Management/slurm-logs/%x_%j.out
 #SBATCH --error=/home/ailab/AILabSSD/99_Management/slurm-logs/%x_%j.err
-#SBATCH --comment=submitter:leehwansoo
+#SBATCH --comment=submitter:hwansoo
 
 set -euo pipefail
 
 # Path Configurations
-SIF_IMAGE="/home/ailab/AILabSSD/01_SlurmWorkspace/2026-intern-unet.sif"
+SIF_IMAGE="/home/ailab/AILabSSD/01_SlurmWorkspace/2026-intern-unet-multi.sif"
 HOST_WORKSPACE="/home/ailab/AILabSSD/04_Shared_Repository/2026-intern/carmaker"
 HOST_REAL_DATA_ROOT=$(readlink -f /home/ailab/AILabSSD/04_Shared_Repository/2026-intern/dataset)
 HOST_RUN_ROOT="/home/ailab/AILabSSD/99_Management/tb_runs/2026-intern/"

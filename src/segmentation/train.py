@@ -18,7 +18,6 @@ import random
 import re
 import subprocess
 import sys
-import yaml
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -26,8 +25,8 @@ from typing import Any, Dict
 
 import numpy as np
 import torch
+import yaml
 from torch.utils.data import DataLoader
-
 
 try:
     from .adapters import CarmakerSegmentationAdapter
@@ -49,11 +48,13 @@ try:
     import lightning.pytorch as L
     from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
     from lightning.pytorch.loggers import TensorBoardLogger
+    from lightning.pytorch.strategies import DDPStrategy
 except ImportError:
     try:
         import pytorch_lightning as L
         from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
         from pytorch_lightning.loggers import TensorBoardLogger
+        from pytorch_lightning.strategies import DDPStrategy
     except ImportError:
         L = None
 
@@ -63,6 +64,7 @@ class SegmentationDataModule(L.LightningDataModule if L else object):
 
     Adapter 생성, Dataset Split, DataLoader 구성을 담당한다.
     """
+
     def __init__(self, cfg: Dict[str, Any], adapter: CarmakerSegmentationAdapter):
         super().__init__()
         self.cfg = cfg
@@ -129,7 +131,14 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
     모델, 손실 함수, 최적화 및 메트릭 계산 로직을 포함한다.
     """
-    def __init__(self, cfg: Dict[str, Any], num_classes: int, palette: Any, class_names: list[str]):
+
+    def __init__(
+        self,
+        cfg: Dict[str, Any],
+        num_classes: int,
+        palette: Any,
+        class_names: list[str],
+    ):
         super().__init__()
         self.save_hyperparameters(ignore=["palette"])
         self.cfg = cfg
@@ -158,7 +167,14 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         logits = self(image)
         loss = self.criterion(logits, mask)
 
-        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log(
+            "train/loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=True,
+        )
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -196,7 +212,9 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=True)
         self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=True)
 
-        psnrs = [x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])]
+        psnrs = [
+            x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
+        ]
         if psnrs:
             avg_psnr = torch.tensor(psnrs).mean()
             self.log("val/psnr", avg_psnr, sync_dist=True)
@@ -204,7 +222,11 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         if self.global_rank == 0:
             writer = self.logger.experiment
             _write_confusion_matrix_text(
-                writer, "val/confusion_matrix", self.current_epoch, total_matrix, self.class_names
+                writer,
+                "val/confusion_matrix",
+                self.current_epoch,
+                total_matrix,
+                self.class_names,
             )
             for key, value in scores.items():
                 if key.startswith("iou/"):
@@ -239,6 +261,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
 class ImageLoggingCallback(L.Callback if L else object):
     """매 validation epoch마다 샘플 이미지를 TensorBoard에 로깅하는 콜백."""
+
     def __init__(self, debug_loaders, palette):
         super().__init__()
         self.debug_loaders = debug_loaders
@@ -264,7 +287,6 @@ class ImageLoggingCallback(L.Callback if L else object):
             )
 
 
-
 SEGMENTATION_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = SEGMENTATION_ROOT.parent
 DEFAULT_DATA_ROOT = SRC_ROOT / "carmaker_image" / "data"
@@ -276,12 +298,20 @@ def parse_args() -> argparse.Namespace:
 
     대부분의 실험 설정은 YAML config에 두고, 자주 바꾸는 값만 CLI로 덮어쓴다.
     """
-    parser = argparse.ArgumentParser(description="Train U-Net segmentation on CarMaker raw/GT pairs.")
+    parser = argparse.ArgumentParser(
+        description="Train U-Net segmentation on CarMaker raw/GT pairs."
+    )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--data-root", default="")
     parser.add_argument("--manifest", default="")
-    parser.add_argument("--run-dir", default="", help="Explicit run directory (disables automatic naming)")
-    parser.add_argument("--run-base", default="", help="Base directory for automatic run_dir naming")
+    parser.add_argument(
+        "--run-dir",
+        default="",
+        help="Explicit run directory (disables automatic naming)",
+    )
+    parser.add_argument(
+        "--run-base", default="", help="Base directory for automatic run_dir naming"
+    )
     parser.add_argument("--max-epochs", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=-1)
@@ -291,9 +321,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tensorboard-port", type=int, default=6006)
     parser.add_argument("--tensorboard-host", default="0.0.0.0")
     parser.add_argument("--profiler", default="")
-    parser.add_argument("--limit-batches", type=float, default=-1.0, help="limit_train_batches (float or int)")
-    parser.add_argument("--accumulate", type=int, default=0, help="accumulate_grad_batches")
+    parser.add_argument(
+        "--limit-batches",
+        type=float,
+        default=-1.0,
+        help="limit_train_batches (float or int)",
+    )
+    parser.add_argument(
+        "--accumulate", type=int, default=0, help="accumulate_grad_batches"
+    )
     return parser.parse_args()
+
 
 def load_config(path: str | Path) -> Dict[str, Any]:
     """YAML 또는 JSON config 파일을 읽어서 dict로 반환한다."""
@@ -306,7 +344,9 @@ def load_config(path: str | Path) -> Dict[str, Any]:
     try:
         import yaml
     except ImportError as exc:
-        raise RuntimeError("PyYAML is required for YAML config files. Install pyyaml or use JSON.") from exc
+        raise RuntimeError(
+            "PyYAML is required for YAML config files. Install pyyaml or use JSON."
+        ) from exc
 
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -325,7 +365,9 @@ def main() -> None:
     # 2) device / output directory 준비
     # CUDA가 가능하면 GPU를 쓰고, 아니면 CPU로 fallback한다.
     # Lightning에서는 accelerator='auto'로 설정하면 자동으로 선택한다.
-    run_dir = _resolve_run_dir(cfg, explicit_run_dir=bool(args.run_dir), run_base=args.run_base)
+    run_dir = _resolve_run_dir(
+        cfg, explicit_run_dir=bool(args.run_dir), run_base=args.run_base
+    )
     cfg["run_dir"] = str(run_dir)
 
     _maybe_start_tensorboard(args, run_dir)
@@ -355,14 +397,22 @@ def main() -> None:
     # Lightning Callback에서 사용할 수 있도록 준비한다.
     debug_image_count = int(cfg.get("debug_image_count", 4))
     debug_loaders = {
-        "train": _make_debug_loader_by_camera_grid(data_module.train_dataset, debug_image_count, torch.device("cpu")),
-        "val": _make_debug_loader_by_camera_grid(data_module.val_dataset, debug_image_count, torch.device("cpu")),
-        "test": _make_debug_loader_by_camera_grid(data_module.test_dataset, debug_image_count, torch.device("cpu")),
+        "train": _make_debug_loader_by_camera_grid(
+            data_module.train_dataset, debug_image_count, torch.device("cpu")
+        ),
+        "val": _make_debug_loader_by_camera_grid(
+            data_module.val_dataset, debug_image_count, torch.device("cpu")
+        ),
+        "test": _make_debug_loader_by_camera_grid(
+            data_module.test_dataset, debug_image_count, torch.device("cpu")
+        ),
     }
 
     # 5) Lightning Trainer 설정
     # Multi-GPU 설정을 포함한다.
-    logger = TensorBoardLogger(save_dir=str(run_dir.parent), name=run_dir.name, version="")
+    logger = TensorBoardLogger(
+        save_dir=str(run_dir.parent), name=run_dir.name, version=""
+    )
 
     # TensorBoard Text 탭에 최종 config 기록
     config_str = yaml.dump(cfg, default_flow_style=False, allow_unicode=True)
@@ -384,29 +434,38 @@ def main() -> None:
     profiler = t_cfg.get("profiler", cfg.get("profiler"))
 
     # 기본값 설정 (trainer 섹션 우선, 없으면 탑레벨 확인)
-    max_epochs = int(t_cfg.get("max_epochs", cfg.get("max_epochs", cfg.get("epochs", 30))))
-    limit_batches = t_cfg.get("limit_train_batches", cfg.get("limit_train_batches", 1.0))
-    log_every_n_steps = int(t_cfg.get("log_every_n_steps", cfg.get("log_every_n_steps", 50)))
+    max_epochs = int(
+        t_cfg.get("max_epochs", cfg.get("max_epochs", cfg.get("epochs", 30)))
+    )
+    limit_batches = t_cfg.get(
+        "limit_train_batches", cfg.get("limit_train_batches", 1.0)
+    )
+    log_every_n_steps = int(
+        t_cfg.get("log_every_n_steps", cfg.get("log_every_n_steps", 50))
+    )
 
     # 프로파일링 모드일 경우 오버라이드
     if profiler:
         p_cfg = t_cfg.get("on_profiling", {})
         max_epochs = int(p_cfg.get("max_epochs", cfg.get("profiler_max_epochs", 1)))
         limit_batches = p_cfg.get("limit_batches", cfg.get("profiler_limit_batches", 5))
-        print(f"[profiler] enabled: limiting run to {max_epochs} epochs and {limit_batches} batches")
+        print(
+            f"[profiler] enabled: limiting run to {max_epochs} epochs and {limit_batches} batches"
+        )
 
     trainer = L.Trainer(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices="auto",
-        strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
-        find_unused_parameters=False,
+        strategy=DDPStrategy(find_unused_parameters=False)
+        if torch.cuda.device_count() > 1
+        else "auto",
         max_epochs=max_epochs,
         limit_train_batches=limit_batches,
         accumulate_grad_batches=int(t_cfg.get("accumulate_grad_batches", 1)),
         profiler=profiler,
         logger=logger,
         callbacks=[checkpoint_callback, lr_monitor, image_callback],
-        precision="16-mixed" if torch.cuda.is_available() else 32, # 혼합 정밀도 학습
+        precision="16-mixed" if torch.cuda.is_available() else 32,  # 혼합 정밀도 학습
         log_every_n_steps=log_every_n_steps,
     )
 
@@ -425,9 +484,9 @@ def main() -> None:
     print(f"[train] done run_dir={run_dir}")
 
 
-
-
-def _make_debug_loader_by_camera_grid(dataset, debug_image_count: int, device: torch.device):
+def _make_debug_loader_by_camera_grid(
+    dataset, debug_image_count: int, device: torch.device
+):
     """TensorBoard 이미지 확인용 loader를 만든다.
 
     각 split에서 camera별 고정 샘플을 하나의 grid로 묶는다.
@@ -533,7 +592,9 @@ def _write_debug_image_grid(
         except RuntimeError as exc:
             if "out of memory" in str(exc).lower() and device.type == "cuda":
                 torch.cuda.empty_cache()
-                print(f"[tensorboard] skipped debug/{split} image grid because CUDA ran out of memory")
+                print(
+                    f"[tensorboard] skipped debug/{split} image grid because CUDA ran out of memory"
+                )
                 return
             raise
 
@@ -558,9 +619,9 @@ def _write_debug_image_grid(
         )
 
 
-
-
-def _maybe_start_tensorboard(args: argparse.Namespace, run_dir: Path) -> subprocess.Popen | None:
+def _maybe_start_tensorboard(
+    args: argparse.Namespace, run_dir: Path
+) -> subprocess.Popen | None:
     """Start TensorBoard for this run when requested."""
     if not args.tensorboard:
         return None
@@ -603,7 +664,9 @@ def _terminate_process(process: subprocess.Popen) -> None:
         process.terminate()
 
 
-def _resolve_run_dir(cfg: Dict[str, Any], explicit_run_dir: bool = False, run_base: str = "") -> Path:
+def _resolve_run_dir(
+    cfg: Dict[str, Any], explicit_run_dir: bool = False, run_base: str = ""
+) -> Path:
     """실험별 run directory를 결정한다.
 
     --run-dir를 직접 주면 해당 폴더를 그대로 사용한다.
@@ -618,7 +681,9 @@ def _resolve_run_dir(cfg: Dict[str, Any], explicit_run_dir: bool = False, run_ba
     if run_base:
         base_dir = Path(run_base).expanduser().resolve()
     else:
-        base_dir = Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs")).expanduser().resolve()
+        base_dir = (
+            Path(cfg.get("run_dir", SEGMENTATION_ROOT / "runs")).expanduser().resolve()
+        )
 
     loss_name = _run_name_part(str(cfg.get("loss", "loss")))
     t_cfg = cfg.get("trainer", {})
@@ -637,9 +702,9 @@ def _run_name_part(value: str) -> str:
     return value.strip("-") or "unknown"
 
 
-
-
-def _write_confusion_matrix_text(writer, tag: str, epoch: int, matrix, class_names) -> None:
+def _write_confusion_matrix_text(
+    writer, tag: str, epoch: int, matrix, class_names
+) -> None:
     """TensorBoard Text 탭에 confusion matrix를 markdown table로 기록한다."""
     if not writer or matrix is None:
         return
@@ -657,7 +722,9 @@ def _write_confusion_matrix_text(writer, tag: str, epoch: int, matrix, class_nam
     separator = "|---|" + "|".join("---" for _ in labels) + "|"
     rows = [header, separator]
     for label, row in zip(labels, values):
-        rows.append("| " + label + " | " + " | ".join(str(int(value)) for value in row) + " |")
+        rows.append(
+            "| " + label + " | " + " | ".join(str(int(value)) for value in row) + " |"
+        )
 
     writer.add_text(tag, "\n".join(rows), epoch)
 
@@ -687,6 +754,7 @@ def _apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> None:
         cfg.setdefault("trainer", {})["limit_train_batches"] = args.limit_batches
     if args.accumulate > 0:
         cfg.setdefault("trainer", {})["accumulate_grad_batches"] = args.accumulate
+
 
 def _resolve_config_paths(cfg: Dict[str, Any], base_dir: Path) -> None:
     """config 내부 상대경로를 config 파일 위치 기준의 절대경로로 바꾼다."""
