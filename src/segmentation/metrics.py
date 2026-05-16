@@ -29,6 +29,11 @@ def segmentation_scores(matrix: torch.Tensor) -> Dict[str, float]:
     denom = tp + fp + fn
     iou = torch.where(denom > 0, tp / denom.clamp_min(1.0), torch.zeros_like(tp))
 
+    # miou_fg: 배경(0번)을 제외한 차선(1번)과 랜드마크(2번)의 평균 IoU.
+    # 모델의 실제 전경 검출 성능을 파악하기 위해 사용한다.
+    iou_fg = iou[1:3] if len(iou) >= 3 else iou[1:]
+    miou_fg = float(iou_fg.mean().item()) if len(iou_fg) > 0 else 0.0
+
     # Dice/F1(overlap): 얇은 차선처럼 작은 영역을 볼 때 IoU와 함께 확인하면 좋다.
     dice_denom = 2.0 * tp + fp + fn
     dice = torch.where(dice_denom > 0, 2.0 * tp / dice_denom.clamp_min(1.0), torch.zeros_like(tp))
@@ -60,6 +65,7 @@ def segmentation_scores(matrix: torch.Tensor) -> Dict[str, float]:
 
     scores = {
         "miou": float(iou.mean().item()),
+        "miou_fg": miou_fg,
         "dice": float(dice.mean().item()),
     }
     for idx in range(matrix.shape[0]):

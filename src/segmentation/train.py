@@ -73,6 +73,8 @@ class SegmentationDataModule(L.LightningDataModule if L else object):
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
+        self.split_report = ""
+        self.split_info = {}
 
     def setup(self, stage: str | None = None):
         # Dataset 생성
@@ -89,13 +91,16 @@ class SegmentationDataModule(L.LightningDataModule if L else object):
             raise RuntimeError("No training samples found.")
 
         # Train / Val / Test Split
-        self.train_dataset, self.val_dataset, self.test_dataset = split_dataset(
+        self.train_dataset, self.val_dataset, self.test_dataset, self.split_report, self.split_info = split_dataset(
             full_dataset,
             val_ratio=float(self.cfg.get("val_ratio", 0.2)),
             seed=int(self.cfg.get("seed", 42)),
             test_ratio=float(self.cfg.get("test_ratio", 0.1)),
-            stratify_by_camera=bool(self.cfg.get("stratify_by_camera", True)),
+            stratify_by_camera=bool(self.cfg.get("stratify_by_camera", False)),
+            split_by_scenario=bool(self.cfg.get("split_by_scenario", True)),
         )
+        # HParams 기록을 위해 cfg에 상세 분할 정보 주입
+        self.cfg.update(self.split_info)
 
     def train_dataloader(self):
         return DataLoader(
@@ -155,14 +160,16 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             dice_exclude_classes=cfg.get("dice_exclude_classes", [0]),
         )
 
-        # Multi-GPU 환경에서 Confusion Matrix 동기화를 위해 버퍼로 관리할 수 있으나,
-        # Lightning에서는 validation_step_outputs를 모아서 처리하는 것이 일반적이다.
         self.train_step_outputs = []
         self.validation_step_outputs = []
         self.test_step_outputs = []
-        # Worst Samples 추적을 위한 저장소
         self.worst_samples = []
         self.num_worst = int(cfg.get("debug_worst_sample_count", 4))
+
+    @property
+    def display_epoch(self) -> int:
+        """User-facing epoch index (1-based) for logging."""
+        return self.current_epoch + 1
 
     def forward(self, x):
         return self.model(x)
@@ -198,15 +205,20 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             return
 
         avg_loss = torch.stack(self.train_step_outputs).mean()
+
+        # DDP 환경에서 모든 rank의 loss를 평균내어 동기화 (정확한 통계 확보)
+        if self.trainer.world_size > 1:
+            avg_loss = self.all_gather(avg_loss).mean()
+
         if self.global_rank == 0:
             writer = self.logger.experiment
             # 훈련 손실 에폭 평균 로깅 (x축: Epoch)
-            writer.add_scalar("train/loss", avg_loss, self.current_epoch)
+            writer.add_scalar("train/loss", avg_loss, self.display_epoch)
 
             # 학습률 에폭 로깅 (x축: Epoch)
             opt = self.trainer.optimizers[0]
             current_lr = opt.param_groups[0]["lr"]
-            writer.add_scalar("train/lr", current_lr, self.current_epoch)
+            writer.add_scalar("train/lr", current_lr, self.display_epoch)
 
         self.train_step_outputs.clear()
 
@@ -238,26 +250,27 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             logger=False,
         )
 
-        # Worst Sample 추적 로직 (에폭마다 최악의 샘플 후보를 수집)
-        with torch.no_grad():
-            pred_cpu = pred.cpu()
-            mask_cpu = mask.cpu()
-            for i in range(image.shape[0]):
-                # 개별 이미지의 mIoU 계산
-                img_matrix = confusion_matrix(pred_cpu[i:i+1], mask_cpu[i:i+1], self.num_classes)
-                img_scores = segmentation_scores(img_matrix)
-                miou = img_scores["miou"]
+        # Worst Sample 추적 로직 (Master rank에서만 수행하여 Worker 메모리 절약)
+        if self.global_rank == 0:
+            with torch.no_grad():
+                pred_cpu = pred.cpu()
+                mask_cpu = mask.cpu()
+                for i in range(image.shape[0]):
+                    # 개별 이미지의 mIoU 계산
+                    img_matrix = confusion_matrix(pred_cpu[i:i+1], mask_cpu[i:i+1], self.num_classes)
+                    img_scores = segmentation_scores(img_matrix)
+                    miou = img_scores["miou"]
 
-                self.worst_samples.append({
-                    "miou": miou,
-                    "image": image[i].cpu(),
-                    "mask": mask_cpu[i],
-                    "pred": pred_cpu[i]
-                })
+                    self.worst_samples.append({
+                        "miou": miou,
+                        "image": image[i].cpu(),
+                        "mask": mask_cpu[i],
+                        "pred": pred_cpu[i]
+                    })
 
-            # 성적이 가장 나쁜 상위 N개만 유지 (메모리 효율)
-            self.worst_samples.sort(key=lambda x: x["miou"])
-            self.worst_samples = self.worst_samples[:self.num_worst]
+                # 성적이 가장 나쁜 상위 N개만 유지 (메모리 효율)
+                self.worst_samples.sort(key=lambda x: x["miou"])
+                self.worst_samples = self.worst_samples[:self.num_worst]
 
         return output
 
@@ -314,7 +327,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             _write_confusion_matrix_text(
                 writer,
                 "test/confusion_matrix",
-                self.current_epoch,
+                self.display_epoch,
                 total_matrix,
                 self.class_names,
             )
@@ -335,37 +348,46 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
         # 화면(Progress Bar)용 로깅 (로거 기록은 제외)
         self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=False, logger=False)
+        self.log("val/miou_fg", scores["miou_fg"], prog_bar=True, sync_dist=False, logger=False)
         self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False, logger=False)
 
         if self.global_rank == 0:
             writer = self.logger.experiment
 
-            # Val Loss 평균 계산 및 수동 에폭 로깅
+            # Val Loss 및 PSNR 동기화
             avg_val_loss = torch.stack([x["val_loss"] for x in self.validation_step_outputs]).mean()
-            writer.add_scalar("val/loss", avg_val_loss, self.current_epoch)
-
-            # 주요 지표들 수동 에폭 로깅 (x축을 current_epoch로 통일)
-            writer.add_scalar("val/miou", scores["miou"], self.current_epoch)
-            writer.add_scalar("val/dice", scores["dice"], self.current_epoch)
-
-            psnrs = [
+            psnrs = torch.tensor([
                 x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
-            ]
-            if psnrs:
-                avg_psnr = torch.tensor(psnrs).mean()
-                writer.add_scalar("val/psnr", avg_psnr, self.current_epoch)
+            ], device=self.device)
+
+            if self.trainer.world_size > 1:
+                avg_val_loss = self.all_gather(avg_val_loss).mean()
+                psnrs = self.all_gather(psnrs).flatten()
+
+            if self.global_rank == 0:
+                writer = self.logger.experiment
+                writer.add_scalar("val/loss", avg_val_loss, self.display_epoch)
+
+                # 주요 지표들 수동 에폭 로깅
+                writer.add_scalar("val/miou", scores["miou"], self.display_epoch)
+                writer.add_scalar("val/miou_fg", scores["miou_fg"], self.display_epoch)
+                writer.add_scalar("val/dice", scores["dice"], self.display_epoch)
+
+                if len(psnrs) > 0:
+                    avg_psnr = psnrs.mean()
+                    writer.add_scalar("val/psnr", avg_psnr, self.display_epoch)
 
             _write_confusion_matrix_text(
                 writer,
                 "val/confusion_matrix",
-                self.current_epoch,
+                self.display_epoch,
                 total_matrix,
                 self.class_names,
             )
             for key, value in scores.items():
                 if key.startswith("iou/"):
                     # x축을 에폭 단위로 기록
-                    writer.add_scalar(f"val/{key}", value, self.current_epoch)
+                    writer.add_scalar(f"val/{key}", value, self.display_epoch)
 
             # Worst Samples 그리드 로깅
             if self.worst_samples:
@@ -377,7 +399,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
                 writer.add_image(
                     "debug/worst_samples",
                     make_image_grid(worst_overlays, columns=4),
-                    self.current_epoch,
+                    self.display_epoch,
                     dataformats="HWC"
                 )
 
@@ -385,40 +407,78 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         self.worst_samples.clear()
 
     def on_fit_end(self):
-        """학습 종료 시 하이퍼파라미터와 최종 성능 지표를 HParams 탭에 기록합니다."""
+        """학습 종료 시 모든 설정값과 최종 성능 지표를 HParams 탭에 기록합니다."""
+        # 모든 rank가 작업을 마칠 때까지 대기하여 일관성 확보
+        if self.trainer.world_size > 1:
+            self.trainer.strategy.barrier()
+
         if self.global_rank == 0 and self.logger:
-            # 기록하고 싶은 주요 성능 지표들
+            # 1. 모든 설정값을 평면화 및 타입 정제 (TensorBoard 호환성 확보)
+            hparams = _flatten_dict(self.cfg)
+            hparams["num_classes"] = self.num_classes
+
+            # TensorBoard hparams는 bool, str, float, int만 지원하므로 타입 체크
+            hparams = {k: v if isinstance(v, (int, float, str, bool)) else str(v) for k, v in hparams.items()}
+
+            # 2. 결과 지표 준비 (hparam/ 접두어를 붙여 HParams 전용임을 명시)
             metrics = {
-                "hparam/val_miou": self.trainer.callback_metrics.get("val/miou", 0),
                 "hparam/val_loss": self.trainer.callback_metrics.get("val/loss", 0),
-                "hparam/best_miou": self.trainer.checkpoint_callback.best_model_score or 0,
+                "hparam/val_miou": self.trainer.callback_metrics.get("val/miou", 0),
+                "hparam/val_miou_fg": self.trainer.callback_metrics.get("val/miou_fg", 0),
+                "hparam/val_dice": self.trainer.callback_metrics.get("val/dice", 0),
+                "hparam/best_miou": getattr(self.trainer.checkpoint_callback, "best_model_score", 0) or 0,
             }
-            # Lightning의 하이퍼파라미터 저장소와 연동
-            self.logger.log_hyperparams(self.hparams, metrics)
+
+            # 3. 텐서보드에 최종 기록
+            self.logger.log_hyperparams(hparams, metrics)
 
     def configure_optimizers(self):
+        lr = float(self.cfg.get("learning_rate", 1e-3))
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=float(self.cfg.get("learning_rate", 1e-3)),
+            lr=lr,
             weight_decay=float(self.cfg.get("weight_decay", 1e-4)),
         )
 
         scheduler_type = str(self.cfg.get("lr_scheduler", "none")).lower()
-        if scheduler_type == "cosine":
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=self.trainer.max_epochs,
-                eta_min=float(self.cfg.get("learning_rate", 1e-3)) * 0.01,
-            )
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "epoch",
-                },
-            }
+        warmup_enabled = bool(self.cfg.get("warmup_enabled", False))
+        warmup_epochs = int(self.cfg.get("warmup_epochs", 0))
 
-        return optimizer
+        # 1. 메인 스케줄러 결정 (워밍업 기간을 제외한 남은 에폭 동안만 코사인 곡선을 그리도록 설정)
+        main_t_max = self.trainer.max_epochs
+        if warmup_enabled and warmup_epochs > 0:
+            main_t_max = max(1, self.trainer.max_epochs - warmup_epochs)
+
+        if scheduler_type == "cosine":
+            main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=main_t_max, eta_min=lr * 0.01
+            )
+        else:
+            # 고정 학습률을 위한 스케줄러 (워밍업과 연결하기 위함)
+            main_scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0)
+
+        # 2. 워밍업 적용 여부에 따른 최종 스케줄러 구성
+        if warmup_enabled and warmup_epochs > 0:
+            start_factor = float(self.cfg.get("warmup_start_factor", 0.1))
+            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=start_factor, end_factor=1.0, total_iters=warmup_epochs
+            )
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[warmup_epochs]
+            )
+        else:
+            # 워밍업이 비활성화된 경우
+            if scheduler_type == "none":
+                return optimizer  # 스케줄러 없이 완전 고정값 학습
+            scheduler = main_scheduler
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "epoch",
+            },
+        }
 
 
 class ImageLoggingCallback(L.Callback if L else object):
@@ -440,7 +500,7 @@ class ImageLoggingCallback(L.Callback if L else object):
             writer = trainer.logger.experiment
             write_debug_image_grids(
                 writer,
-                epoch + 1,
+                pl_module.display_epoch,
                 pl_module.model,
                 self.debug_loaders,
                 self.palette,
@@ -526,6 +586,10 @@ def main() -> None:
     cfg = load_config(args.config)
     _resolve_config_paths(cfg, Path(args.config).expanduser().resolve().parent)
     _apply_cli_overrides(cfg, args)
+
+    # 1.5) num_workers 최적화 (CPU 코어 및 GPU 개수 고려)
+    _optimize_num_workers(cfg)
+
     _set_seed(int(cfg.get("seed", 42)))
 
     # 2) device / output directory 준비
@@ -584,6 +648,9 @@ def main() -> None:
     if int(os.environ.get("RANK", "0")) == 0:
         config_str = yaml.dump(cfg, default_flow_style=False, allow_unicode=True)
         logger.experiment.add_text("config", f"```yaml\n{config_str}\n```", 0)
+        # 데이터셋 분할 리포트 기록
+        if hasattr(data_module, "split_report"):
+            logger.experiment.add_text("dataset/split", data_module.split_report, 0)
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
@@ -948,6 +1015,45 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _optimize_num_workers(cfg: Dict[str, Any]) -> None:
+    """CPU 코어 수와 가용한 GPU 개수를 기반으로 DataLoader worker 수를 최적화한다."""
+    requested_workers = int(cfg.get("num_workers", -1))
+
+    # 사용자가 명시적으로 설정하지 않았거나 -1인 경우 자동 계산
+    if requested_workers < 0:
+        # 1. 실제 프로세스에 할당된(Affinity) 코어 수 확인 (Linux 전용, 가장 정확함)
+        # 2. Slurm 환경 변수 확인 (SLURM_CPUS_PER_TASK)
+        # 3. Fallback: os.cpu_count()
+        try:
+            cpu_count = len(os.sched_getaffinity(0))
+        except (AttributeError, NotImplementedError):
+            cpu_count = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4))
+
+        gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 1
+
+        # GPU당 코어 배분 (일반적으로 GPU당 2~4개가 적당함)
+        # 너무 많으면 I/O 오버헤드, 너무 적으면 GPU 대기 발생
+        optimized = max(2, min(cpu_count // gpu_count, 8))
+        cfg["num_workers"] = optimized
+        print(
+            f"[config] optimized num_workers to {optimized} (cpu_allocated={cpu_count}, gpu={gpu_count})"
+        )
+
+
+def _flatten_dict(d: Dict[str, Any], parent_key: str = "", sep: str = "/") -> Dict[str, Any]:
+    """중첩된 dict를 텐서보드 기록용으로 평면화한다."""
+    items = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(_flatten_dict(v, new_key, sep=sep).items())
+        elif isinstance(v, (list, tuple)):
+            items.append((new_key, str(v)))
+        else:
+            items.append((new_key, v))
+    return dict(items)
 
 
 if __name__ == "__main__":

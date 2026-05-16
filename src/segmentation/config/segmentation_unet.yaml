@@ -12,11 +12,12 @@ use_raw_post_processed: false
 # Original CarMaker image size. This preserves the 16:9 geometry, but it is
 # much heavier than 512x512, so start with batch_size: 1.
 image_size: [1920, 1080]
-num_workers: 4
+num_workers: -1  # -1 = CPU 코어 수와 GPU 개수를 기반으로 자동 설정
 batch_size: 2
 val_ratio: 0.2
 test_ratio: 0.1
-stratify_by_camera: true
+split_by_scenario: true  # 시나리오(시퀀스) 단위 분할로 데이터 유출 방지
+stratify_by_camera: false
 seed: 42
 
 # --- Trainer & Profiling ---
@@ -35,9 +36,12 @@ trainer:
     max_epochs: 1             # 프로파일링 시 실행할 최대 에포크
     limit_batches: 10         # 에포크당 실행할 최대 배치(Step) 수
 
-learning_rate: 0.01
+learning_rate: 0.001
 weight_decay: 0.0001
 lr_scheduler: cosine  # Options: cosine, none
+warmup_enabled: true  # 초기 에폭 동안 LR 워밍업 실행
+warmup_epochs: 5      # 워밍업 에폭 수
+warmup_start_factor: 0.1  # 시작 LR 값은 설정치의 10%
 
 model:
   name: unet

@@ -119,12 +119,21 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
                 if not image_path or not mask_path:
                     continue
 
+                # 시나리오 정보 추출 (CSV 컬럼 우선, 없으면 경로에서 추출)
+                scenario = row.get("scenario")
+                if not scenario:
+                    # image_path structure: .../raw_images/<scenario>/<camera>/file.png
+                    scenario = image_path.parent.parent.name
+
+                metadata = {k: v for k, v in row.items() if v is not None}
+                metadata["scenario"] = scenario
+
                 samples.append(
                     SegmentationSample(
                         image_path=image_path,
                         mask_path=mask_path,
                         camera=camera,
-                        metadata={k: v for k, v in row.items() if v is not None},
+                        metadata=metadata,
                     )
                 )
         return samples
@@ -158,12 +167,15 @@ class CarmakerSegmentationAdapter(DatasetAdapter):
             if not image_path.exists():
                 continue
 
+            # rel_parent structure: <scenario>/<camera>
+            scenario = rel_parent.parts[0] if len(rel_parent.parts) >= 1 else "unknown"
+
             samples.append(
                 SegmentationSample(
                     image_path=image_path,
                     mask_path=mask_path,
                     camera=camera,
-                    metadata={"source": "discovered"},
+                    metadata={"source": "discovered", "scenario": scenario},
                 )
             )
         return samples
