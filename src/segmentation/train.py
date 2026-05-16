@@ -769,9 +769,14 @@ def _make_debug_loader_by_camera_grid(
     # 행(Row)을 카메라로, 열(Column)을 샘플 데이터로 구성하기 위해 루프 순서 변경
     for camera in cameras:
         camera_indices = indices_by_camera[camera]
-        for sample_index in range(debug_image_count):
-            if sample_index < len(camera_indices):
-                indices.append(camera_indices[sample_index])
+        n_available = len(camera_indices)
+        if n_available <= debug_image_count:
+            indices.extend(camera_indices)
+        else:
+            # 전체 가용 샘플을 균등한 간격으로 추출하여 시나리오 전반의 다양성 확보
+            step = n_available / debug_image_count
+            for i in range(debug_image_count):
+                indices.append(camera_indices[int(i * step)])
 
     if not indices:
         return None
