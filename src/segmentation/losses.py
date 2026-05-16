@@ -100,10 +100,23 @@ class FocalLoss(nn.Module):
         focal_loss = (1.0 - pt) ** self.gamma * ce
 
         # background가 대부분인 segmentation에서 foreground 학습 신호가 묻히지 않도록
-        # 현재 구현은 전체 픽셀 수가 아니라 target > 0 픽셀 수로 normalize한다.
-        num_valid = (target > 0).sum().float()
-        num_valid = torch.clamp(num_valid, min=1.0)
-        return focal_loss.sum() / num_valid
+        # 전경(target > 0)과 배경(target == 0)을 분리하여 정규화합니다.
+        # 전체 합을 전경 수로 나누면 전경이 적을 때 로스가 폭발하므로, 각각의 평균을 합산합니다.
+
+        fg_mask = (target > 0)
+        bg_mask = (target == 0)
+
+        # 전경 로스: 전경 픽셀들의 평균 에러 (전경이 없으면 0)
+        num_fg = fg_mask.sum().float()
+        fg_loss = focal_loss[fg_mask].sum() / torch.clamp(num_fg, min=1.0) if num_fg > 0 else 0.0
+
+        # 배경 로스: 배경 픽셀들의 평균 에러 (배경이 없으면 0)
+        num_bg = bg_mask.sum().float()
+        bg_loss = focal_loss[bg_mask].sum() / torch.clamp(num_bg, min=1.0) if num_bg > 0 else 0.0
+
+        # 두 로스를 합산하여 반환.
+        # 이렇게 하면 전경이 아주 적더라도 배경 로스가 스케일을 안정적으로 잡아줍니다.
+        return fg_loss + bg_loss
 
 
 def build_loss(
