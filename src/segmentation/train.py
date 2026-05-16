@@ -36,6 +36,11 @@ try:
     from .metrics import confusion_matrix, mask_psnr, segmentation_scores
     from .models import build_model
     from .utils.visualization import make_image_grid, overlay_mask
+    from .utils.visualization_gpu import (
+        colorize_mask as colorize_mask_gpu,
+        make_image_grid_gpu,
+        overlay_mask_gpu,
+    )
 except ImportError:
     # `python3 src/segmentation/train.py`처럼 파일을 직접 실행할 때 사용하는 fallback import.
     from adapters import CarmakerSegmentationAdapter
@@ -44,6 +49,11 @@ except ImportError:
     from metrics import confusion_matrix, mask_psnr, segmentation_scores
     from models import build_model
     from utils.visualization import make_image_grid, overlay_mask
+    from utils.visualization_gpu import (
+        colorize_mask as colorize_mask_gpu,
+        make_image_grid_gpu,
+        overlay_mask_gpu,
+    )
 
 try:
     import lightning.pytorch as L
@@ -163,6 +173,13 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             dice_exclude_classes=cfg.get("dice_exclude_classes", [0]),
         )
 
+        # GPU 가속 시각화를 위해 팔레트를 버퍼로 등록 (모델과 함께 이동)
+        self.register_buffer(
+            "palette_tensor",
+            torch.tensor(palette, dtype=torch.uint8),
+            persistent=False,
+        )
+
         self.train_step_outputs = []
         self.validation_step_outputs = []
         self.test_step_outputs = []
@@ -213,7 +230,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         if self.trainer.world_size > 1:
             avg_loss = self.all_gather(avg_loss).mean()
 
-        if self.global_rank == 0:
+        if self.global_rank == 0 and not self.trainer.sanity_checking:
             writer = self.logger.experiment
             # 훈련 손실 에폭 평균 로깅 (x축: Epoch)
             writer.add_scalar("train/loss", avg_loss, self.display_epoch)
@@ -328,7 +345,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             avg_psnr = torch.tensor(psnrs).mean()
             self.log("test/psnr", avg_psnr, sync_dist=False)
 
-        if self.global_rank == 0:
+        if self.global_rank == 0 and not self.trainer.sanity_checking:
             writer = self.logger.experiment
             _write_confusion_matrix_text(
                 writer,
@@ -367,7 +384,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             avg_val_loss = self.all_gather(avg_val_loss).mean()
             psnrs = self.all_gather(psnrs).flatten()
 
-        if self.global_rank == 0:
+        if self.global_rank == 0 and not self.trainer.sanity_checking:
             writer = self.logger.experiment
             writer.add_scalar("val/loss", avg_val_loss, self.display_epoch)
 
@@ -396,14 +413,18 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             if self.worst_samples:
                 worst_overlays = []
                 for sample in self.worst_samples:
-                    # 정답(GT)과 예측(Pred)을 나란히 보여주는 오버레이 생성
-                    worst_overlays.append(overlay_mask(sample["image"], sample["pred"], self.palette))
+                    # GPU에서 직접 오버레이 생성 (CPU 이동 최소화)
+                    img = sample["image"].to(self.device)
+                    pred = sample["pred"].to(self.device)
+                    worst_overlays.append(
+                        overlay_mask_gpu(img, pred, self.palette_tensor)
+                    )
 
+                grid = make_image_grid_gpu(worst_overlays, columns=self.num_worst)
                 writer.add_image(
                     "debug/worst_samples",
-                    make_image_grid(worst_overlays, columns=4),
+                    grid,
                     self.display_epoch,
-                    dataformats="HWC"
                 )
 
         self.validation_step_outputs.clear()
@@ -506,7 +527,7 @@ class ImageLoggingCallback(L.Callback if L else object):
                 pl_module.display_epoch,
                 pl_module.model,
                 self.debug_loaders,
-                self.palette,
+                pl_module.palette_tensor,
                 pl_module.device,
                 write_gt=(epoch == 0),
             )
@@ -745,9 +766,10 @@ def _make_debug_loader_by_camera_grid(
 
     cameras = sorted(camera for camera, indices in indices_by_camera.items() if indices)
     indices = []
-    for sample_index in range(debug_image_count):
-        for camera in cameras:
-            camera_indices = indices_by_camera[camera]
+    # 행(Row)을 카메라로, 열(Column)을 샘플 데이터로 구성하기 위해 루프 순서 변경
+    for camera in cameras:
+        camera_indices = indices_by_camera[camera]
+        for sample_index in range(debug_image_count):
             if sample_index < len(camera_indices):
                 indices.append(camera_indices[sample_index])
 
@@ -762,7 +784,7 @@ def _make_debug_loader_by_camera_grid(
         num_workers=0,
         pin_memory=device.type == "cuda",
     )
-    return {"loader": loader, "columns": max(len(cameras), 1)}
+    return {"loader": loader, "columns": debug_image_count}
 
 
 def _debug_sample_camera(dataset, index: int) -> str:
@@ -784,7 +806,7 @@ def write_debug_image_grids(
     epoch: int,
     model,
     loaders: Dict[str, Any],
-    palette,
+    palette_tensor,
     device: torch.device,
     write_gt: bool = True,
 ) -> None:
@@ -797,7 +819,7 @@ def write_debug_image_grids(
             epoch,
             model,
             spec["loader"],
-            palette,
+            palette_tensor,
             device,
             split,
             columns=int(spec.get("columns", 2)),
@@ -811,7 +833,7 @@ def _write_debug_image_grid(
     epoch: int,
     model,
     loader,
-    palette,
+    palette_tensor,
     device: torch.device,
     split: str,
     columns: int = 2,
@@ -832,7 +854,7 @@ def _write_debug_image_grid(
     for batch in iterator:
         image = batch["image"].to(device)
         try:
-            pred = torch.argmax(model(image), dim=1).cpu()
+            pred = torch.argmax(model(image), dim=1)
         except RuntimeError as exc:
             if "out of memory" in str(exc).lower() and device.type == "cuda":
                 torch.cuda.empty_cache()
@@ -842,25 +864,18 @@ def _write_debug_image_grid(
                 return
             raise
 
-        gt = batch["mask"].cpu()
-        image_cpu = batch["image"].cpu()
-        gt_overlays.append(overlay_mask(image_cpu[0], gt[0], palette))
-        pred_overlays.append(overlay_mask(image_cpu[0], pred[0], palette))
+        gt = batch["mask"].to(device)
+        # GPU 상에서 오버레이 생성하여 속도 최적화
+        gt_overlays.append(overlay_mask_gpu(image[0], gt[0], palette_tensor))
+        pred_overlays.append(overlay_mask_gpu(image[0], pred[0], palette_tensor))
 
     if gt_overlays:
         if write_gt:
-            writer.add_image(
-                f"debug/{split}/gt_grid",
-                make_image_grid(gt_overlays, columns=columns),
-                epoch,
-                dataformats="HWC",
-            )
-        writer.add_image(
-            f"debug/{split}/pred_grid",
-            make_image_grid(pred_overlays, columns=columns),
-            epoch,
-            dataformats="HWC",
-        )
+            grid_gt = make_image_grid_gpu(gt_overlays, columns=columns)
+            writer.add_image(f"debug/{split}/gt_grid", grid_gt, epoch)
+
+        grid_pred = make_image_grid_gpu(pred_overlays, columns=columns)
+        writer.add_image(f"debug/{split}/pred_grid", grid_pred, epoch)
 
 
 def _maybe_start_tensorboard(
