@@ -186,7 +186,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         # 화면(Progress Bar)용 로깅
         opt = self.trainer.optimizers[0]
         current_lr = opt.param_groups[0]["lr"]
-        self.log("train/lr", current_lr, on_step=False, on_epoch=True, prog_bar=True, logger=False)
+        self.log("train/lr", current_lr, on_step=False, on_epoch=True, prog_bar=True, logger=False, batch_size=image.shape[0])
 
         # 실시간 스텝 로깅 (x축: Step)
         self.log(
@@ -254,27 +254,29 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         )
 
         # Worst Sample 추적 로직 (모든 Rank가 동일하게 수행하여 DDP 동기화 깨짐 방지)
-        with torch.no_grad():
-            pred_cpu = pred.cpu()
-            mask_cpu = mask.cpu()
-            for i in range(image.shape[0]):
-                # 개별 이미지의 mIoU 계산 (배경 제외 miou_fg 기준)
-                img_matrix = confusion_matrix(pred_cpu[i:i+1], mask_cpu[i:i+1], self.num_classes)
-                img_scores = segmentation_scores(img_matrix)
-                miou = img_scores["miou"]
-                miou_fg = img_scores["miou_fg"]
+        # 1080p 이미지를 매번 CPU로 옮기면 RAM 폭사가 발생하므로, 점수가 나쁜 경우에만 데이터를 복사합니다.
+        if self.current_epoch % self.cfg.get("image_log_interval", 5) == 0:
+            with torch.no_grad():
+                pred_cpu = pred.cpu()
+                mask_cpu = mask.cpu()
+                for i in range(image.shape[0]):
+                    img_matrix = confusion_matrix(pred_cpu[i : i + 1], mask_cpu[i : i + 1], self.num_classes)
+                    img_scores = segmentation_scores(img_matrix)
+                    miou = img_scores["miou"]
+                    miou_fg = img_scores["miou_fg"]
 
-                self.worst_samples.append({
-                    "miou": miou,
-                    "miou_fg": miou_fg,
-                    "image": image[i].cpu(),
-                    "mask": mask_cpu[i],
-                    "pred": pred_cpu[i]
-                })
-
-            # 성적이 가장 나쁜 상위 N개만 유지 (메모리 효율)
-            self.worst_samples.sort(key=lambda x: x["miou_fg"])
-            self.worst_samples = self.worst_samples[:self.num_worst]
+                    # 현재 리스트가 꽉 차지 않았거나, 현재 샘플이 기존 최악 중 하나보다 더 나쁜 점수일 때만 저장
+                    if len(self.worst_samples) < self.num_worst or miou_fg < self.worst_samples[-1]["miou_fg"]:
+                        self.worst_samples.append({
+                            "miou": miou,
+                            "miou_fg": miou_fg,
+                            "image": image[i].cpu(),
+                            "mask": mask_cpu[i],
+                            "pred": pred_cpu[i],
+                        })
+                        # 점수 오름차순 정렬 (낮은 점수가 앞쪽)
+                        self.worst_samples.sort(key=lambda x: x["miou_fg"])
+                        self.worst_samples = self.worst_samples[: self.num_worst]
 
         return output
 
@@ -351,9 +353,9 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         scores = segmentation_scores(total_matrix.cpu())
 
         # 화면(Progress Bar)용 로깅 (로거 기록은 제외)
-        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=False, logger=False)
-        self.log("val/miou_fg", scores["miou_fg"], prog_bar=True, sync_dist=False, logger=False)
-        self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False, logger=False)
+        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False) # Validation Dataloader Index 0
+        self.log("val/miou_fg", scores["miou_fg"], prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False)
+        self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False)
 
         # Val Loss 및 PSNR 동기화 (모든 Rank가 참여해야 하므로 if문 바깥에서 실행)
         avg_val_loss = torch.stack([x["val_loss"] for x in self.validation_step_outputs]).mean()
