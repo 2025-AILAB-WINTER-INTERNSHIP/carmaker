@@ -99,11 +99,17 @@ def split_dataset(
     test_ratio: float = 0.0,
     stratify_by_camera: bool = False,
     split_by_scenario: bool = True,
+    manual_split: Optional[dict[str, list[str]]] = None,
 ) -> tuple[Dataset, Dataset, Dataset, str, dict]:
     """Dataset을 train/validation/test로 나누되 seed로 split을 고정한다."""
     total = len(dataset)
     if val_ratio < 0 or test_ratio < 0 or val_ratio + test_ratio >= 1:
         raise ValueError("val_ratio and test_ratio must be non-negative and sum to less than 1.0")
+
+    if manual_split:
+        samples = getattr(dataset, "samples", None)
+        if samples is not None:
+            return _split_dataset_manually(dataset, manual_split)
 
     if split_by_scenario:
         samples = getattr(dataset, "samples", None)
@@ -131,6 +137,71 @@ def split_dataset(
         f"- **Test**: {test_count} images\n"
     )
     return subsets[0], subsets[1], subsets[2], report, {}
+
+def _split_dataset_manually(
+    dataset: Dataset,
+    manual_split: dict[str, list[str]],
+) -> tuple[Dataset, Dataset, Dataset, str, dict]:
+    """Splits dataset manually based on scenario names."""
+    samples = getattr(dataset, "samples")
+    scenario_groups: dict[str, list[int]] = defaultdict(list)
+    for index, sample in enumerate(samples):
+        scenario = sample.metadata.get("scenario", "unknown") if sample.metadata else "unknown"
+        scenario_groups[scenario].append(index)
+
+    train_indices: list[int] = []
+    val_indices: list[int] = []
+    test_indices: list[int] = []
+
+    # Track which scenarios were assigned to which split for the report
+    assigned_scenarios = {"train": [], "val": [], "test": []}
+
+    for split_name in ["train", "val", "test"]:
+        target_scenarios = manual_split.get(split_name, [])
+        for scenario in target_scenarios:
+            if scenario in scenario_groups:
+                indices = scenario_groups[scenario]
+                if split_name == "train":
+                    train_indices.extend(indices)
+                elif split_name == "val":
+                    val_indices.extend(indices)
+                else:
+                    test_indices.extend(indices)
+                assigned_scenarios[split_name].append((scenario, len(indices)))
+            else:
+                print(f"[warn] Manual split scenario '{scenario}' not found in dataset.")
+
+    total_images = len(dataset)
+    report = [f"### Manual Scenario-based Split Report", f"- Total images: {total_images}", ""]
+    report.append("| Split | Scenario Name | Images |")
+    report.append("| :--- | :--- | :--- |")
+
+    for split_name in ["train", "val", "test"]:
+        display_name = split_name.capitalize()
+        for scenario, count in assigned_scenarios[split_name]:
+            report.append(f"| {display_name} | `{scenario}` | {count} |")
+
+    report.append(f"\n**Summary:**")
+    report.append(f"- **Train**: {len(train_indices)} images ({len(train_indices)/total_images:.1%})")
+    report.append(f"- **Val**: {len(val_indices)} images ({len(val_indices)/total_images:.1%})")
+    report.append(f"- **Test**: {len(test_indices)} images ({len(test_indices)/total_images:.1%})")
+
+    report_md = "\n".join(report)
+    print(f"\n{report_md}\n")
+
+    split_info = {
+        "train_scenarios": [s[0] for s in assigned_scenarios["train"]],
+        "val_scenarios": [s[0] for s in assigned_scenarios["val"]],
+        "test_scenarios": [s[0] for s in assigned_scenarios["test"]],
+    }
+
+    return (
+        torch.utils.data.Subset(dataset, train_indices),
+        torch.utils.data.Subset(dataset, val_indices),
+        torch.utils.data.Subset(dataset, test_indices),
+        report_md,
+        split_info,
+    )
 
 
 def _split_dataset_by_scenario(

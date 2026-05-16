@@ -98,6 +98,7 @@ class SegmentationDataModule(L.LightningDataModule if L else object):
             test_ratio=float(self.cfg.get("test_ratio", 0.1)),
             stratify_by_camera=bool(self.cfg.get("stratify_by_camera", False)),
             split_by_scenario=bool(self.cfg.get("split_by_scenario", True)),
+            manual_split=self.cfg.get("manual_split"),
         )
         # HParams 기록을 위해 cfg에 상세 분할 정보 주입
         self.cfg.update(self.split_info)
