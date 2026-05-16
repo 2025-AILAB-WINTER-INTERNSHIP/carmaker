@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from typing import Callable, Optional, Tuple
 
@@ -187,7 +188,8 @@ def _split_dataset_manually(
     report.append(f"- **Test**: {len(test_indices)} images ({len(test_indices)/total_images:.1%})")
 
     report_md = "\n".join(report)
-    print(f"\n{report_md}\n")
+    if os.environ.get("LOCAL_RANK", "0") == "0":
+        print(f"\n{report_md}\n")
 
     split_info = {
         "train_scenarios": [s[0] for s in assigned_scenarios["train"]],
@@ -283,7 +285,8 @@ def _split_dataset_by_scenario(
     report.append(f"- **Test**: {len(test_indices)} images ({len(test_indices)/total_images:.1%}, target: {targets['test']})")
 
     report_md = "\n".join(report)
-    print(f"\n{report_md}\n")
+    if os.environ.get("LOCAL_RANK", "0") == "0":
+        print(f"\n{report_md}\n")
 
     split_info = {
         "train_scenarios": [s[0] for s in split_scenarios["train"]],
@@ -343,7 +346,8 @@ def _split_dataset_by_camera(
     report.append(f"- **Test**: {len(test_indices)} images")
 
     report_md = "\n".join(report)
-    print(f"\n{report_md}\n")
+    if os.environ.get("LOCAL_RANK", "0") == "0":
+        print(f"\n{report_md}\n")
 
     split_info = {
         "cameras": sorted(groups.keys()),
