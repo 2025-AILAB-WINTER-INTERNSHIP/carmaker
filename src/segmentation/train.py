@@ -261,16 +261,18 @@ class SegmentationLightningModule(L.LightningModule if L else object):
                     img_matrix = confusion_matrix(pred_cpu[i:i+1], mask_cpu[i:i+1], self.num_classes)
                     img_scores = segmentation_scores(img_matrix)
                     miou = img_scores["miou"]
+                    miou_fg = img_scores["miou_fg"]
 
                     self.worst_samples.append({
                         "miou": miou,
+                        "miou_fg": miou_fg,
                         "image": image[i].cpu(),
                         "mask": mask_cpu[i],
                         "pred": pred_cpu[i]
                     })
 
-                # 성적이 가장 나쁜 상위 N개만 유지 (메모리 효율)
-                self.worst_samples.sort(key=lambda x: x["miou"])
+                # 전경 성적이 가장 나쁜 상위 N개만 유지 (메모리 효율)
+                self.worst_samples.sort(key=lambda x: x["miou_fg"])
                 self.worst_samples = self.worst_samples[:self.num_worst]
 
         return output
