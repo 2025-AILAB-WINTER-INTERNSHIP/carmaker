@@ -50,12 +50,14 @@ try:
     from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
     from lightning.pytorch.loggers import TensorBoardLogger
     from lightning.pytorch.strategies import DDPStrategy
+    from lightning.pytorch.utilities.rank_zero import rank_zero_info
 except ImportError:
     try:
         import pytorch_lightning as L
         from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
         from pytorch_lightning.loggers import TensorBoardLogger
         from pytorch_lightning.strategies import DDPStrategy
+        from pytorch_lightning.utilities.rank_zero import rank_zero_info
     except ImportError:
         L = None
 
@@ -353,31 +355,28 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         self.log("val/miou_fg", scores["miou_fg"], prog_bar=True, sync_dist=False, logger=False)
         self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False, logger=False)
 
+        # Val Loss 및 PSNR 동기화 (모든 Rank가 참여해야 하므로 if문 바깥에서 실행)
+        avg_val_loss = torch.stack([x["val_loss"] for x in self.validation_step_outputs]).mean()
+        psnrs = torch.tensor([
+            x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
+        ], device=self.device)
+
+        if self.trainer.world_size > 1:
+            avg_val_loss = self.all_gather(avg_val_loss).mean()
+            psnrs = self.all_gather(psnrs).flatten()
+
         if self.global_rank == 0:
             writer = self.logger.experiment
+            writer.add_scalar("val/loss", avg_val_loss, self.display_epoch)
 
-            # Val Loss 및 PSNR 동기화
-            avg_val_loss = torch.stack([x["val_loss"] for x in self.validation_step_outputs]).mean()
-            psnrs = torch.tensor([
-                x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
-            ], device=self.device)
+            # 주요 지표들 수동 에폭 로깅
+            writer.add_scalar("val/miou", scores["miou"], self.display_epoch)
+            writer.add_scalar("val/miou_fg", scores["miou_fg"], self.display_epoch)
+            writer.add_scalar("val/dice", scores["dice"], self.display_epoch)
 
-            if self.trainer.world_size > 1:
-                avg_val_loss = self.all_gather(avg_val_loss).mean()
-                psnrs = self.all_gather(psnrs).flatten()
-
-            if self.global_rank == 0:
-                writer = self.logger.experiment
-                writer.add_scalar("val/loss", avg_val_loss, self.display_epoch)
-
-                # 주요 지표들 수동 에폭 로깅
-                writer.add_scalar("val/miou", scores["miou"], self.display_epoch)
-                writer.add_scalar("val/miou_fg", scores["miou_fg"], self.display_epoch)
-                writer.add_scalar("val/dice", scores["dice"], self.display_epoch)
-
-                if len(psnrs) > 0:
-                    avg_psnr = psnrs.mean()
-                    writer.add_scalar("val/psnr", avg_psnr, self.display_epoch)
+            if len(psnrs) > 0:
+                avg_psnr = psnrs.mean()
+                writer.add_scalar("val/psnr", avg_psnr, self.display_epoch)
 
             _write_confusion_matrix_text(
                 writer,
@@ -617,6 +616,7 @@ def main() -> None:
     data_module = SegmentationDataModule(cfg, adapter)
     # setup()을 미리 호출하여 데이터셋 정보를 가져온다.
     data_module.setup()
+    rank_zero_info(data_module.split_report)
 
     model = SegmentationLightningModule(
         cfg=cfg,
@@ -711,7 +711,7 @@ def main() -> None:
         log_every_n_steps=log_every_n_steps,
     )
 
-    print(
+    rank_zero_info(
         f"[train] samples={len(data_module.train_dataset)} val={len(data_module.val_dataset)} "
         f"test={len(data_module.test_dataset)} run_dir={run_dir}"
     )
@@ -1039,7 +1039,7 @@ def _optimize_num_workers(cfg: Dict[str, Any]) -> None:
         # 너무 많으면 I/O 오버헤드, 너무 적으면 GPU 대기 발생
         optimized = max(2, min(cpu_count // gpu_count, 8))
         cfg["num_workers"] = optimized
-        print(
+        rank_zero_info(
             f"[config] optimized num_workers to {optimized} (cpu_allocated={cpu_count}, gpu={gpu_count})"
         )
 
