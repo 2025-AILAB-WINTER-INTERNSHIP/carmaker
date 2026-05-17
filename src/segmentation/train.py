@@ -444,13 +444,32 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             # TensorBoard hparams는 bool, str, float, int만 지원하므로 타입 체크
             hparams = {k: v if isinstance(v, (int, float, str, bool)) else str(v) for k, v in hparams.items()}
 
-            # 2. 결과 지표 준비 (hparam/ 접두어를 붙여 HParams 전용임을 명시)
+            # 2. 결과 지표 준비 및 값 정제
+            # TensorBoard HParams 탭의 메트릭과 실제로 기록된 Scalar 태그명이 정확히 일치해야 지표가 노출됩니다.
+            # 기존 "hparam/val_..." 키는 실제 스칼라 로그 태그("val/...")와 매칭되지 않아 지표가 표시되지 않던 문제가 있었습니다.
+            val_loss = self.trainer.callback_metrics.get("val/loss", 0)
+            val_miou = self.trainer.callback_metrics.get("val/miou", 0)
+            val_miou_fg = self.trainer.callback_metrics.get("val/miou_fg", 0)
+            val_dice = self.trainer.callback_metrics.get("val/dice", 0)
+            best_miou = getattr(self.trainer.checkpoint_callback, "best_model_score", 0) or 0
+
+            # Tensor/Scalar 타입을 파이썬 기본 float형으로 정제
+            val_loss_f = float(val_loss.item()) if isinstance(val_loss, torch.Tensor) else float(val_loss)
+            val_miou_f = float(val_miou.item()) if isinstance(val_miou, torch.Tensor) else float(val_miou)
+            val_miou_fg_f = float(val_miou_fg.item()) if isinstance(val_miou_fg, torch.Tensor) else float(val_miou_fg)
+            val_dice_f = float(val_dice.item()) if isinstance(val_dice, torch.Tensor) else float(val_dice)
+            best_miou_f = float(best_miou.item()) if isinstance(best_miou, torch.Tensor) else float(best_miou)
+
+            # best_miou는 에폭 단위로 기록되지 않았던 스칼라이므로, 매칭을 위해 마지막 순간에 텐서보드 스칼라로도 한 번 기록해 줍니다.
+            writer = self.logger.experiment
+            writer.add_scalar("val/best_miou", best_miou_f, self.display_epoch)
+
             metrics = {
-                "hparam/val_loss": self.trainer.callback_metrics.get("val/loss", 0),
-                "hparam/val_miou": self.trainer.callback_metrics.get("val/miou", 0),
-                "hparam/val_miou_fg": self.trainer.callback_metrics.get("val/miou_fg", 0),
-                "hparam/val_dice": self.trainer.callback_metrics.get("val/dice", 0),
-                "hparam/best_miou": getattr(self.trainer.checkpoint_callback, "best_model_score", 0) or 0,
+                "val/loss": val_loss_f,
+                "val/miou": val_miou_f,
+                "val/miou_fg": val_miou_fg_f,
+                "val/dice": val_dice_f,
+                "val/best_miou": best_miou_f,
             }
 
             # 3. 텐서보드에 최종 기록
