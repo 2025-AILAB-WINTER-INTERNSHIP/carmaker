@@ -44,7 +44,7 @@ class DiceLoss(nn.Module):
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # AMP 환경 하에서 분산 연산 시 1920x1080 대형 해상도 누적으로 인한 FP16 오버플로우(inf/inf -> NaN)를
         # 원천적으로 방지하기 위해, 전체 손실 연산을 명시적으로 FP32 공간에서만 수행하도록 강제합니다.
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast(device_type="cuda", enabled=False):
             # logits: [B, C, H, W] -> softmax 확률 p_c.
             # target: [B, H, W] class id -> one-hot 정답 y_c.
             logits = logits.float()  # Cast to float32 for stable softmax under AMP
@@ -123,7 +123,7 @@ class FocalLoss(nn.Module):
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # AMP 환경 하에서 분산 연산 시 1920x1080 대형 해상도 누적으로 인한 FP16 오버플로우 및 기저 0.0 거듭제곱 미분 NaN 오류를
         # 방지하기 위해 전체 손실 연산을 명시적으로 FP32 공간에서만 수행하도록 강제합니다.
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast(device_type="cuda", enabled=False):
             logits = logits.float()  # Cast to float32 for stable cross_entropy under AMP
 
             # [수치적 안정성 확보 1단계 - Logits 오버플로우 방지]

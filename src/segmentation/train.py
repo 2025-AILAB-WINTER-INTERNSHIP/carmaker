@@ -272,7 +272,8 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
         # Worst Sample 추적 로직 (모든 Rank가 동일하게 수행하여 DDP 동기화 깨짐 방지)
         # 1080p 이미지를 매번 CPU로 옮기면 RAM 폭사가 발생하므로, 점수가 나쁜 경우에만 데이터를 복사합니다.
-        if self.current_epoch % self.cfg.get("image_log_interval", 5) == 0:
+        image_log_interval = int(self.cfg.get("image_log_interval", 5))
+        if self.current_epoch == 0 or (self.current_epoch + 1) % image_log_interval == 0:
             with torch.no_grad():
                 pred_cpu = pred.cpu()
                 mask_cpu = mask.cpu()
