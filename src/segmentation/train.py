@@ -750,6 +750,8 @@ def main() -> None:
         logger=logger,
         callbacks=[checkpoint_callback, lr_monitor, image_callback],
         precision="16-mixed" if torch.cuda.is_available() else 32,
+        gradient_clip_val=t_cfg.get("gradient_clip_val", 1.0),
+        gradient_clip_algorithm=t_cfg.get("gradient_clip_algorithm", "norm"),
         log_every_n_steps=log_every_n_steps,
     )
 

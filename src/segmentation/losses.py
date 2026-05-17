@@ -28,6 +28,7 @@ class DiceLoss(nn.Module):
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # logits: [B, C, H, W] -> softmax 확률 p_c.
         # target: [B, H, W] class id -> one-hot 정답 y_c.
+        logits = logits.float()  # Cast to float32 for stable softmax under AMP
         probs = torch.softmax(logits, dim=1)
         target_one_hot = (
             F.one_hot(target.clamp_min(0), self.num_classes).permute(0, 3, 1, 2).float()
@@ -75,6 +76,7 @@ class FocalLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        logits = logits.float()  # Cast to float32 for stable cross_entropy under AMP
         # 픽셀별 Cross Entropy:
         #   CE = -log(p_t)
         #

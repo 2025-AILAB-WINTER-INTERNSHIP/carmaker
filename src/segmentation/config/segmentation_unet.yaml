@@ -32,6 +32,8 @@ trainer:
   max_epochs: 50
   accumulate_grad_batches: 2  # Gradient accumulation steps
   limit_train_batches: 1.0    # Training data usage (1.0 = 100%, float for %, int for count)
+  gradient_clip_val: 1.0      # Prevent backward gradient explosion
+  gradient_clip_algorithm: norm
   log_every_n_steps: 50
   # 프로파일러 설정: null(비활성), 'simple'(간단히), 'advanced'(상세히)
   # 프로파일러가 켜져 있으면(null이 아니면) 아래 'on_profiling' 설정이 적용되어 학습이 조기 종료됩니다.
