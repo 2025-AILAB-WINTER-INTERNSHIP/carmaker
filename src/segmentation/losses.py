@@ -88,34 +88,45 @@ class FocalLoss(nn.Module):
             ignore_index=self.ignore_index,
             reduction="none",
         )
-
-        # pt는 정답 class 확률 p_t와 같다. CE = -log(p_t)이므로 exp(-CE) = p_t.
-        pt = torch.exp(-ce)
-
         # Focal Loss:
         #   FL = (1 - p_t)^gamma * CE
         #
         # p_t가 크면 이미 쉬운 픽셀이므로 (1 - p_t)^gamma가 작아져 기여도가 줄고,
         # p_t가 작으면 어려운 픽셀이므로 CE를 더 강하게 남긴다.
-        focal_loss = (1.0 - pt) ** self.gamma * ce
+
+        # pt는 정답 class 확률 p_t와 같다. CE = -log(p_t)이므로 exp(-CE) = p_t.
+        pt = torch.exp(-ce)
+
+        # FP16 precision 환경에서 (1.0 - pt)가 미세하게 음수가 되는 것을 방지하기 위해 clamp 적용.
+        # base가 0.0이하로 떨어지면 float exponent (gamma) 연산 시 gradient가 NaN이 될 수 있습니다.
+        focal_coeff = torch.clamp(1.0 - pt, min=0.0, max=1.0)
+        focal_loss = (focal_coeff ** self.gamma) * ce
 
         # background가 대부분인 segmentation에서 foreground 학습 신호가 묻히지 않도록
         # 전경(target > 0)과 배경(target == 0)을 분리하여 정규화합니다.
-        # 전체 합을 전경 수로 나누면 전경이 적을 때 로스가 폭발하므로, 각각의 평균을 합산합니다.
+        #
+        # [중요] mixed-precision (FP16) 및 분산 학습(DDP) 환경에서의 극도의 안정성을 위해:
+        # 1. GPU-CPU 동기화를 유발하고 backward graph를 불완전하게 만드는 boolean indexing (focal_loss[mask])을 배제합니다.
+        # 2. 모든 연산을 완전 벡터화(Mask multiplication)하고 제어 흐름(if) 없이 계산합니다.
+        # 3. ignore_index 픽셀들을 정확하게 계산에서 배제합니다.
 
-        fg_mask = (target > 0)
-        bg_mask = (target == 0)
+        valid_mask = (target != self.ignore_index).float()
+        fg_mask = ((target > 0) & (target != self.ignore_index)).float()
+        bg_mask = ((target == 0) & (target != self.ignore_index)).float()
 
-        # 전경 로스: 전경 픽셀들의 평균 에러 (전경이 없으면 0)
-        num_fg = fg_mask.sum().float()
-        fg_loss = focal_loss[fg_mask].sum() / torch.clamp(num_fg, min=1.0) if num_fg > 0 else 0.0
+        num_fg = fg_mask.sum()
+        num_bg = bg_mask.sum()
 
-        # 배경 로스: 배경 픽셀들의 평균 에러 (배경이 없으면 0)
-        num_bg = bg_mask.sum().float()
-        bg_loss = focal_loss[bg_mask].sum() / torch.clamp(num_bg, min=1.0) if num_bg > 0 else 0.0
+        # 전경 로스: 전경 픽셀들의 평균 에러
+        fg_loss = (focal_loss * fg_mask).sum() / torch.clamp(num_fg, min=1.0)
+        # 배경 로스: 배경 픽셀들의 평균 에러
+        bg_loss = (focal_loss * bg_mask).sum() / torch.clamp(num_bg, min=1.0)
+
+        # 각 마스크의 실제 존재 여부에 따라 최종 로스를 선택 (분기문 없이 곱셈으로 처리)
+        fg_loss = fg_loss * (num_fg > 0).float()
+        bg_loss = bg_loss * (num_bg > 0).float()
 
         # 두 로스를 합산하여 반환.
-        # 이렇게 하면 전경이 아주 적더라도 배경 로스가 스케일을 안정적으로 잡아줍니다.
         return fg_loss + bg_loss
 
 
