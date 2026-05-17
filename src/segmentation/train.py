@@ -376,9 +376,9 @@ class SegmentationLightningModule(L.LightningModule if L else object):
 
         # Val Loss 및 PSNR 동기화 (모든 Rank가 참여해야 하므로 if문 바깥에서 실행)
         avg_val_loss = torch.stack([x["val_loss"] for x in self.validation_step_outputs]).mean()
-        psnrs = torch.tensor([
-            x["psnr"] for x in self.validation_step_outputs if np.isfinite(x["psnr"])
-        ], device=self.device)
+        # DDP 동기화 시 텐서 크기 불일치로 인한 크래시(RuntimeError)를 원천 차단하기 위해,
+        # 각 스텝의 PSNR 값을 필터링 없이 고정 크기로 수집한 뒤 DDP gather 후 Rank 0에서 finite 값을 선별합니다.
+        psnrs = torch.tensor([x["psnr"] for x in self.validation_step_outputs], device=self.device)
 
         if self.trainer.world_size > 1:
             avg_val_loss = self.all_gather(avg_val_loss).mean()
@@ -393,8 +393,10 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             writer.add_scalar("val/miou_fg", scores["miou_fg"], self.display_epoch)
             writer.add_scalar("val/dice", scores["dice"], self.display_epoch)
 
-            if len(psnrs) > 0:
-                avg_psnr = psnrs.mean()
+            # 유한한(finite) PSNR 값들만 필터링하여 평균 계산 (DDP 동기화 후 안전하게 필터링)
+            valid_psnrs = psnrs[torch.isfinite(psnrs)]
+            if len(valid_psnrs) > 0:
+                avg_psnr = valid_psnrs.mean()
                 writer.add_scalar("val/psnr", avg_psnr, self.display_epoch)
 
             _write_confusion_matrix_text(
