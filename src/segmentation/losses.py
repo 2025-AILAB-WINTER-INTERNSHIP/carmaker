@@ -29,6 +29,11 @@ class DiceLoss(nn.Module):
         # logits: [B, C, H, W] -> softmax 확률 p_c.
         # target: [B, H, W] class id -> one-hot 정답 y_c.
         logits = logits.float()  # Cast to float32 for stable softmax under AMP
+
+        # [수치적 안정성 확보 - Logits 오버플로우 방지]
+        # Logits 값의 오버플로우로 인해 softmax 내부의 exp(z)가 inf가 되어 inf/inf = NaN이 터지는 현상을 방지합니다.
+        logits = torch.clamp(logits, min=-50.0, max=50.0)
+
         probs = torch.softmax(logits, dim=1)
         target_one_hot = (
             F.one_hot(target.clamp_min(0), self.num_classes).permute(0, 3, 1, 2).float()
@@ -77,6 +82,11 @@ class FocalLoss(nn.Module):
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         logits = logits.float()  # Cast to float32 for stable cross_entropy under AMP
+
+        # [수치적 안정성 확보 1단계 - Logits 오버플로우 방지]
+        # Logits 값 자체의 오버플로우/언더플로우 및 이로 인한 cross_entropy의 NaN 출력을 원천적으로 방지합니다.
+        logits = torch.clamp(logits, min=-50.0, max=50.0)
+
         # 픽셀별 Cross Entropy:
         #   CE = -log(p_t)
         #
@@ -90,6 +100,14 @@ class FocalLoss(nn.Module):
             ignore_index=self.ignore_index,
             reduction="none",
         )
+
+        # [수치적 안정성 확보 2단계 - 치명적인 NaN 방지]
+        # 특히 FP16 mixed precision 하에서 극도로 오판한 픽셀의 CE가 inf로 발산할 수 있습니다.
+        # CE가 inf인 경우, 이후 fg/bg mask 곱셈 연산(focal_loss * fg_mask) 시 `inf * 0.0`이 발생하여
+        # 최종 로스 및 그래디언트가 NaN으로 붕괴(Gradient Collapse)되는 현상이 발생합니다.
+        # 이를 방지하기 위해 CE 값을 안전한 범위 내로 클램핑합니다.
+        ce = torch.clamp(ce, min=0.0, max=50.0)
+
         # Focal Loss:
         #   FL = (1 - p_t)^gamma * CE
         #
