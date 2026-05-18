@@ -30,7 +30,7 @@ DEFAULT_CLASS_NAMES = tuple(CarmakerSegmentationAdapter.class_names)
 class SegmentationResult:
     """Outputs from one segmentation inference pass."""
 
-    class_map: np.ndarray
+    class_map: np.ndarray 
     class_names: Sequence[str]
 
 
@@ -102,6 +102,43 @@ class SegmentationPredictor:
             class_map=class_map,
             class_names=self.class_names,
         )
+
+    @torch.inference_mode()
+    def predict_batch(self, images: Sequence[np.ndarray], color_order: str = "bgr") -> list[SegmentationResult]:
+        """Run segmentation on multiple uint8 HWC images in one model forward."""
+        if not images:
+            return []
+
+        # 각 입력 이미지는 preprocess_rgb()에서 [1, 3, H, W]로 변환된다.
+        # 아래에서 torch.cat()으로 합쳐 모델에는 [B, 3, H, W] batch를 한 번만 넣는다.
+        original_shapes = []
+        tensors = []
+        for image in images:
+            if image is None or image.ndim != 3 or image.shape[2] != 3:
+                raise ValueError("each image must be an HWC uint8 3-channel array")
+
+            original_shapes.append(image.shape[:2])
+            rgb = to_rgb(image, color_order)
+            tensors.append(preprocess_rgb(rgb, self.image_size))
+
+        batch = torch.cat(tensors, dim=0).to(self.device)
+        logits = self.model(batch)
+        class_maps_t = torch.argmax(logits, dim=1)
+
+        # batch output [B, H, W]를 다시 이미지별 SegmentationResult로 풀어준다.
+        # 원본 크기가 모델 입력 크기와 다르면 단일 이미지 경로와 동일하게 nearest로 복원한다.
+        results = []
+        for class_map_t, (original_h, original_w) in zip(class_maps_t, original_shapes):
+            class_map = class_map_t.detach().cpu().numpy().astype(np.uint8)
+            if self.resize_output and (class_map.shape[0] != original_h or class_map.shape[1] != original_w):
+                class_map = cv2.resize(class_map, (original_w, original_h), interpolation=cv2.INTER_NEAREST)
+            results.append(
+                SegmentationResult(
+                    class_map=class_map,
+                    class_names=self.class_names,
+                )
+            )
+        return results
 
 
 def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:

@@ -44,6 +44,10 @@ class SegmentationInferenceNode:
         self.input_encoding = rospy.get_param("~input_encoding", "bgr8")
         self.log_timing = parse_bool(rospy.get_param("~log_timing", True))
         self.timing_log_interval = float(rospy.get_param("~timing_log_interval", 1.0))
+        # bundle 모드에서 synchronized camera images를 한 번의 PyTorch batch로 묶을지 정한다.
+        # false로 두면 기존처럼 각 이미지를 batch size 1로 순차 처리한다.
+        self.bundle_batch_inference = parse_bool(rospy.get_param("~bundle_batch_inference", True))
+        self.bundle_batch_size = max(1, int(rospy.get_param("~bundle_batch_size", 4)))
 
         # 실제 모델 로딩과 PyTorch inference는 ROS와 분리된 SegmentationPredictor가 담당한다.
         # 이 노드는 topic 입출력만 얇게 연결하는 adapter 역할을 한다.
@@ -93,10 +97,14 @@ class SegmentationInferenceNode:
                 queue_size=queue_size,
             )
             rospy.loginfo(
-                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s classes=%s",
+                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s image_size=%sx%s batch_inference=%s batch_size=%d classes=%s",
                 bundle_topic,
                 class_map_bundle_topic,
                 self.predictor.device,
+                self.predictor.image_size[0],
+                self.predictor.image_size[1],
+                self.bundle_batch_inference,
+                self.bundle_batch_size,
                 ",".join(self.predictor.class_names),
             )
         elif input_mode == "image":
@@ -175,13 +183,20 @@ class SegmentationInferenceNode:
             class_bundle.names = list(msg.names)
             class_bundle.infos = list(msg.infos)
 
-            # 현재 모델 API는 한 번에 이미지 한 장을 받으므로 bundle 안의 이미지를 순차 처리한다.
-            # 나중에 batch inference를 지원하게 되면 이 루프만 batch 호출로 바꾸면 된다.
+            # bundle batch inference를 켜면 여러 카메라 이미지를 한 번의 model forward로 처리한다.
+            # 끄면 기존처럼 이미지 한 장씩 순차 처리한다.
             total_inference_ms = 0.0
-            for image_msg in msg.images:
-                class_msg, inference_ms = self.predict_class_map_msg(image_msg)
-                class_bundle.images.append(class_msg)
-                total_inference_ms += inference_ms
+            if self.bundle_batch_inference:
+                for start in range(0, len(msg.images), self.bundle_batch_size):
+                    image_msgs = msg.images[start : start + self.bundle_batch_size]
+                    class_msgs, inference_ms = self.predict_class_map_msgs(image_msgs)
+                    class_bundle.images.extend(class_msgs)
+                    total_inference_ms += inference_ms
+            else:
+                for image_msg in msg.images:
+                    class_msg, inference_ms = self.predict_class_map_msg(image_msg)
+                    class_bundle.images.append(class_msg)
+                    total_inference_ms += inference_ms
 
             self.class_map_bundle_pub.publish(class_bundle)
 
@@ -219,6 +234,25 @@ class SegmentationInferenceNode:
         class_msg = self.bridge.cv2_to_imgmsg(result.class_map, encoding="mono8")
         class_msg.header = msg.header
         return class_msg, inference_ms
+
+    def predict_class_map_msgs(self, msgs: list[Image]) -> Tuple[list[Image], float]:
+        # ROS Image 배열을 OpenCV 배열 리스트로 바꾼 뒤 predictor의 batch API에 넘긴다.
+        # 결과 순서는 입력 순서와 같으므로 CameraBundle의 names/images index 규칙이 유지된다.
+        images_bgr = [
+            self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.input_encoding)
+            for msg in msgs
+        ]
+
+        inference_start = time.perf_counter()
+        results = self.predictor.predict_batch(images_bgr, color_order="bgr")
+        inference_ms = (time.perf_counter() - inference_start) * 1000.0
+
+        class_msgs = []
+        for msg, result in zip(msgs, results):
+            class_msg = self.bridge.cv2_to_imgmsg(result.class_map, encoding="mono8")
+            class_msg.header = msg.header
+            class_msgs.append(class_msg)
+        return class_msgs, inference_ms
 
 
 def main() -> None:
