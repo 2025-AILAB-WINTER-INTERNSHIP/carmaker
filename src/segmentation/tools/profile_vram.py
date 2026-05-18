@@ -1,14 +1,19 @@
 import gc
+import json
+import os
+import statistics
+import subprocess
 import sys
+from argparse import ArgumentParser
 from pathlib import Path
+from typing import Any, Dict, List, Literal, Tuple, cast
 
 import torch
 
-# Try importing the model; handle possible dependencies dynamically
 try:
     from ..models import UNet
 except ImportError:
-    # Fallback for direct execution: uv run profile_vram.py
+    # 직접 실행을 위한 Fallback (예: uv run profile_vram.py)
     SRC_ROOT = Path(__file__).resolve().parents[2]
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
@@ -19,83 +24,366 @@ except ImportError:
         print(f"Import failed: {inner_e}")
         sys.exit(1)
 
+Precision = Literal["fp16", "bf16", "fp32"]
 
-def profile_inference(batch_size: int, use_amp: bool = True) -> bool:
+
+def _to_mb(value_bytes: int) -> float:
+    return value_bytes / (1024**2)
+
+
+def profile_single_case(
+    batch_size: int,
+    precision: Precision,
+    height: int,
+    width: int,
+    warmup: int,
+    measured_runs: int,
+) -> Dict[str, Any]:
     model = None
     dummy_input = None
 
-    # Clear CUDA cache and reset peak memory trackers
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
+    precision_lower = precision.lower()
+    if precision_lower not in ("fp16", "bf16", "fp32"):
+        return {
+            "ok": False,
+            "error": "Invalid precision. Use one of: fp16, bf16, fp32",
+            "precision": precision,
+            "batch_size": batch_size,
+        }
 
-    precision_str = "FP16" if use_amp else "FP32"
+    if precision_lower == "bf16" and not torch.cuda.is_bf16_supported():
+        return {
+            "ok": False,
+            "error": "BF16 is not supported on this GPU",
+            "precision": precision,
+            "batch_size": batch_size,
+            "unsupported": True,
+        }
+
+    torch.backends.cudnn.benchmark = False
+
     try:
-        # 1. Instantiate the UNet model (using GroupNorm default as configured)
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
         model = UNet(
             in_channels=3, num_classes=3, base_channels=32, norm_type="group"
         ).cuda()
         model.eval()
 
-        # Measure memory occupied by model weights
-        mem_after_model = torch.cuda.memory_allocated() / (1024**2)
+        dummy_input = torch.randn(batch_size, 3, height, width, device="cuda")
 
-        # 2. Prepare dummy FHD [B, 3, 1080, 1920] image tensor on GPU
-        dummy_input = torch.randn(batch_size, 3, 1080, 1920).cuda()
-
-        # If mixed precision/FP16 is requested, convert to half precision
-        if use_amp:
+        if precision_lower == "fp16":
             dummy_input = dummy_input.half()
             model = model.half()
+        elif precision_lower == "bf16":
+            dummy_input = dummy_input.bfloat16()
+            model = model.bfloat16()
 
-        # 3. Warmup pass to initialize CUDA kernels and internal autograd caching
+        torch.cuda.synchronize()
+        model_weights_mb = _to_mb(torch.cuda.memory_allocated())
+
         with torch.inference_mode():
-            _ = model(dummy_input)
+            for _ in range(max(1, warmup)):
+                _ = model(dummy_input)
+        torch.cuda.synchronize()
 
-        # Reset peak memory stats to isolate active inference peak
-        torch.cuda.reset_peak_memory_stats()
+        run_peaks_allocated_mb: List[float] = []
+        run_peaks_reserved_mb: List[float] = []
+        run_latencies_ms: List[float] = []
 
-        # 4. Actual inference pass under inference_mode
-        with torch.inference_mode():
-            _ = model(dummy_input)
+        for _ in range(max(1, measured_runs)):
+            torch.cuda.reset_peak_memory_stats()
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
 
-        peak_mem = torch.cuda.max_memory_allocated() / (1024**2)
+            torch.cuda.synchronize()
+            start_event.record()
 
-        print(f"[Batch Size {batch_size} ({precision_str})]")
-        print(f"  - Model Weights VRAM   : {mem_after_model:.2f} MB")
-        print(f"  - Peak Inference VRAM  : {peak_mem:.2f} MB")
-        print("-" * 50)
-        return True
+            with torch.inference_mode():
+                _ = model(dummy_input)
+
+            end_event.record()
+            torch.cuda.synchronize()
+
+            run_peaks_allocated_mb.append(_to_mb(torch.cuda.max_memory_allocated()))
+            run_peaks_reserved_mb.append(_to_mb(torch.cuda.max_memory_reserved()))
+            run_latencies_ms.append(start_event.elapsed_time(end_event))
+
+        baseline_allocated_mb = _to_mb(torch.cuda.memory_allocated())
+        baseline_reserved_mb = _to_mb(torch.cuda.memory_reserved())
+
+        median_latency_ms = statistics.median(run_latencies_ms)
+        median_fps = (
+            batch_size * 1000.0 / median_latency_ms if median_latency_ms > 0 else 0.0
+        )
+
+        return {
+            "ok": True,
+            "precision": precision_lower,
+            "batch_size": batch_size,
+            "shape": [batch_size, 3, height, width],
+            "model_weights_mb": model_weights_mb,
+            "baseline_allocated_mb": baseline_allocated_mb,
+            "baseline_reserved_mb": baseline_reserved_mb,
+            "peak_allocated_mb": max(run_peaks_allocated_mb),
+            "peak_reserved_mb": max(run_peaks_reserved_mb),
+            "latency_ms_median": median_latency_ms,
+            "latency_ms_min": min(run_latencies_ms),
+            "latency_ms_max": max(run_latencies_ms),
+            "fps_median": median_fps,
+            "run_peaks_allocated_mb": run_peaks_allocated_mb,
+            "run_peaks_reserved_mb": run_peaks_reserved_mb,
+            "run_latencies_ms": run_latencies_ms,
+        }
     except torch.OutOfMemoryError as oom_error:
-        print(f"[Batch Size {batch_size} ({precision_str})]")
-        print(f"  - OOM during profiling: {oom_error}")
-        print("  - Suggestion: lower batch size or enable FP16.")
-        print("-" * 50)
-        return False
+        return {
+            "ok": False,
+            "precision": precision,
+            "batch_size": batch_size,
+            "error": str(oom_error),
+            "oom": True,
+        }
     finally:
-        # Release references so each case starts from a clean state.
         del model
         del dummy_input
         gc.collect()
         torch.cuda.empty_cache()
 
 
+def run_case_in_isolated_process(
+    batch_size: int,
+    precision: Precision,
+    height: int,
+    width: int,
+    warmup: int,
+    measured_runs: int,
+) -> Dict[str, Any]:
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--single-case",
+        "--batch-size",
+        str(batch_size),
+        "--precision",
+        precision,
+        "--height",
+        str(height),
+        "--width",
+        str(width),
+        "--warmup",
+        str(warmup),
+        "--measured-runs",
+        str(measured_runs),
+        "--json",
+    ]
+
+    env = os.environ.copy()
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+    completed = subprocess.run(
+        cmd,
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = None
+    for line in reversed(completed.stdout.splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            payload = line
+            break
+
+    if payload is None:
+        return {
+            "ok": False,
+            "precision": precision,
+            "batch_size": batch_size,
+            "error": "Failed to parse subprocess JSON output",
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "returncode": completed.returncode,
+        }
+
+    result = json.loads(payload)
+    if completed.returncode != 0 and result.get("ok", False):
+        result["ok"] = False
+        result["error"] = f"Subprocess exited with code {completed.returncode}"
+    return result
+
+
+def summarize_case(case_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    successful = [r for r in case_results if r.get("ok")]
+    failed = [r for r in case_results if not r.get("ok")]
+
+    if not successful:
+        return {
+            "ok": False,
+            "num_trials": len(case_results),
+            "num_success": 0,
+            "num_failed": len(failed),
+            "errors": [f.get("error", "Unknown error") for f in failed],
+        }
+
+    peaks_alloc = [float(cast(Any, r["peak_allocated_mb"])) for r in successful]
+    peaks_rsrv = [float(cast(Any, r["peak_reserved_mb"])) for r in successful]
+    weights = [float(cast(Any, r["model_weights_mb"])) for r in successful]
+    latencies = [float(cast(Any, r["latency_ms_median"])) for r in successful]
+    fps_values = [float(cast(Any, r["fps_median"])) for r in successful]
+
+    summary = {
+        "ok": True,
+        "num_trials": len(case_results),
+        "num_success": len(successful),
+        "num_failed": len(failed),
+        "model_weights_mb_median": statistics.median(weights),
+        "peak_allocated_mb_median": statistics.median(peaks_alloc),
+        "peak_allocated_mb_min": min(peaks_alloc),
+        "peak_allocated_mb_max": max(peaks_alloc),
+        "peak_reserved_mb_median": statistics.median(peaks_rsrv),
+        "peak_reserved_mb_min": min(peaks_rsrv),
+        "peak_reserved_mb_max": max(peaks_rsrv),
+        "latency_ms_median": statistics.median(latencies),
+        "latency_ms_min": min(latencies),
+        "latency_ms_max": max(latencies),
+        "fps_median": statistics.median(fps_values),
+        "fps_min": min(fps_values),
+        "fps_max": max(fps_values),
+    }
+    return summary
+
+
+def print_case_report(
+    batch_size: int, precision: Precision, summary: Dict[str, Any]
+) -> None:
+    precision_str = precision.upper()
+    print(f"[Batch Size {batch_size} ({precision_str})]")
+    if not summary.get("ok"):
+        print("  - All trials failed.")
+        print("-" * 50)
+        return
+
+    print(
+        f"  - Trials (success/total): {summary['num_success']}/{summary['num_trials']}"
+    )
+    print(
+        f"  - Model Weights VRAM (median): {summary['model_weights_mb_median']:.2f} MB"
+    )
+    print(
+        "  - Peak Allocated VRAM (median/min/max): "
+        f"{summary['peak_allocated_mb_median']:.2f} / "
+        f"{summary['peak_allocated_mb_min']:.2f} / "
+        f"{summary['peak_allocated_mb_max']:.2f} MB"
+    )
+    print(
+        "  - Peak Reserved VRAM (median/min/max): "
+        f"{summary['peak_reserved_mb_median']:.2f} / "
+        f"{summary['peak_reserved_mb_min']:.2f} / "
+        f"{summary['peak_reserved_mb_max']:.2f} MB"
+    )
+    print(
+        "  - Inference Latency (median/min/max): "
+        f"{summary['latency_ms_median']:.2f} / "
+        f"{summary['latency_ms_min']:.2f} / "
+        f"{summary['latency_ms_max']:.2f} ms"
+    )
+    print(
+        "  - Throughput (median/min/max): "
+        f"{summary['fps_median']:.2f} / "
+        f"{summary['fps_min']:.2f} / "
+        f"{summary['fps_max']:.2f} frames/s"
+    )
+
+    errors = summary.get("errors", [])
+    if isinstance(errors, list):
+        for err in errors:
+            print(f"  - Error: {err}")
+    print("-" * 50)
+
+
+def parse_args():
+    parser = ArgumentParser(description="Stable VRAM profiler for UNet inference")
+    parser.add_argument("--single-case", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument(
+        "--precision",
+        choices=["fp16", "bf16", "fp32"],
+        default="fp16",
+    )
+    parser.add_argument("--height", type=int, default=1080)
+    parser.add_argument("--width", type=int, default=1920)
+    parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument("--measured-runs", type=int, default=3)
+    parser.add_argument("--suite-trials", type=int, default=3)
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+
     if not torch.cuda.is_available():
         print("CUDA is not available on this environment.")
         sys.exit(1)
 
-    print("=" * 50)
-    print("🚀 CarMaker Semantic Segmentation U-Net VRAM Profiler")
-    print("=" * 50)
+    if args.single_case:
+        result = profile_single_case(
+            batch_size=args.batch_size,
+            precision=cast(Precision, args.precision),
+            height=args.height,
+            width=args.width,
+            warmup=args.warmup,
+            measured_runs=args.measured_runs,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=True))
+        else:
+            print(result)
+        sys.exit(0 if result.get("ok") else 1)
 
-    results = [
-        profile_inference(batch_size=1, use_amp=True),
-        profile_inference(batch_size=4, use_amp=True),
-        profile_inference(batch_size=4, use_amp=False),
+    print("=" * 60)
+    print("CarMaker Semantic Segmentation U-Net Stable VRAM Profiler")
+    print("- Isolated subprocess per trial")
+    print("- Median/min/max over repeated trials")
+    print("=" * 60)
+
+    cases: List[Tuple[int, Precision]] = [
+        (1, "fp16"),
+        (4, "fp16"),
+        (1, "bf16"),
+        (4, "bf16"),
+        (4, "fp32"),
     ]
 
-    if all(results):
+    all_ok = True
+    for batch_size, precision in cases:
+        trials: List[Dict[str, Any]] = []
+        for trial_index in range(1, max(1, args.suite_trials) + 1):
+            print(
+                f"Trial {trial_index}: warmup {args.warmup}, measured {args.measured_runs}"
+            )
+            trials.append(
+                run_case_in_isolated_process(
+                    batch_size=batch_size,
+                    precision=precision,
+                    height=args.height,
+                    width=args.width,
+                    warmup=args.warmup,
+                    measured_runs=args.measured_runs,
+                )
+            )
+
+        summary = summarize_case(trials)
+        print_case_report(batch_size, precision, summary)
+
+        if not summary.get("ok"):
+            all_ok = False
+
+    if all_ok:
         print("Profiling session completed successfully!")
     else:
-        print("Profiling session completed with OOM in some cases.")
-    print("=" * 50)
+        print("Profiling session completed with failures in some cases.")
+    print("=" * 60)
