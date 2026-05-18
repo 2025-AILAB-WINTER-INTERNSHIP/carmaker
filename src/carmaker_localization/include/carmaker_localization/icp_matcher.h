@@ -12,7 +12,7 @@ public:
     virtual ~IcpMatcher() = default;
 
     virtual MatchResult match(
-        const std::vector<carmaker_msgs::LocalFeature>& observed,
+        const std::vector<LocalFeature>& observed,
         const std::vector<MapFeature>& reference,
         const Eigen::Isometry2d& initial_guess) override;
 

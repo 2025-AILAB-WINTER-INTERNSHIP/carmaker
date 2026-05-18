@@ -7,7 +7,7 @@ namespace carmaker_localization {
 
 class OsmMapLoader : public MapLoaderBase {
 public:
-    OsmMapLoader() = default;
+    explicit OsmMapLoader(double resolution = 0.05);
     virtual ~OsmMapLoader() = default;
 
     virtual bool load(const std::string& path) override;
@@ -18,6 +18,7 @@ private:
     double origin_lat_ = 0.0;
     double origin_lon_ = 0.0;
     bool origin_set_ = false;
+    double resolution_ = 0.05;
 };
 
 } // namespace carmaker_localization

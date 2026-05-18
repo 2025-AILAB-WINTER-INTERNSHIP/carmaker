@@ -2,7 +2,7 @@
     <!-- Arguments -->
     <arg name="foxglove" default="false" />
     <arg name="use_sim_time" default="false" />
-    <arg name="map_file"        default="" />
+    <arg name="map_file" default="$(find carmaker_localization)/config/Test.osm" />
 
     <!-- Global parameter -->
     <param name="use_sim_time" value="$(arg use_sim_time)" />

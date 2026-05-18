@@ -15,6 +15,7 @@
 #include <array>
 #include <map>
 #include <vector>
+#include <cv_bridge/cv_bridge.h>
 
 #include "carmaker_localization/feature_extractor.h"
 #include "carmaker_localization/ekf_core.h"
@@ -101,6 +102,7 @@ private:
     std::string prediction_frame_;
     double search_radius_ = 20.0;
     double tire_radius_ = 0.327;
+    double fitness_threshold_ = 0.5;
 
     // SVM Config
     double svm_res_ = 0.05;
@@ -108,6 +110,12 @@ private:
     double svm_x_min_ = -3.0;
     double svm_y_max_ = 3.0;
     double svm_y_min_ = -3.0;
+
+    // FeatureExtractor Config
+    std::string image_type_;
+    double resolution_ = 0.05;
+    double r_max_ = 15.0;
+    double cov_k_ = 1.0;
 
     // EKF Initial State Config
     bool use_manual_initial_state_ = false;

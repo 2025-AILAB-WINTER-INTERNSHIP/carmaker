@@ -6,7 +6,7 @@ IcpMatcher::IcpMatcher(double fitness_threshold, int max_iterations, double visi
     : fitness_threshold_(fitness_threshold), max_iterations_(max_iterations), vision_base_std_(vision_base_std) {}
 
 MatchResult IcpMatcher::match(
-    const std::vector<carmaker_msgs::LocalFeature>& observed,
+    const std::vector<LocalFeature>& observed,
     const std::vector<MapFeature>& reference,
     const Eigen::Isometry2d& initial_guess) {
 
@@ -119,7 +119,14 @@ MatchResult IcpMatcher::match(
         }
     }
 
-    result.fitness_score = (observed.empty()) ? 0.0 : (double)inliers / observed.size();
+    int valid_observed_count = 0;
+    for (const auto& obs : observed) {
+        if (map_by_class.find(obs.class_id) != map_by_class.end()) {
+            valid_observed_count++;
+        }
+    }
+
+    result.fitness_score = (valid_observed_count == 0) ? 0.0 : (double)inliers / valid_observed_count;
     if (result.fitness_score >= fitness_threshold_) {
         result.success = true;
         result.transform = transform;

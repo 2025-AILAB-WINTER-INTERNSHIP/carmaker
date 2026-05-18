@@ -34,6 +34,11 @@ bool LocalizationNodelet::loadParameters() {
     prediction_frame_ = pnh.param("frames/prediction", std::string("Fr1A_pred"));
     tire_radius_ = pnh.param("vehicle/tire_radius", 0.327);
 
+    image_type_ = pnh.param("setting/image_type", std::string("gt"));
+    resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
+    r_max_ = pnh.param("feature_extractor/extraction/r_max", 15.0);
+    cov_k_ = pnh.param("feature_extractor/extraction/covariance_k", 1.0);
+
     // Manual Initial State Configuration
     XmlRpc::XmlRpcValue init_state_val;
     if (pnh.getParam("ekf/initial_state", init_state_val) && init_state_val.getType() == XmlRpc::XmlRpcValue::TypeArray && init_state_val.size() == 3) {
@@ -88,7 +93,9 @@ bool LocalizationNodelet::loadParameters() {
                 y_range[1] = static_cast<double>(ch_cfg["bev_y_range"][1]);
             }
 
-            ch.extractor = std::make_shared<FeatureExtractor>(nh, ch.name, x_range, y_range);
+            ch.extractor = std::make_shared<FeatureExtractor>(ch.name);
+            ch.extractor->initialize(x_range, y_range, image_type_, resolution_);
+            ch.extractor->setExtractionParameters(r_max_, cov_k_);
             ch.bev_x_range = x_range;
             ch.bev_y_range = y_range;
         }
@@ -210,7 +217,7 @@ void LocalizationNodelet::setupRosIo() {
     std::string map_file = pnh.param("map_matcher/map_file", std::string(""));
 
     if (map_type == "osm") {
-        map_loader_ = std::make_shared<OsmMapLoader>();
+        map_loader_ = std::make_shared<OsmMapLoader>(resolution_);
         if (!map_file.empty()) {
             if (map_loader_->load(map_file)) {
                 NODELET_INFO("Map loaded successfully: %s", map_file.c_str());
@@ -224,13 +231,13 @@ void LocalizationNodelet::setupRosIo() {
 
     // Matcher Setup
     std::string matcher_type = pnh.param("map_matcher/type", std::string("icp"));
-    double fitness_threshold = pnh.param("map_matcher/fitness_threshold", 0.5);
+    fitness_threshold_ = pnh.param("map_matcher/fitness_threshold", 0.5);
     int max_iterations = pnh.param("map_matcher/max_iterations", 50);
     search_radius_ = pnh.param("map_matcher/search_radius", 20.0);
     double vision_base_std = pnh.param("ekf/vision_noise/base_std", 0.1);
 
     if (matcher_type == "icp") {
-        matcher_ = std::make_shared<IcpMatcher>(fitness_threshold, max_iterations, vision_base_std);
+        matcher_ = std::make_shared<IcpMatcher>(fitness_threshold_, max_iterations, vision_base_std);
     }
 
     // IO Publishers & Subscribers
@@ -304,8 +311,9 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
 
     std::lock_guard<std::mutex> estimation_lock(estimation_mutex_);
 
-    double current_time = event.current_real.toSec();
-    if (current_time == 0.0) current_time = ros::Time::now().toSec();
+    // Use simulated time directly from ROS master clock if use_sim_time is true
+    double current_time = ros::Time::now().toSec();
+    if (current_time == 0.0) current_time = event.current_real.toSec();
 
     if (last_prediction_time_ <= 0.0) {
         last_prediction_time_ = current_time;
@@ -321,13 +329,16 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     }
 
     double dt = current_time - last_prediction_time_;
-    if (dt < 0.0 || dt > 1.0) {
-        NODELET_WARN("Time jump detected (dt: %.3f). Resetting EKF...", dt);
+    if (dt < -0.5 || dt > 1.0) {
+        NODELET_WARN("Major time jump detected (dt: %.3f). Resetting EKF...", dt);
         last_prediction_time_ = 0.0;
         return;
     }
 
-    if (dt == 0.0) return;
+    if (dt <= 0.0) {
+        NODELET_WARN("Minor time jitter detected (dt: %.3f). Skipping this prediction step...", dt);
+        return;
+    }
 
     // 1. EKF Prediction
     ekf_core_->prediction(current_time);
@@ -422,7 +433,7 @@ void LocalizationNodelet::imagesCallback(
         std::lock_guard<std::mutex> lock(info_array_mutex_);
         for (size_t i = 0; i < NUM_CAMERAS; ++i) {
             if (!latest_infos_[i]) {
-                NODELET_WARN_THROTTLE(2.0, "Waiting for CameraInfo on channel %zu...", i);
+                ROS_WARN_THROTTLE(2.0, "Waiting for CameraInfo on channel %zu...", i);
                 return;
             }
             infos[i] = latest_infos_[i];
@@ -434,43 +445,27 @@ void LocalizationNodelet::imagesCallback(
 
 void LocalizationNodelet::bundleCallback(const carmaker_msgs::CameraBundleConstPtr& msg) {
     if (msg->names.size() != 4 || msg->images.size() != 4 || msg->infos.size() != 4) {
-        NODELET_WARN_THROTTLE(2.0, "CameraBundle size mismatch. Expected 4, got names: %zu, images: %zu, infos: %zu",
-                              msg->names.size(), msg->images.size(), msg->infos.size());
+        ROS_WARN_THROTTLE(2.0, "CameraBundle size mismatch. Expected 4, got names: %zu, images: %zu, infos: %zu",
+                            msg->names.size(), msg->images.size(), msg->infos.size());
         return;
     }
 
     std::array<sensor_msgs::ImageConstPtr, 4> imgs;
     std::array<sensor_msgs::CameraInfoConstPtr, 4> infos;
-    bool cache_init_success = true;
 
-    // Standard std::call_once for Thread-Safe Cache Initialization
-    std::call_once(bundle_cache_flag_, [this, &msg, &cache_init_success]() {
-        bundle_index_cache_.assign(NUM_CAMERAS, -1);
-        for (size_t i = 0; i < NUM_CAMERAS; ++i) {
-            const std::string& target_name = channels_[i].name;
-            for (size_t j = 0; j < msg->names.size(); ++j) {
-                if (msg->names[j] == target_name) {
-                    bundle_index_cache_[i] = static_cast<int>(j);
-                    break;
-                }
-            }
-            if (bundle_index_cache_[i] == -1) {
-                NODELET_ERROR("Required camera channel '%s' is missing in CameraBundle!", target_name.c_str());
-                cache_init_success = false;
-                return;
+    // 알맞은 이미지 인덱스를 동적으로 탐색
+    for (size_t i = 0; i < NUM_CAMERAS; ++i) {
+        const std::string& target_name = channels_[i].name;
+        int idx = -1;
+        for (size_t j = 0; j < msg->names.size(); ++j) {
+            if (msg->names[j] == target_name) {
+                idx = static_cast<int>(j);
+                break;
             }
         }
-        NODELET_INFO("CameraBundle channel mapping cache initialized successfully.");
-    });
 
-    if (!cache_init_success || bundle_index_cache_.empty()) {
-        return;
-    }
-
-    for (size_t i = 0; i < NUM_CAMERAS; ++i) {
-        int idx = bundle_index_cache_[i];
         if (idx == -1 || idx >= static_cast<int>(msg->images.size()) || idx >= static_cast<int>(msg->infos.size())) {
-            NODELET_WARN_THROTTLE(2.0, "Invalid index mapping or out of bounds for channel '%s'!", channels_[i].name.c_str());
+            ROS_WARN_THROTTLE(2.0, "Required camera channel '%s' is missing or out of bounds in CameraBundle!", target_name.c_str());
             return;
         }
 
@@ -507,7 +502,7 @@ void LocalizationNodelet::processImages(
             if (!use_bundle_) {
                 double info_slop = std::abs((infos[i]->header.stamp - img_stamp).toSec());
                 if (info_slop > MAX_CAMERA_INFO_SLOP) {
-                    NODELET_WARN_THROTTLE(5.0,
+                    ROS_WARN_THROTTLE(5.0,
                         "[%s] CameraInfo timestamp slop too high! (Img: %.3f, Info: %.3f, Slop: %.3f s) during initialization. Retrying on next frame...",
                         ch.name.c_str(), img_stamp.toSec(), infos[i]->header.stamp.toSec(), info_slop);
                     all_lut_ready = false;
@@ -516,11 +511,11 @@ void LocalizationNodelet::processImages(
             }
 
             try {
-                // Lock 외부에서 TF Lookup 수행
-                tfs[i] = tf_buffer_->lookupTransform("Fr1A", ch.frame, ros::Time(0));
+                // Lock 외부에서 TF Lookup 수행 (Base "Fr1A" -> Camera 광학 좌표계 변환 조회)
+                tfs[i] = tf_buffer_->lookupTransform(infos[i]->header.frame_id, "Fr1A", ros::Time(0));
                 tf_success[i] = true;
             } catch (tf2::TransformException& ex) {
-                ROS_WARN_THROTTLE(2.0, "TF lookup failed for %s: %s", ch.frame.c_str(), ex.what());
+                ROS_WARN_THROTTLE(2.0, "TF lookup failed for %s: %s", infos[i]->header.frame_id.c_str(), ex.what());
                 all_lut_ready = false;
                 continue; // 예외 발생 시 해당 채널 처리를 즉시 스킵하고 다음 채널로 진행
             }
@@ -533,7 +528,24 @@ void LocalizationNodelet::processImages(
         if (!ch.lut_initialized.load(std::memory_order_acquire) && tf_success[i]) {
             std::lock_guard<std::mutex> lock(*ch.lut_mutex);
             if (!ch.lut_initialized.load(std::memory_order_relaxed)) {
-                ch.extractor->updateLUT(infos[i], tfs[i]);
+                std::vector<double> K(infos[i]->K.begin(), infos[i]->K.end());
+                std::vector<double> D(infos[i]->D.begin(), infos[i]->D.end());
+                std::string distortion_model = infos[i]->distortion_model;
+
+                tf2::Transform tf_base2cam;
+                tf2::fromMsg(tfs[i].transform, tf_base2cam);
+                cv::Mat R_base_cam = cv::Mat::eye(3, 3, CV_64F);
+                cv::Mat t_base_cam = cv::Mat::zeros(3, 1, CV_64F);
+                tf2::Matrix3x3 R_tf = tf_base2cam.getBasis();
+                tf2::Vector3 t_tf = tf_base2cam.getOrigin();
+                for (int r = 0; r < 3; ++r) {
+                    t_base_cam.at<double>(r, 0) = t_tf[r];
+                    for (int c = 0; c < 3; ++c) {
+                        R_base_cam.at<double>(r, c) = R_tf[r][c];
+                    }
+                }
+
+                ch.extractor->updateLUT(K, D, distortion_model, R_base_cam, t_base_cam);
                 ch.lut_initialized.store(true, std::memory_order_release);
                 NODELET_INFO("LUT initialized for %s", ch.name.c_str());
             }
@@ -549,7 +561,31 @@ void LocalizationNodelet::processImages(
 
     #pragma omp parallel for schedule(static, 1)
     for (size_t i = 0; i < NUM_CAMERAS; ++i) {
-        extracted_features[i] = channels_[i].extractor->process(imgs[i], infos[i], bev_images[i]);
+        cv_bridge::CvImagePtr cv_seg;
+        try {
+            cv_seg = cv_bridge::toCvCopy(imgs[i], imgs[i]->encoding);
+        } catch (cv_bridge::Exception& e) {
+            NODELET_ERROR("cv_bridge exception: %s", e.what());
+            continue;
+        }
+
+        std::vector<LocalFeature> local_feats = channels_[i].extractor->process(cv_seg->image, bev_images[i]);
+
+        carmaker_msgs::LocalFeatures features;
+        features.header = imgs[i]->header;
+        features.camera_name = channels_[i].name;
+        features.features.reserve(local_feats.size());
+        for (const auto& lf : local_feats) {
+            carmaker_msgs::LocalFeature f_msg;
+            f_msg.x = lf.x;
+            f_msg.y = lf.y;
+            f_msg.cov_xx = lf.cov_xx;
+            f_msg.cov_xy = lf.cov_xy;
+            f_msg.cov_yy = lf.cov_yy;
+            f_msg.class_id = lf.class_id;
+            features.features.push_back(f_msg);
+        }
+        extracted_features[i] = features;
     }
 
     // 4. 머지 및 후처리 (공유 데이터 Canvas 업데이트는 Mutex로 순차 보호)
@@ -571,14 +607,24 @@ void LocalizationNodelet::processImages(
             int r_off = std::round((svm_x_max_ - roi_x_max) / svm_res_);
             int c_off = std::round((svm_y_max_ - roi_y_max) / svm_res_);
 
-            int h = bev_image.rows;
-            int w = bev_image.cols;
+            // bev_image와 svm_canvas_ 간의 물리적 좌표 축(X-Y) 정의 엇갈림 정렬:
+            // - bev_image: 행(Rows)=Y축, 열(Cols)=X축 (가로세로 축이 물리계와 반대)
+            // - svm_canvas_: 행(Rows)=X축, 열(Cols)=Y축 (물리계 축 표준 정렬)
+            // - 따라서 전치(Transpose) 후 수직 대칭(Flip)하여 캔버스 축과 완벽히 매칭
+            cv::Mat transposed = bev_image.t();
+            cv::Mat stitched_image;
+            cv::flip(transposed, stitched_image, 0);
+
+            int h = stitched_image.rows;
+            int w = stitched_image.cols;
 
             if (r_off >= 0 && c_off >= 0 && r_off + h <= svm_canvas_.rows && c_off + w <= svm_canvas_.cols) {
                 cv::Mat global_mask = svm_masks_[ch.name];
                 cv::Mat roi_mask = global_mask(cv::Rect(c_off, r_off, w, h));
                 cv::Mat canvas_roi = svm_canvas_(cv::Rect(c_off, r_off, w, h));
-                bev_image.copyTo(canvas_roi, roi_mask);
+                stitched_image.copyTo(canvas_roi, roi_mask);
+            } else {
+                ROS_WARN_THROTTLE(1.0, "[SVM DEBUG] %s out of bounds: r_off=%d, c_off=%d, w=%d, h=%d, canvas=%dx%d", ch.name.c_str(), r_off, c_off, w, h, svm_canvas_.cols, svm_canvas_.rows);
             }
         }
 
@@ -607,9 +653,15 @@ void LocalizationNodelet::processImages(
 }
 
 void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& features) {
+    if (features.features.empty()) {
+        ROS_WARN_THROTTLE(2.0, "performCorrection: Input features are empty!");
+        return;
+    }
+
     Eigen::Isometry2d initial_guess = Eigen::Isometry2d::Identity();
     std::vector<MapFeature> ref_features;
-    double query_x = 0.0, query_y = 0.0;
+    double query_x = 0.0;
+    double query_y = 0.0;
 
     // Thread-safe extraction of EKF state to prevent concurrency conflicts with high-frequency prediction
     {
@@ -624,41 +676,61 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
 
     ref_features = map_loader_->queryNear(query_x, query_y, search_radius_);
 
-    if (!ref_features.empty()) {
-        // ICP Matching (Mutex released to prevent blocking the 100Hz EKF loop!)
-        auto match_result = matcher_->match(features.features, ref_features, initial_guess);
-        if (match_result.success) {
-            Eigen::Vector3d z;
-            z << match_result.transform.translation().x(),
-                    match_result.transform.translation().y(),
-                    Eigen::Rotation2Dd(match_result.transform.linear()).angle();
+    if (ref_features.empty()) {
+        ROS_WARN_THROTTLE(2.0, "performCorrection: No reference features found in OSM map within search_radius (%.1f m) of pose (%.2f, %.2f)!", search_radius_, query_x, query_y);
+        return;
+    }
 
-            // Thread-safe EKF correction step under mutex lock
-            Eigen::Matrix3d R_map = match_result.covariance;
-            {
-                std::lock_guard<std::mutex> lock(estimation_mutex_);
-                ekf_core_->correctPose(z(0), z(1), z(2), R_map, features.header.stamp.toSec());
-            }
+    // Convert ROS features to pure C++ features to achieve absolute ROS-free matching decoupling
+    std::vector<LocalFeature> cpp_features;
+    cpp_features.reserve(features.features.size());
+    for (const auto& f : features.features) {
+        LocalFeature cpp_feat;
+        cpp_feat.x = f.x;
+        cpp_feat.y = f.y;
+        cpp_feat.cov_xx = f.cov_xx;
+        cpp_feat.cov_yy = f.cov_yy;
+        cpp_feat.cov_xy = f.cov_xy;
+        cpp_feat.class_id = f.class_id;
+        cpp_features.push_back(cpp_feat);
+    }
 
-            // Final Logging and Debug Visualization (Lock free)
-            geometry_msgs::PoseWithCovarianceStamped correction_msg;
-            correction_msg.header.stamp = features.header.stamp;
-            correction_msg.header.frame_id = global_frame_;
-            correction_msg.pose.pose.position.x = z(0);
-            correction_msg.pose.pose.position.y = z(1);
-            tf2::Quaternion q;
-            q.setRPY(0, 0, z(2));
-            correction_msg.pose.pose.orientation = tf2::toMsg(q);
+    // ICP Matching (Mutex released to prevent blocking the 100Hz EKF loop!)
+    auto match_result = matcher_->match(cpp_features, ref_features, initial_guess);
+    if (match_result.success) {
+        Eigen::Vector3d z;
+        z << match_result.transform.translation().x(),
+                match_result.transform.translation().y(),
+                Eigen::Rotation2Dd(match_result.transform.linear()).angle();
 
-            for (int r = 0; r < 3; ++r) {
-                for (int c = 0; c < 3; ++c) {
-                    int idx = (r == 2 ? 5 : r) * 6 + (c == 2 ? 5 : c);
-                    correction_msg.pose.covariance[idx] = match_result.covariance(r, c);
-                }
-            }
-            correction_data_pub_.publish(correction_msg);
-            visualizer_->publishCorrection(correction_msg);
+        // Thread-safe EKF correction step under mutex lock
+        Eigen::Matrix3d R_map = match_result.covariance;
+        {
+            std::lock_guard<std::mutex> lock(estimation_mutex_);
+            ekf_core_->correctPose(z(0), z(1), z(2), R_map, features.header.stamp.toSec());
         }
+
+        // Final Logging and Debug Visualization (Lock free)
+        geometry_msgs::PoseWithCovarianceStamped correction_msg;
+        correction_msg.header.stamp = features.header.stamp;
+        correction_msg.header.frame_id = global_frame_;
+        correction_msg.pose.pose.position.x = z(0);
+        correction_msg.pose.pose.position.y = z(1);
+        tf2::Quaternion q;
+        q.setRPY(0, 0, z(2));
+        correction_msg.pose.pose.orientation = tf2::toMsg(q);
+
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                int idx = (r == 2 ? 5 : r) * 6 + (c == 2 ? 5 : c);
+                correction_msg.pose.covariance[idx] = match_result.covariance(r, c);
+            }
+        }
+        correction_data_pub_.publish(correction_msg);
+        visualizer_->publishCorrection(correction_msg);
+        ROS_INFO_THROTTLE(2.0, "performCorrection: ICP Match SUCCESS! Fitness score: %.3f (threshold: %.3f)", match_result.fitness_score, fitness_threshold_);
+    } else {
+        ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Match FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, features.features.size(), ref_features.size());
     }
 }
 

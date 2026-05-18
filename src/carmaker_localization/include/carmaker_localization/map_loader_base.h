@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <cmath>
-#include <carmaker_msgs/LocalFeature.h>
+#include <cstdint>
 
 namespace carmaker_localization {
 

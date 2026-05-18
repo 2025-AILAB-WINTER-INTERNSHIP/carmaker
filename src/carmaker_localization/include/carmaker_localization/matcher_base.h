@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <Eigen/Geometry>
-#include <carmaker_msgs/LocalFeature.h>
+#include "carmaker_localization/feature_extractor.h"
 #include "carmaker_localization/map_loader_base.h"
 
 namespace carmaker_localization {
@@ -31,7 +31,7 @@ public:
      * @return Result of matching
      */
     virtual MatchResult match(
-        const std::vector<carmaker_msgs::LocalFeature>& observed,
+        const std::vector<LocalFeature>& observed,
         const std::vector<MapFeature>& reference,
         const Eigen::Isometry2d& initial_guess) = 0;
 };
