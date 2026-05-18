@@ -17,6 +17,7 @@ catkin_package(
 )
 
 catkin_install_python(PROGRAMS
+  scripts/bundle_image_visualizer_node.py
   scripts/segmentation_inference_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

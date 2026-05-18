@@ -1,0 +1,13 @@
+<launch>
+  <arg name="bundle_topic" default="/segmentation/class_map_bundle" />
+  <arg name="output_prefix" default="/segmentation/debug" />
+  <arg name="publish_images" default="true" />
+  <arg name="publish_color" default="true" />
+
+  <node pkg="segmentation_ros" type="bundle_image_visualizer_node.py" name="bundle_image_visualizer_node" output="screen">
+    <param name="bundle_topic" value="$(arg bundle_topic)" />
+    <param name="output_prefix" value="$(arg output_prefix)" />
+    <param name="publish_images" value="$(arg publish_images)" />
+    <param name="publish_color" value="$(arg publish_color)" />
+  </node>
+</launch>
