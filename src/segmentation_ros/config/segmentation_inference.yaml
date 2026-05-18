@@ -30,6 +30,7 @@ class_map_topic: "/segmentation/class_map"
 
 input_encoding: "bgr8"
 queue_size: 1
+drop_while_busy: true
 bundle_batch_inference: true
 bundle_batch_size: 4
 

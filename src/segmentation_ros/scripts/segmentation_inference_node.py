@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Tuple
@@ -60,6 +61,8 @@ class SegmentationInferenceNode:
         self.input_encoding = rospy.get_param("~input_encoding", "bgr8")
         self.log_timing = parse_bool(rospy.get_param("~log_timing", True))
         self.timing_log_interval = float(rospy.get_param("~timing_log_interval", 1.0))
+        self.drop_while_busy = parse_bool(rospy.get_param("~drop_while_busy", True))
+        self.inference_lock = threading.Lock()
         # bundle 모드에서 synchronized camera images를 한 번의 PyTorch batch로 묶을지 정한다.
         # false로 두면 기존처럼 각 이미지를 batch size 1로 순차 처리한다.
         self.bundle_batch_inference = parse_bool(rospy.get_param("~bundle_batch_inference", True))
@@ -115,7 +118,7 @@ class SegmentationInferenceNode:
                 queue_size=queue_size,
             )
             rospy.loginfo(
-                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s batch_inference=%s batch_size=%d warmup=%d classes=%s",
+                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s batch_inference=%s batch_size=%d warmup=%d drop_while_busy=%s classes=%s",
                 bundle_topic,
                 class_map_bundle_topic,
                 self.predictor.device,
@@ -125,6 +128,7 @@ class SegmentationInferenceNode:
                 self.bundle_batch_inference,
                 self.bundle_batch_size,
                 cuda_warmup_iterations,
+                self.drop_while_busy,
                 ",".join(self.predictor.class_names),
             )
         elif input_mode == "image":
@@ -144,6 +148,8 @@ class SegmentationInferenceNode:
             raise rospy.ROSException("~input_mode must be 'image' or 'bundle'")
 
     def image_callback(self, msg: Image) -> None:
+        if not self.acquire_inference("image"):
+            return
         try:
             callback_start = time.perf_counter()
 
@@ -164,8 +170,12 @@ class SegmentationInferenceNode:
                 )
         except (CvBridgeError, ValueError, RuntimeError) as exc:
             rospy.logerr_throttle(1.0, "segmentation inference failed: %s", exc)
+        finally:
+            self.inference_lock.release()
 
     def bundle_callback(self, msg: CameraBundle) -> None:
+        if not self.acquire_inference("bundle"):
+            return
         try:
             callback_start = time.perf_counter()
 
@@ -234,6 +244,17 @@ class SegmentationInferenceNode:
                 )
         except (CvBridgeError, ValueError, RuntimeError) as exc:
             rospy.logerr_throttle(1.0, "segmentation bundle inference failed: %s", exc)
+        finally:
+            self.inference_lock.release()
+
+    def acquire_inference(self, source: str) -> bool:
+        if not self.drop_while_busy:
+            self.inference_lock.acquire()
+            return True
+        if self.inference_lock.acquire(blocking=False):
+            return True
+        rospy.logwarn_throttle(1.0, "segmentation skipped %s callback because inference is still busy", source)
+        return False
 
     def predict_class_map_msg(self, msg: Image) -> Tuple[Image, float]:
         # ROS Image -> OpenCV BGR image.

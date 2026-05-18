@@ -10,6 +10,7 @@
   <arg name="class_map_bundle_topic" default="/segmentation/class_map_bundle" />
   <arg name="image_topic" default="/camera/image_raw" />
   <arg name="class_map_topic" default="/segmentation/class_map" />
+  <arg name="drop_while_busy" default="true" />
   <arg name="bundle_batch_inference" default="true" />
   <arg name="bundle_batch_size" default="4" />
   <arg name="log_timing" default="true" />
@@ -28,6 +29,7 @@
     <param name="class_map_bundle_topic" value="$(arg class_map_bundle_topic)" />
     <param name="image_topic" value="$(arg image_topic)" />
     <param name="class_map_topic" value="$(arg class_map_topic)" />
+    <param name="drop_while_busy" value="$(arg drop_while_busy)" />
     <param name="bundle_batch_inference" value="$(arg bundle_batch_inference)" />
     <param name="bundle_batch_size" value="$(arg bundle_batch_size)" />
     <param name="log_timing" value="$(arg log_timing)" />
