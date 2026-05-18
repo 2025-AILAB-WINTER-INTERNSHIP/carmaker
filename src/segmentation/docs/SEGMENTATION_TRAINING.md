@@ -282,16 +282,16 @@ python3 src/segmentation/train.py \
 ```text
 src/segmentation/runs/focal_ep16_20260514_175830/
   checkpoints/
-    best.pt
-    last.pt
-    epoch_010.pt
+    best.ckpt
+    last.ckpt
+    epoch_010.ckpt
     ...
   events.out.tfevents...
 ```
 
 ### 6. ROS Inference Node 실행
 
-학습이 끝나면 `best.pt` 또는 `last.pt`를 ROS inference node 입력으로 사용한다. 일반적으로 validation mIoU가 가장 좋았던 `best.pt`를 먼저 사용한다.
+학습이 끝나면 `best.ckpt` 또는 `last.ckpt`를 ROS inference node 입력으로 사용한다. 일반적으로 validation mIoU가 가장 좋았던 `best.ckpt`를 먼저 사용한다.
 
 ```bash
 catkin_make
@@ -300,7 +300,7 @@ source devel/setup.bash
 
 ```bash
 roslaunch segmentation_ros segmentation_inference.launch \
-  checkpoint_path:=/absolute/path/to/best.pt \
+  checkpoint_path:=/absolute/path/to/best.ckpt \
   image_topic:=/camera/image_raw
 ```
 
@@ -386,30 +386,30 @@ train:
 
 validation:
   매 epoch마다 평가
-  best.pt 선택 기준
+  best.ckpt 선택 기준
   hyperparameter 선택 기준
 
 test:
-  학습이 끝난 뒤 best.pt로 최종 1회 평가
+  학습이 끝난 뒤 best.ckpt로 최종 1회 평가
   튜닝에는 사용하지 않는 최종 보고용 데이터
 ```
 
-현재 `train.py`는 validation mIoU가 가장 높은 checkpoint를 `best.pt`로 저장한다.
+현재 `train.py`는 validation mIoU가 가장 높은 checkpoint를 `best.ckpt`로 저장한다.
 
 ```text
-src/segmentation/runs/unet_carmaker/checkpoints/best.pt
+src/segmentation/runs/unet_carmaker/checkpoints/best.ckpt
 ```
 
-학습이 끝나면 `best.pt`를 다시 load해서 test set을 평가한다.
+학습이 끝나면 `best.ckpt`를 다시 load해서 test set을 평가한다.
 
 ```text
 [test] loss=... miou=... dice=... acc=...
 ```
 
-마지막 epoch 상태는 항상 `last.pt`로 저장된다.
+마지막 epoch 상태는 항상 `last.ckpt`로 저장된다.
 
 ```text
-src/segmentation/runs/unet_carmaker/checkpoints/last.pt
+src/segmentation/runs/unet_carmaker/checkpoints/last.ckpt
 ```
 
 ## tqdm 진행 표시
@@ -554,7 +554,7 @@ val/right/iou/class_2
 
 #### Test 통합 Metric
 
-학습 종료 후 `best.pt` 기준으로 한 번 기록된다.
+학습 종료 후 `best.ckpt` 기준으로 한 번 기록된다.
 
 ```text
 test/loss

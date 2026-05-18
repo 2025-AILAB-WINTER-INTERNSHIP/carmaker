@@ -41,7 +41,7 @@ class SegmentationInferenceNode:
     def __init__(self) -> None:
         self.bridge = CvBridge()
 
-        # train.py가 저장한 best.pt 또는 last.pt가 반드시 필요하다.
+        # train.py가 저장한 best.ckpt 또는 last.ckpt가 반드시 필요하다.
         # checkpoint 안에는 model_state와 학습 당시 config가 함께 들어있다.
         checkpoint_path = rospy.get_param("~checkpoint_path", "")
         if not checkpoint_path:

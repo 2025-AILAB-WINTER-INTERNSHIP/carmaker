@@ -9,7 +9,7 @@
 ```text
 train.py
   -> 모델 학습
-  -> best.pt / last.pt 저장
+  -> best.ckpt / last.ckpt 저장
 
 segmentation/inference.py
   -> checkpoint 로드
@@ -173,7 +173,7 @@ sensor_msgs/CameraInfo[] infos
 담당하는 일은 다음과 같다.
 
 ```text
-best.pt / last.pt checkpoint 읽기
+best.ckpt / last.ckpt checkpoint 읽기
 checkpoint 안의 config 읽기
 학습 때와 같은 모델 구조 복원
 model_state weight 로드
@@ -186,7 +186,7 @@ class_map 반환
 checkpoint 복원 흐름은 개념적으로 다음과 같다.
 
 ```python
-checkpoint = torch.load(best_pt)
+checkpoint = torch.load(best_ckpt)
 cfg = checkpoint["config"]
 model = build_model(cfg, num_classes=len(class_names))
 model.load_state_dict(checkpoint["model_state"])
@@ -333,8 +333,8 @@ class_map[y][x] == 1
 대표 파일:
 
 ```text
-best.pt
-last.pt
+best.ckpt
+last.ckpt
 ```
 
 checkpoint에는 보통 다음 정보가 들어 있다.
@@ -408,7 +408,7 @@ source devel/setup.bash
 학습된 모델은 다음 위치에 두는 것을 권장한다.
 
 ```text
-src/segmentation_ros/data/models/best.pt
+src/segmentation_ros/data/models/best.ckpt
 ```
 
 bag 파일은 다음 위치에 둔다.
@@ -421,14 +421,14 @@ inference node 실행:
 
 ```bash
 roslaunch segmentation_ros segmentation_inference.launch \
-  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.pt
+  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.ckpt
 ```
 
 GPU를 명시하고 싶으면 다음처럼 실행한다.
 
 ```bash
 roslaunch segmentation_ros segmentation_inference.launch \
-  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.pt \
+  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.ckpt \
   device:=cuda:0
 ```
 
@@ -436,7 +436,7 @@ roslaunch segmentation_ros segmentation_inference.launch \
 
 ```bash
 roslaunch segmentation_ros segmentation_inference.launch \
-  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.pt \
+  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.ckpt \
   input_mode:=image \
   image_topic:=/camera/image_raw
 ```
@@ -445,7 +445,7 @@ roslaunch segmentation_ros segmentation_inference.launch \
 
 ```bash
 rosrun segmentation_ros segmentation_inference_node.py \
-  _checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.pt \
+  _checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.ckpt \
   _input_mode:=bundle
 ```
 
@@ -470,7 +470,7 @@ image synchronizer 없이 inference node만 실행하면 된다.
 
 ```bash
 roslaunch segmentation_ros segmentation_inference.launch \
-  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.pt
+  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.ckpt
 ```
 
 다른 터미널에서 bag을 재생한다.
@@ -491,7 +491,7 @@ roslaunch carmaker_image_synchronizer image_synchronizer.launch use_sim_time:=tr
 
 ```bash
 roslaunch segmentation_ros segmentation_inference.launch \
-  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.pt
+  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.ckpt
 ```
 
 마지막으로 bag을 재생한다.
@@ -565,7 +565,7 @@ segmentation timing: inference=3.21 ms callback=4.02 ms approx_fps=311.52
 
 ```bash
 roslaunch segmentation_ros segmentation_inference.launch \
-  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.pt \
+  checkpoint_path:=$(pwd)/src/segmentation_ros/data/models/best.ckpt \
   log_timing:=false
 ```
 

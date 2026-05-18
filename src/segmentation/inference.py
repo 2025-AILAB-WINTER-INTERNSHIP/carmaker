@@ -70,7 +70,7 @@ class SegmentationPredictor:
 
         # 모델 구조는 학습 config와 같은 build_model 경로를 사용해야 checkpoint weight와 맞는다.
         self.model = build_model(cfg, num_classes=len(self.class_names))
-        state = checkpoint.get("model_state", checkpoint)
+        state = extract_model_state(checkpoint)
         self.model.load_state_dict(state)
         self.model.to(self.device)
         self.model.eval()
@@ -155,7 +155,7 @@ class SegmentationPredictor:
 
 
 def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:
-    """Load a PyTorch checkpoint saved by ``train.py``."""
+    """Load a PyTorch/Lightning checkpoint saved by ``train.py``."""
     path = Path(path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {path}")
@@ -163,6 +163,21 @@ def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:
         return torch.load(path, map_location=device, weights_only=False)
     except TypeError:
         return torch.load(path, map_location=device)
+
+
+def extract_model_state(checkpoint: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a plain model state dict from repository or Lightning checkpoints."""
+    if "model_state" in checkpoint:
+        return checkpoint["model_state"]
+
+    state = checkpoint.get("state_dict")
+    if state is None:
+        return checkpoint
+
+    return {
+        (key[6:] if key.startswith("model.") else key): value
+        for key, value in state.items()
+    }
 
 
 def load_config(path: str | Path) -> Dict[str, Any]:
