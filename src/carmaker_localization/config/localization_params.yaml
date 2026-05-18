@@ -14,6 +14,36 @@ topics:
       estimation_trajectory: "/localization/debug/estimation_trajectory"
   subscribe:
     dynamics: "/dynamics_info"
+    use_bundle: true
+    bundle: "/segmentation/camera_bundle"
+    channels:
+      - name: front
+        frame: front_optical_frame
+        input_topic: /segmentation/front/class_image
+        info_topic: /synced/front/camera_info
+        bev_x_range: [4.68, 7.68]
+        bev_y_range: [-3.0, 3.0]
+
+      - name: rear
+        frame: rear_optical_frame
+        input_topic: /segmentation/rear/class_image
+        info_topic: /synced/rear/camera_info
+        bev_x_range: [-3.0, 0.0]
+        bev_y_range: [-3.0, 3.0]
+
+      - name: left
+        frame: left_optical_frame
+        input_topic: /segmentation/left/class_image
+        info_topic: /synced/left/camera_info
+        bev_x_range: [-3.0, 7.68]
+        bev_y_range: [0.0, 3.0]
+
+      - name: right
+        frame: right_optical_frame
+        input_topic: /segmentation/right/class_image
+        info_topic: /synced/right/camera_info
+        bev_x_range: [-3.0, 7.68]
+        bev_y_range: [-3.0, 0.0]
 
 frames:
   global: "map"
@@ -28,35 +58,6 @@ feature_extractor:
   extraction:
     r_max: 15.0         # 특징점 최대 감지 거리 [m]
     covariance_k: 1.0   # 방사 방향 공분산 스케일 계수
-
-  channels:
-    - name: front
-      frame: front_optical_frame
-      input_topic: /segmentation/front/class_image
-      info_topic: /synced/front/camera_info
-      bev_x_range: [4.68, 7.68]
-      bev_y_range: [-3.0, 3.0]
-
-    - name: rear
-      frame: rear_optical_frame
-      input_topic: /segmentation/rear/class_image
-      info_topic: /synced/rear/camera_info
-      bev_x_range: [-3.0, 0.0]
-      bev_y_range: [-3.0, 3.0]
-
-    - name: left
-      frame: left_optical_frame
-      input_topic: /segmentation/left/class_image
-      info_topic: /synced/left/camera_info
-      bev_x_range: [-3.0, 7.68]
-      bev_y_range: [0.0, 3.0]
-
-    - name: right
-      frame: right_optical_frame
-      input_topic: /segmentation/right/class_image
-      info_topic: /synced/right/camera_info
-      bev_x_range: [-3.0, 7.68]
-      bev_y_range: [-3.0, 0.0]
 
 svm:
   seam_front_offset: -0.5
