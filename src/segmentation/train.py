@@ -185,6 +185,8 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         self.test_step_outputs = []
         self.worst_samples = []
         self.num_worst = int(cfg.get("debug_worst_sample_count", 4))
+        self.best_miou = 0.0
+        self.best_miou_fg = 0.0
 
     @property
     def display_epoch(self) -> int:
@@ -359,6 +361,16 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         self.test_step_outputs.clear()
 
     def on_validation_epoch_end(self):
+        # 1-based 에폭 번호로 체크포인트 파일명을 명명하기 위해 로깅
+        self.log(
+            "epoch/display",
+            float(self.display_epoch),
+            on_epoch=True,
+            sync_dist=False,
+            logger=False,
+            add_dataloader_idx=False,
+        )
+
         if not self.validation_step_outputs:
             return
 
@@ -369,10 +381,19 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             total_matrix = self.all_gather(total_matrix).sum(dim=0)
 
         scores = segmentation_scores(total_matrix.cpu())
+        miou = float(scores["miou"])
+        miou_fg = float(scores["miou_fg"])
+
+        # sanity check 기간을 제외하고 매 에폭의 최고 mIoU 실시간 업데이트
+        if not self.trainer.sanity_checking:
+            if miou > self.best_miou:
+                self.best_miou = miou
+            if miou_fg > self.best_miou_fg:
+                self.best_miou_fg = miou_fg
 
         # 화면(Progress Bar)용 로깅 (로거 기록은 제외)
-        self.log("val/miou", scores["miou"], prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False) # Validation Dataloader Index 0
-        self.log("val/miou_fg", scores["miou_fg"], prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False)
+        self.log("val/miou", miou, prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False) # Validation Dataloader Index 0
+        self.log("val/miou_fg", miou_fg, prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False)
         self.log("val/dice", scores["dice"], prog_bar=True, sync_dist=False, logger=False, add_dataloader_idx=False)
 
         # Val Loss 및 PSNR 동기화 (모든 Rank가 참여해야 하므로 if문 바깥에서 실행)
@@ -393,6 +414,8 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             writer.add_scalar("val/miou", scores["miou"], self.display_epoch)
             writer.add_scalar("val/miou_fg", scores["miou_fg"], self.display_epoch)
             writer.add_scalar("val/dice", scores["dice"], self.display_epoch)
+            writer.add_scalar("val/best_miou", self.best_miou, self.display_epoch)
+            writer.add_scalar("val/best_miou_fg", self.best_miou_fg, self.display_epoch)
 
             # 유한한(finite) PSNR 값들만 필터링하여 평균 계산 (DDP 동기화 후 안전하게 필터링)
             valid_psnrs = psnrs[torch.isfinite(psnrs)]
@@ -448,35 +471,64 @@ class SegmentationLightningModule(L.LightningModule if L else object):
             hparams = {k: v if isinstance(v, (int, float, str, bool)) else str(v) for k, v in hparams.items()}
 
             # 2. 결과 지표 준비 및 값 정제
-            # TensorBoard HParams 탭의 메트릭과 실제로 기록된 Scalar 태그명이 정확히 일치해야 지표가 노출됩니다.
-            # 기존 "hparam/val_..." 키는 실제 스칼라 로그 태그("val/...")와 매칭되지 않아 지표가 표시되지 않던 문제가 있었습니다.
             val_loss = self.trainer.callback_metrics.get("val/loss", 0)
             val_miou = self.trainer.callback_metrics.get("val/miou", 0)
             val_miou_fg = self.trainer.callback_metrics.get("val/miou_fg", 0)
             val_dice = self.trainer.callback_metrics.get("val/dice", 0)
-            best_miou = getattr(self.trainer.checkpoint_callback, "best_model_score", 0) or 0
+            best_miou = self.best_miou
+            best_miou_fg = self.best_miou_fg
+
+            def _to_float(val) -> float:
+                if isinstance(val, torch.Tensor):
+                    return float(val.item())
+                return float(val)
 
             # Tensor/Scalar 타입을 파이썬 기본 float형으로 정제
-            val_loss_f = float(val_loss.item()) if isinstance(val_loss, torch.Tensor) else float(val_loss)
-            val_miou_f = float(val_miou.item()) if isinstance(val_miou, torch.Tensor) else float(val_miou)
-            val_miou_fg_f = float(val_miou_fg.item()) if isinstance(val_miou_fg, torch.Tensor) else float(val_miou_fg)
-            val_dice_f = float(val_dice.item()) if isinstance(val_dice, torch.Tensor) else float(val_dice)
-            best_miou_f = float(best_miou.item()) if isinstance(best_miou, torch.Tensor) else float(best_miou)
-
-            # best_miou는 에폭 단위로 기록되지 않았던 스칼라이므로, 매칭을 위해 마지막 순간에 텐서보드 스칼라로도 한 번 기록해 줍니다.
-            writer = self.logger.experiment
-            writer.add_scalar("val/best_miou", best_miou_f, self.display_epoch)
+            val_loss_f = _to_float(val_loss)
+            val_miou_f = _to_float(val_miou)
+            val_miou_fg_f = _to_float(val_miou_fg)
+            val_dice_f = _to_float(val_dice)
+            best_miou_f = _to_float(best_miou)
+            best_miou_fg_f = _to_float(best_miou_fg)
 
             metrics = {
-                "val/loss": val_loss_f,
-                "val/miou": val_miou_f,
-                "val/miou_fg": val_miou_fg_f,
-                "val/dice": val_dice_f,
-                "val/best_miou": best_miou_f,
+                "hp/val_loss": val_loss_f,
+                "hp/val_miou": val_miou_f,
+                "hp/val_miou_fg": val_miou_fg_f,
+                "hp/val_dice": val_dice_f,
+                "hp/val_best_miou": best_miou_f,
+                "hp/val_best_miou_fg": best_miou_fg_f,
             }
 
-            # 3. 텐서보드에 최종 기록
-            self.logger.log_hyperparams(hparams, metrics)
+            # 3. 텐서보드에 최종 기록 (우회 등록된 원본 메서드를 안전하게 호출)
+            if hasattr(self.logger, "original_log_hyperparams"):
+                self.logger.original_log_hyperparams(hparams, metrics)
+            else:
+                self.logger.log_hyperparams(hparams, metrics)
+
+    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """PyTorch Lightning 체크포인트 저장 시 inference.py 호환 필드 추가.
+
+        학습 시 사용된 메타 설정(cfg)을 패키징하고, 순수 PyTorch로 동작하는
+        다운스트림 추론 노드(inference.py)에서 가중치 이름 불일치 크래시 없이
+        곧바로 원샷 로드할 수 있도록 model 접두사를 정제한 model_state를 주입합니다.
+        """
+        # 1. 런타임 추론 노드(inference.py)가 모델 구조를 자급자족(Self-contained)하여 동적 빌드할 수 있도록 학습 config 주입
+        checkpoint["config"] = self.cfg
+
+        # 2. PyTorch Lightning 의존성 없이 순수 PyTorch 모델로 바로 로드할 수 있게 가중치 가공
+        #    - LightningModule 내부에 선언된 원본 모델 변수명 'self.model = ...' 때문에
+        #      가중치 키 이름 앞에 자동으로 붙는 'model.' 접두사(Prefix)를 전부 제거합니다.
+        #      (예: 'model.conv1.weight' -> 'conv1.weight')
+        #    - 이 가공을 거치지 않고 그대로 load_state_dict를 호출하면 키 불일치(Unexpected key) 런타임 에러가 발생합니다.
+        state_dict = checkpoint.get("state_dict")
+        if state_dict is not None:
+            checkpoint["model_state"] = {
+                (k[6:] if k.startswith("model.") else k): v
+                for k, v in state_dict.items()
+            }
+        else:
+            checkpoint["model_state"] = {}
 
     def configure_optimizers(self):
         lr = float(self.cfg.get("learning_rate", 1e-3))
@@ -690,6 +742,10 @@ def main() -> None:
     logger = TensorBoardLogger(
         save_dir=str(run_dir.parent), name=run_dir.name, version=""
     )
+    # PyTorch Lightning Trainer가 시작할 때 비어있는 metrics로 log_hyperparams를 호출하여
+    # 텐서보드 HParams에 hp_metric만 등록되고 이후 호출이 무시되는 버그를 방지하기 위한 우회 처리
+    logger.original_log_hyperparams = logger.log_hyperparams
+    logger.log_hyperparams = lambda *args, **kwargs: None
 
     # TensorBoard Text 탭에 최종 config 기록 (마스터 프로세스만 수행)
     if int(os.environ.get("RANK", "0")) == 0:
@@ -699,14 +755,27 @@ def main() -> None:
         if hasattr(data_module, "split_report"):
             logger.experiment.add_text("dataset/split", data_module.split_report, 0)
 
-    checkpoint_callback = ModelCheckpoint(
+    # Best model checkpoint callback (checked at every validation epoch)
+    best_checkpoint_callback = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
         filename="best",
-        monitor="val/miou",
+        monitor="val/miou_fg",
         mode="max",
+        save_top_k=1,
         save_last=True,
-        every_n_epochs=int(cfg.get("checkpoint_interval", 1)),
+        every_n_epochs=1,
     )
+
+    # Periodic checkpoint callback (saved every checkpoint_interval epochs)
+    checkpoint_interval = int(cfg.get("checkpoint_interval", 1))
+    periodic_checkpoint_callback = ModelCheckpoint(
+        dirpath=run_dir / "checkpoints",
+        filename="epoch_{epoch/display:03.0f}",
+        auto_insert_metric_name=False,
+        every_n_epochs=checkpoint_interval,
+        save_top_k=-1,
+    )
+
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     image_callback = ImageLoggingCallback(debug_loaders, adapter.palette)
 
@@ -751,7 +820,7 @@ def main() -> None:
         accumulate_grad_batches=int(t_cfg.get("accumulate_grad_batches", 1)),
         profiler=profiler,
         logger=logger,
-        callbacks=[checkpoint_callback, lr_monitor, image_callback],
+        callbacks=[best_checkpoint_callback, periodic_checkpoint_callback, lr_monitor, image_callback],
         precision="bf16-mixed" if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else ("16-mixed" if torch.cuda.is_available() else 32),
         gradient_clip_val=t_cfg.get("gradient_clip_val", 1.0),
         gradient_clip_algorithm=t_cfg.get("gradient_clip_algorithm", "norm"),
