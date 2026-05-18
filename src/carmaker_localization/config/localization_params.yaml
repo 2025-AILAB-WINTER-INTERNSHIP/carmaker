@@ -67,6 +67,7 @@ svm:
   seam_rear_offset: 0.5
   seam_slope_front: 1.9         # (Width/2) / |offset| = 0.95 / 0.5 = 1.9
   seam_slope_rear: 1.9          # (Width/2) / |offset| = 0.95 / 0.5 = 1.9
+  footprint_margin: 0.15
 
 ekf:
   dimension: 2                  # 2D (추후 3D 전환 시 3으로 변경)
@@ -87,6 +88,7 @@ ekf:
   divergence_threshold: 100.0   # divergence_threshold : 필터 발산 판정 임계값 (Trace(P))
 
 map_matcher:
+  enable: false                 # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
   type: "icp"                   # "icp" | 추후 "ndt", "point_to_line" 추가
   map_format: "osm"             # "osm" | 추후 "lanelet2", "pcd" 추가
   map_file: ""                  # launch argument로 지정

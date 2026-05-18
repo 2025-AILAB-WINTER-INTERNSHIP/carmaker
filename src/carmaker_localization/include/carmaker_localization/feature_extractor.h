@@ -40,6 +40,16 @@ public:
     void setExtractionParameters(double r_max, double cov_k);
 
     /**
+     * @brief Set vehicle bounding box in Fr1A frame for footprint filtering.
+     * Features falling inside the vehicle body are excluded from extraction
+     * (e.g., vehicle outline in GT image misdetected as lane lines).
+     * @param x_min  Rear edge of vehicle [m]
+     * @param x_max  Front edge of vehicle [m]
+     * @param y_half Half-width of vehicle (symmetric) [m]
+     */
+    void setVehicleFootprint(double x_min, double x_max, double y_half, double margin = 0.15);
+
+    /**
      * @brief Check if the extractor has been initialized
      */
     bool isInitialized() const { return is_initialized_; }
@@ -73,6 +83,10 @@ private:
     bool lut_initialized_;
     bool has_optimal_point_;
     cv::Point2f optimal_point_;
+
+    // Vehicle footprint filter (Fr1A frame)
+    bool has_vehicle_footprint_;
+    double veh_x_min_, veh_x_max_, veh_y_half_;
     std::string camera_name_;
 };
 

@@ -103,6 +103,7 @@ private:
     double search_radius_ = 20.0;
     double tire_radius_ = 0.327;
     double fitness_threshold_ = 0.5;
+    bool map_matcher_enabled_ = true;  // map_matcher/enable 파라미터로 제어
 
     // SVM Config
     double svm_res_ = 0.05;

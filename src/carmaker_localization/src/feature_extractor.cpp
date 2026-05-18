@@ -6,7 +6,9 @@ namespace carmaker_localization {
 
 FeatureExtractor::FeatureExtractor(const std::string& camera_name)
     : r_max_(15.0), cov_k_(1.0), is_initialized_(false), lut_initialized_(false),
-        has_optimal_point_(false), camera_name_(camera_name) {
+        has_optimal_point_(false), has_vehicle_footprint_(false),
+        veh_x_min_(0.0), veh_x_max_(0.0), veh_y_half_(0.0),
+        camera_name_(camera_name) {
 }
 
 void FeatureExtractor::initialize(const std::vector<double>& x_range, const std::vector<double>& y_range,
@@ -37,6 +39,18 @@ void FeatureExtractor::initialize(const std::vector<double>& x_range, const std:
 void FeatureExtractor::setExtractionParameters(double r_max, double cov_k) {
     r_max_ = r_max;
     cov_k_ = cov_k;
+}
+
+void FeatureExtractor::setVehicleFootprint(double x_min, double x_max, double y_half,
+                                            double margin) {
+    // Fr1A 좌표계 기준 차량 점유 영역 설정 + margin 적용
+    // GT 이미지에서 차체 외곽선(검은 테두리)은 bbox 경계에 그려지므로,
+    // 테두리 픽셀이 BEV 해상도 기준으로 footprint 경계 바깥에 1~2픽셀씩 걸칠 수 있음.
+    // → margin(기본 0.15m)으로 마스크를 확장하여 앞/뒤/좌/우 외곽선 오검출 방지.
+    veh_x_min_ = x_min - margin;
+    veh_x_max_ = x_max + margin;
+    veh_y_half_ = y_half + margin;
+    has_vehicle_footprint_ = true;
 }
 
 void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::vector<double>& D_vec,
@@ -174,31 +188,63 @@ std::vector<LocalFeature> FeatureExtractor::process(
     if (image_type_ == "gt") {
         if (seg_img.channels() == 3) {
             // [Step 2: Backward Mapping 적용 (2D -> 3D 변환)]
+            // 배경은 흰색(255,255,255)으로 채움 → 이후 시각화에서 검은색 배경으로 덮어쓰게 됨
             cv::remap(seg_img, out_bev_image, map1_, map2_, cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(255, 255, 255));
 
             for (int v = 0; v < bev_cfg_.height; ++v) {
                 for (int u = 0; u < bev_cfg_.width; ++u) {
+                    float x = cartesian_lut_x_.at<float>(v, u);
+                    float y = cartesian_lut_y_.at<float>(v, u);
+
+                    // [cam_z 유효성 검사]
+                    // LUT에서 cam_z ≤ 0으로 마킹된 픽셀(-1, -1)은 카메라 FOV 외부이므로 검은 배경 처리.
+                    // remap이 이미 BORDER_CONSTANT(흰색)으로 채웠을 수 있으므로 여기서 명시적으로 덮어씀.
+                    if (map1_.at<float>(v, u) < 0.0f) {
+                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
+                        continue;
+                    }
+
+                    // [자차(Ego) 풋프린트 마스킹]
+                    // Fr1A 기준 자차 점유 영역은 GT 이미지에서 차체 외곽선(검은 테두리)이
+                    // 차선으로 오분류되므로 검은 배경으로 소거한다.
+                    if (has_vehicle_footprint_ &&
+                        x >= veh_x_min_ && x <= veh_x_max_ &&
+                        std::abs(y) <= veh_y_half_) {
+                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
+                        continue;
+                    }
+
                     cv::Vec3b color = out_bev_image.at<cv::Vec3b>(v, u);
                     uint8_t b = color[0];
                     uint8_t g = color[1];
                     uint8_t r = color[2];
 
-                    // 랜드마크 (Yellow/Orange): R, B 채널 순서에 무관하게 Yellow 색상 검출
-                    bool is_yellow = ((r > 200 && g > 100 && b < 50) || (b > 200 && g > 100 && r < 50));
-                    // 차선 (Black): 검은색 픽셀 검출
-                    bool is_black = (r < 50 && g < 50 && b < 50);
+                    // GT 이미지 픽셀 분류 → OSM class_id 매핑
+                    // class_id=1 (차선/주차선): 검은 픽셀
+                    // class_id=2 (랜드마크):   노란 픽셀 (EV충전소, 특수 마킹 등)
+                    bool is_black  = (r < 50 && g < 50 && b < 50);
+                    bool is_yellow = ((r > 200 && g > 100 && b < 50) ||   // BGR 정상
+                                     (b > 200 && g > 100 && r < 50));     // RGB로 읽힌 경우 대응
 
-                    if (is_yellow) {
+                    if (is_black) {
                         mask.at<uint8_t>(v, u) = 255;
-                        class_map.at<uint8_t>(v, u) = 2; // Landmark
-                    } else if (is_black) {
+                        class_map.at<uint8_t>(v, u) = 1; // 차선 / 주차선
+                        // 시각화: 검은 배경 위에 차선이 보이도록 흰색으로 표시
+                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 255, 255);
+                    } else if (is_yellow) {
                         mask.at<uint8_t>(v, u) = 255;
-                        class_map.at<uint8_t>(v, u) = 1; // Lane
+                        class_map.at<uint8_t>(v, u) = 2; // 랜드마크
+                        // 시각화: 노란색 유지
+                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 200, 255);
+                    } else {
+                        // 그 외(배경, 차체 등)는 검은 배경
+                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
                     }
                 }
             }
         }
     }
+
     // 2. Raw BGR/Mono 카메라 이미지 모드 (image_type_ == "raw")
     else if (image_type_ == "raw") {
         if (seg_img.channels() == 3) {
@@ -253,9 +299,18 @@ std::vector<LocalFeature> FeatureExtractor::process(
         float y = cartesian_lut_y_.at<float>(v, u);
         float r = std::sqrt(x*x + y*y);  // 차량(Base) 중심으로부터의 방사형 거리
 
-        // 유효 거리 필터링 (너무 멀거나, 중심점 0에 너무 가까운 노이즈 제거)
+        // 유효 거리 필터링
         if (r > r_max_) continue;
         if (r < 0.01) continue;
+
+        // [차량 풋프린트 필터링]
+        // GT 이미지의 차량 외곽선(검은 테두리)이 차선으로 잘못 검출되는 것을 방지
+        // Fr1A 좌표계 기준 차량 점유 영역 내 픽셀은 특징점에서 제외
+        if (has_vehicle_footprint_ &&
+            x >= veh_x_min_ && x <= veh_x_max_ &&
+            std::abs(y) <= veh_y_half_) {
+            continue;
+        }
 
         // [3-1. 방향 벡터 계산]
         // Base 기준점(0,0)에서 특징점(x,y)을 향하는 방사형(Radial) 단위 벡터

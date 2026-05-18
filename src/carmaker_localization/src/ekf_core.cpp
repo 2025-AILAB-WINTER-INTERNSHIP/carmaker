@@ -60,7 +60,7 @@ void EkfCore::prediction(double timestamp) {
     double dt = timestamp - last_time_;
 
     // Detect Time Jump (Forward > 1s or any Backward jump)
-    if (dt > 1.0 || dt < 0.0) {
+    if (dt > 1.0 || dt < -0.05) {
         handleTimeJump(timestamp);
         return;
     }

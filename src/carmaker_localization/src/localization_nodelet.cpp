@@ -96,6 +96,13 @@ bool LocalizationNodelet::loadParameters() {
             ch.extractor = std::make_shared<FeatureExtractor>(ch.name);
             ch.extractor->initialize(x_range, y_range, image_type_, resolution_);
             ch.extractor->setExtractionParameters(r_max_, cov_k_);
+
+            // 차량 풋프린트 필터: GT 이미지에서 차량 외곽선(검은 테두리)이 차선으로 오검출되는 것 방지
+            // Fr1A 원점 = 후방 범퍼 중앙, x=[0, length], y=[-width/2, width/2]
+            double veh_length       = pnh.param("vehicle/length", 4.635);
+            double veh_width        = pnh.param("vehicle/width",  1.9);
+            double footprint_margin = pnh.param("svm/footprint_margin", 0.15);
+            ch.extractor->setVehicleFootprint(0.0, veh_length, veh_width / 2.0, footprint_margin);
             ch.bev_x_range = x_range;
             ch.bev_y_range = y_range;
         }
@@ -240,6 +247,10 @@ void LocalizationNodelet::setupRosIo() {
         matcher_ = std::make_shared<IcpMatcher>(fitness_threshold_, max_iterations, vision_base_std);
     }
 
+    // 맵 매칭 활성화 여부 (false 시 EKF 예측만 수행, 디버깅용)
+    map_matcher_enabled_ = pnh.param("map_matcher/enable", true);
+    NODELET_INFO("Map matcher: %s", map_matcher_enabled_ ? "ENABLED" : "DISABLED (debug mode)");
+
     // IO Publishers & Subscribers
     std::string topic_pose = pnh.param("topics/publish/pose", std::string("/localization/pose"));
     std::string topic_odom = pnh.param("topics/publish/odom", std::string("/localization/odom"));
@@ -329,7 +340,7 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     }
 
     double dt = current_time - last_prediction_time_;
-    if (dt < -0.5 || dt > 1.0) {
+    if (dt < -0.05 || dt > 1.0) {
         NODELET_WARN("Major time jump detected (dt: %.3f). Resetting EKF...", dt);
         last_prediction_time_ = 0.0;
         return;
@@ -639,7 +650,7 @@ void LocalizationNodelet::processImages(
 
             if (fusion_) {
                 combined.features.insert(combined.features.end(), features.features.begin(), features.features.end());
-            } else if (map_loader_ && matcher_) {
+            } else if (map_matcher_enabled_ && map_loader_ && matcher_) {
                 performCorrection(features);
             }
         }
@@ -647,7 +658,7 @@ void LocalizationNodelet::processImages(
 
     visualizer_->publishSvmImage(svm_canvas_);
 
-    if (fusion_ && !combined.features.empty() && map_loader_ && matcher_) {
+    if (fusion_ && !combined.features.empty() && map_matcher_enabled_ && map_loader_ && matcher_) {
         performCorrection(combined);
     }
 }
