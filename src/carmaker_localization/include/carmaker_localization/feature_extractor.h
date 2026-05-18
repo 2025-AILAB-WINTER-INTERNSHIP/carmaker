@@ -32,9 +32,10 @@ public:
         const sensor_msgs::CameraInfoConstPtr& info_msg,
         cv::Mat& out_bev_image);
 
-private:
     void updateLUT(const sensor_msgs::CameraInfoConstPtr& info,
                     const geometry_msgs::TransformStamped& tf);
+
+private:
 
     ros::NodeHandle nh_;
     BevConfig bev_cfg_;

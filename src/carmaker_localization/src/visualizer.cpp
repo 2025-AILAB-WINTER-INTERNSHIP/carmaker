@@ -93,9 +93,9 @@ void Visualizer::publishObservation(const std::string& channel_name, const carma
         cov.type = visualization_msgs::Marker::CYLINDER;
         cov.action = visualization_msgs::Marker::ADD;
 
-        double sigma_x = std::sqrt(std::max(0.001, feat.covariance[0]));
-        double sigma_y = std::sqrt(std::max(0.001, feat.covariance[4]));
-        double sigma_xy = feat.covariance[1];
+        double sigma_x = std::sqrt(std::max(0.001f, feat.cov_xx));
+        double sigma_y = std::sqrt(std::max(0.001f, feat.cov_yy));
+        double sigma_xy = feat.cov_xy;
         double angle = 0.5 * std::atan2(2.0 * sigma_xy, sigma_x*sigma_x - sigma_y*sigma_y);
 
         cov.pose.position.x = feat.x;

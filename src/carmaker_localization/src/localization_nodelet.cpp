@@ -140,10 +140,10 @@ void LocalizationNodelet::initEkf() {
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 1e-4;
     Q(VX, VX) = std::pow(pnh.param("ekf/imu/acc_std", 0.1), 2);
     Q(VY, VY) = Q(VX, VX);
-    Q(PSIDOT, PSIDOT) = std::pow(pnh.param("ekf/imu/gyro_std", 0.01), 2);
+    Q(YAW_RATE, YAW_RATE) = std::pow(pnh.param("ekf/imu/gyro_std", 0.01), 2);
 
-    ekf_core_->setParameters(tire_radius_, slip_thresh, wheel_std, Q, wheelbase, track_width, rear_axle_x, imu_x, imu_y, imu_z);
-    ekf_core_->setDivergenceThreshold(pnh.param("ekf/divergence_threshold", 100.0));
+    ekf_core_->setParameters(tire_radius_, wheelbase, track_width, rear_axle_x);
+    ekf_core_->setProcessNoise(Q);
 
     NODELET_INFO("Selected IMU: %d (offset_x: %.2f)", imu_id_, imu_x);
 }
@@ -309,26 +309,14 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
 
     if (last_prediction_time_ <= 0.0) {
         last_prediction_time_ = current_time;
-        Eigen::Matrix<double, STATE_DIM, 1> x0 = Eigen::Matrix<double, STATE_DIM, 1>::Zero();
+        double init_x = use_manual_initial_state_ ? init_x_ : latest_dynamics_.Car_x;
+        double init_y = use_manual_initial_state_ ? init_y_ : latest_dynamics_.Car_y;
+        double init_yaw = use_manual_initial_state_ ? init_yaw_ : latest_dynamics_.Car_Yaw;
+        double init_vx = use_manual_initial_state_ ? 0.0 : latest_dynamics_.Car_vx;
+        double init_vy = use_manual_initial_state_ ? 0.0 : latest_dynamics_.Car_vy;
 
-        if (use_manual_initial_state_) {
-            x0(X) = init_x_;
-            x0(Y) = init_y_;
-            x0(PSI) = init_yaw_;
-            x0(VX) = 0.0;
-            x0(VY) = 0.0;
-        } else {
-            x0(X) = latest_dynamics_.Car_x;
-            x0(Y) = latest_dynamics_.Car_y;
-            x0(PSI) = latest_dynamics_.Car_Yaw;
-            x0(VX) = latest_dynamics_.Car_vx;
-            x0(VY) = latest_dynamics_.Car_vy;
-        }
-        x0(SW) = 1.0;
-
-        Eigen::Matrix<double, STATE_DIM, STATE_DIM> P0 = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 0.1;
-        ekf_core_->init(x0, P0);
-        NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f]", x0(X), x0(Y), x0(PSI));
+        ekf_core_->initialize(init_x, init_y, init_yaw, current_time, init_vx, init_vy);
+        NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vel [%.2f, %.2f]", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx, init_vy);
         return;
     }
 
@@ -373,8 +361,9 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
 }
 
 void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
-    auto x = ekf_core_->getState();
-    auto P = ekf_core_->getCovariance();
+    auto state_frame = ekf_core_->getState();
+    const auto& x = state_frame.x;
+    const auto& P = state_frame.P;
 
     geometry_msgs::PoseWithCovarianceStamped pose_msg;
     pose_msg.header.stamp = stamp;
@@ -384,7 +373,7 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     pose_msg.pose.pose.position.z = 0.0;
 
     tf2::Quaternion q;
-    q.setRPY(0, 0, x(PSI));
+    q.setRPY(0, 0, x(YAW));
     pose_msg.pose.pose.orientation = tf2::toMsg(q);
 
     for (int i = 0; i < 2; ++i) {
@@ -392,7 +381,7 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
             pose_msg.pose.covariance[i * 6 + j] = P(i, j);
         }
     }
-    pose_msg.pose.covariance[35] = P(PSI, PSI);
+    pose_msg.pose.covariance[35] = P(YAW, YAW);
 
     pose_pub_.publish(pose_msg);
     estimation_data_pub_.publish(pose_msg);
@@ -404,7 +393,7 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     odom_msg.pose = pose_msg.pose;
     odom_msg.twist.twist.linear.x = x(VX);
     odom_msg.twist.twist.linear.y = x(VY);
-    odom_msg.twist.twist.angular.z = x(PSIDOT);
+    odom_msg.twist.twist.angular.z = x(YAW_RATE);
     odom_pub_.publish(odom_msg);
 
     // Broadcast TF: global -> prediction
@@ -619,15 +608,16 @@ void LocalizationNodelet::processImages(
 
 void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& features) {
     Eigen::Isometry2d initial_guess = Eigen::Isometry2d::Identity();
-    std::vector<carmaker_msgs::Feature> ref_features;
+    std::vector<MapFeature> ref_features;
     double query_x = 0.0, query_y = 0.0;
 
     // Thread-safe extraction of EKF state to prevent concurrency conflicts with high-frequency prediction
     {
         std::lock_guard<std::mutex> lock(estimation_mutex_);
-        auto ekf_pose = ekf_core_->getState();
+        auto state_frame = ekf_core_->getState();
+        const auto& ekf_pose = state_frame.x;
         initial_guess.translation() = Eigen::Vector2d(ekf_pose(X), ekf_pose(Y));
-        initial_guess.linear() = Eigen::Rotation2Dd(ekf_pose(PSI)).toRotationMatrix();
+        initial_guess.linear() = Eigen::Rotation2Dd(ekf_pose(YAW)).toRotationMatrix();
         query_x = ekf_pose(X);
         query_y = ekf_pose(Y);
     }

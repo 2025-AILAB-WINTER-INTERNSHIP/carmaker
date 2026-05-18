@@ -34,11 +34,12 @@ public:
     ~EkfCore() = default;
 
     // Initialization
-    void initialize(double x, double y, double yaw, double timestamp);
+    void initialize(double x, double y, double yaw, double timestamp, double vx = 0.0, double vy = 0.0);
     bool isInitialized() const { return is_initialized_; }
 
     // Parameters
     void setParameters(double tire_radius, double wheelbase, double track_width, double rear_axle_x);
+    void setProcessNoise(const Eigen::MatrixXd& Q);
 
     // EKF Core Cycle
     void prediction(double timestamp);

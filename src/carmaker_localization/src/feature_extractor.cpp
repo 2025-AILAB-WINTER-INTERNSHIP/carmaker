@@ -115,7 +115,7 @@ void FeatureExtractor::updateLUT(const sensor_msgs::CameraInfoConstPtr& info,
             optimal_point_.x = origin_in_base.x() + lambda * ray_dir_in_base.x();
             optimal_point_.y = origin_in_base.y() + lambda * ray_dir_in_base.y();
             has_optimal_point_ = true;
-            NODELET_INFO("[%s] Optimal ground focus point calculated at: (%.2f, %.2f)",
+            ROS_INFO("[%s] Optimal ground focus point calculated at: (%.2f, %.2f)",
                             camera_name_.c_str(), optimal_point_.x, optimal_point_.y);
         } else {
             has_optimal_point_ = false;

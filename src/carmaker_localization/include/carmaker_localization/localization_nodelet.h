@@ -96,6 +96,7 @@ private:
     // =========================================================================
     // 2. Read-Only Configuration Parameters
     // =========================================================================
+    int imu_id_ = 0;
     std::string global_frame_;
     std::string prediction_frame_;
     double search_radius_ = 20.0;

@@ -20,12 +20,14 @@ EkfCore::EkfCore(double buffer_duration)
     Q_.block<3, 3>(B_AX, B_AX) *= 0.0001; // Biases change very slowly
 }
 
-void EkfCore::initialize(double x, double y, double yaw, double timestamp) {
+void EkfCore::initialize(double x, double y, double yaw, double timestamp, double vx, double vy) {
     std::lock_guard<std::mutex> lock(mutex_);
     x_.setZero();
     x_(X) = x;
     x_(Y) = y;
     x_(YAW) = yaw;
+    x_(VX) = vx;
+    x_(VY) = vy;
 
     P_.setIdentity();
     P_.block<2, 2>(X, X) *= 0.1;
@@ -42,6 +44,13 @@ void EkfCore::setParameters(double tire_radius, double wheelbase, double track_w
     wheelbase_ = wheelbase;
     track_width_ = track_width;
     rear_axle_x_ = rear_axle_x;
+}
+
+void EkfCore::setProcessNoise(const Eigen::MatrixXd& Q) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (Q.rows() == STATE_DIM && Q.cols() == STATE_DIM) {
+        Q_ = Q;
+    }
 }
 
 void EkfCore::prediction(double timestamp) {
