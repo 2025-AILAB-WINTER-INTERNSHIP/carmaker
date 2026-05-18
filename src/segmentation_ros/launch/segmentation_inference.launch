@@ -3,6 +3,7 @@
   <arg name="config_path" default="" />
   <arg name="device" default="" />
   <arg name="image_size" default="" />
+  <arg name="inference_precision" default="fp16" />
   <arg name="input_mode" default="bundle" />
   <arg name="bundle_topic" default="/synced/bundle" />
   <arg name="class_map_bundle_topic" default="/segmentation/class_map_bundle" />
@@ -19,6 +20,7 @@
     <param name="config_path" value="$(arg config_path)" />
     <param name="device" value="$(arg device)" />
     <param name="image_size" value="$(arg image_size)" />
+    <param name="inference_precision" value="$(arg inference_precision)" />
     <param name="input_mode" value="$(arg input_mode)" />
     <param name="bundle_topic" value="$(arg bundle_topic)" />
     <param name="class_map_bundle_topic" value="$(arg class_map_bundle_topic)" />

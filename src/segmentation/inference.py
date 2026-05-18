@@ -7,6 +7,7 @@ tests can all call the same predictor implementation.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Sequence
@@ -30,7 +31,7 @@ DEFAULT_CLASS_NAMES = tuple(CarmakerSegmentationAdapter.class_names)
 class SegmentationResult:
     """Outputs from one segmentation inference pass."""
 
-    class_map: np.ndarray 
+    class_map: np.ndarray
     class_names: Sequence[str]
 
 
@@ -45,10 +46,15 @@ class SegmentationPredictor:
         image_size: Sequence[int] | None = None,
         class_names: Sequence[str] | None = None,
         resize_output: bool = True,
+        inference_precision: str = "fp16",
     ) -> None:
         self.checkpoint_path = Path(checkpoint_path).expanduser().resolve()
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.resize_output = resize_output
+        self.inference_precision, self.autocast_dtype = resolve_inference_precision(
+            inference_precision,
+            self.device,
+        )
 
         # train.py의 checkpoint에는 학습 당시 config가 들어있다.
         # 런타임 config_path는 필요한 값만 덮어쓰는 용도로 사용한다.
@@ -89,7 +95,8 @@ class SegmentationPredictor:
 
         # CrossEntropy 기반 semantic segmentation 모델의 출력은 [B, C, H, W] logits이다.
         # class_map은 각 픽셀에서 가장 큰 logit을 가진 class id이다.
-        logits = self.model(tensor)
+        with self.autocast_context():
+            logits = self.model(tensor)
         class_map_t = torch.argmax(logits, dim=1)
         class_map = class_map_t[0].detach().cpu().numpy().astype(np.uint8)
 
@@ -122,7 +129,8 @@ class SegmentationPredictor:
             tensors.append(preprocess_rgb(rgb, self.image_size))
 
         batch = torch.cat(tensors, dim=0).to(self.device)
-        logits = self.model(batch)
+        with self.autocast_context():
+            logits = self.model(batch)
         class_maps_t = torch.argmax(logits, dim=1)
 
         # batch output [B, H, W]를 다시 이미지별 SegmentationResult로 풀어준다.
@@ -139,6 +147,11 @@ class SegmentationPredictor:
                 )
             )
         return results
+
+    def autocast_context(self):
+        if self.autocast_dtype is None:
+            return nullcontext()
+        return torch.autocast(device_type=self.device.type, dtype=self.autocast_dtype)
 
 
 def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:
@@ -175,6 +188,41 @@ def parse_image_size(value: Sequence[int] | str) -> tuple[int, int]:
     if len(value) != 2:
         raise ValueError("image_size must contain exactly two values: width, height")
     return int(value[0]), int(value[1])
+
+
+def resolve_inference_precision(value: str, device: torch.device) -> tuple[str, torch.dtype | None]:
+    key = str(value or "fp32").strip().lower()
+    aliases = {
+        "32": "fp32",
+        "float32": "fp32",
+        "false": "fp32",
+        "none": "fp32",
+        "16": "fp16",
+        "float16": "fp16",
+        "half": "fp16",
+        "bfloat16": "bf16",
+    }
+    key = aliases.get(key, key)
+
+    if key == "auto":
+        if device.type != "cuda":
+            return "fp32", None
+        if torch.cuda.is_bf16_supported():
+            return "bf16", torch.bfloat16
+        return "fp16", torch.float16
+    if key == "fp32":
+        return "fp32", None
+    if key == "fp16":
+        if device.type != "cuda":
+            raise ValueError("inference_precision=fp16 requires a CUDA device")
+        return "fp16", torch.float16
+    if key == "bf16":
+        if device.type != "cuda":
+            raise ValueError("inference_precision=bf16 requires a CUDA device")
+        if not torch.cuda.is_bf16_supported():
+            raise ValueError("inference_precision=bf16 requires a GPU with bf16 support")
+        return "bf16", torch.bfloat16
+    raise ValueError("inference_precision must be one of: fp32, fp16, bf16, auto")
 
 
 def to_rgb(image: np.ndarray, color_order: str) -> np.ndarray:

@@ -3,17 +3,31 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Tuple
 
 # 이 ROS 패키지는 src/segmentation 안의 학습/추론 공용 코드를 import한다.
-# catkin devel 공간에서 실행해도 source tree 기준 import가 안정적으로 잡히도록
-# workspace의 src 디렉터리를 Python path 앞쪽에 추가한다.
-SRC_ROOT = Path(__file__).resolve().parents[2]
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+# devel/install 어느 쪽에서 실행해도 workspace의 src 디렉터리를 찾도록 후보 경로를 훑는다.
+def add_segmentation_source_path() -> None:
+    search_roots = list(Path(__file__).resolve().parents) + list(Path.cwd().resolve().parents)
+    search_roots.append(Path.cwd().resolve())
+    for prefix in os.environ.get("CATKIN_PREFIX_PATH", "").split(os.pathsep):
+        if prefix:
+            search_roots.extend(Path(prefix).resolve().parents)
+
+    for root in search_roots:
+        for candidate in (root, root / "src"):
+            if (candidate / "segmentation" / "__init__.py").exists():
+                candidate_str = str(candidate)
+                if candidate_str not in sys.path:
+                    sys.path.insert(0, candidate_str)
+                return
+
+
+add_segmentation_source_path()
 
 import rospy
 from carmaker_msgs.msg import CameraBundle
@@ -37,6 +51,7 @@ class SegmentationInferenceNode:
         # 덮어쓰고 싶을 때만 지정한다. 비워두면 checkpoint config를 따른다.
         config_path = rospy.get_param("~config_path", None) or None
         device = rospy.get_param("~device", None) or None
+        inference_precision = rospy.get_param("~inference_precision", "fp16")
         image_size_param = rospy.get_param("~image_size", None)
         image_size = parse_image_size(image_size_param) if image_size_param else None
         # cv_bridge가 ROS Image를 OpenCV 배열로 바꿀 때 사용할 encoding.
@@ -56,6 +71,7 @@ class SegmentationInferenceNode:
             config_path=config_path,
             device=device,
             image_size=image_size,
+            inference_precision=inference_precision,
         )
 
         # input_mode는 이 노드의 ROS 입출력 형태를 고른다.
@@ -97,10 +113,11 @@ class SegmentationInferenceNode:
                 queue_size=queue_size,
             )
             rospy.loginfo(
-                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s image_size=%sx%s batch_inference=%s batch_size=%d classes=%s",
+                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s batch_inference=%s batch_size=%d classes=%s",
                 bundle_topic,
                 class_map_bundle_topic,
                 self.predictor.device,
+                self.predictor.inference_precision,
                 self.predictor.image_size[0],
                 self.predictor.image_size[1],
                 self.bundle_batch_inference,
@@ -113,10 +130,11 @@ class SegmentationInferenceNode:
             self.class_map_pub = rospy.Publisher(class_map_topic, Image, queue_size=queue_size)
             self.image_sub = rospy.Subscriber(image_topic, Image, self.image_callback, queue_size=queue_size)
             rospy.loginfo(
-                "segmentation_inference_node subscribed image=%s class_map=%s device=%s classes=%s",
+                "segmentation_inference_node subscribed image=%s class_map=%s device=%s precision=%s classes=%s",
                 image_topic,
                 class_map_topic,
                 self.predictor.device,
+                self.predictor.inference_precision,
                 ",".join(self.predictor.class_names),
             )
         else:

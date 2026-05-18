@@ -274,6 +274,7 @@ rosrun:    _checkpoint_path:=...
 | `config_path` | `""` | 선택. checkpoint 안의 config를 일부 덮어쓸 때 사용 |
 | `device` | `""` | 비우면 CUDA 가능 시 `cuda`, 아니면 `cpu` |
 | `image_size` | `""` | 비우면 checkpoint config의 `image_size` 사용 |
+| `inference_precision` | `fp16` | forward precision. `fp32`, `fp16`, `bf16`, `auto` 중 선택 |
 | `input_mode` | `bundle` | `bundle`이면 `CameraBundle`, `image`면 단일 `sensor_msgs/Image` 사용 |
 | `bundle_topic` | `/synced/bundle` | bundle 모드에서 subscribe할 `CameraBundle` topic |
 | `class_map_bundle_topic` | `/segmentation/class_map_bundle` | bundle 모드에서 publish할 class map bundle topic |
