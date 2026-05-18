@@ -47,6 +47,7 @@ class SegmentationPredictor:
         class_names: Sequence[str] | None = None,
         resize_output: bool = True,
         inference_precision: str = "fp16",
+        warmup_iterations: int = 1,
     ) -> None:
         self.checkpoint_path = Path(checkpoint_path).expanduser().resolve()
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -59,9 +60,11 @@ class SegmentationPredictor:
         # train.py의 checkpoint에는 학습 당시 config가 들어있다.
         # 런타임 config_path는 필요한 값만 덮어쓰는 용도로 사용한다.
         checkpoint = load_checkpoint(self.checkpoint_path, self.device)
-        cfg = dict(checkpoint.get("config") or {})
+        state = extract_model_state(checkpoint)
+        cfg = checkpoint_config(checkpoint)
         if config_path:
             cfg.update(load_config(config_path))
+        cfg = infer_missing_config_from_state(cfg, state)
 
         # class 정의는 현재 CarmakerSegmentationAdapter의 3개 class를 기본값으로 쓴다.
         # checkpoint/config에 class_names가 들어오면 그 값을 우선한다.
@@ -70,10 +73,15 @@ class SegmentationPredictor:
 
         # 모델 구조는 학습 config와 같은 build_model 경로를 사용해야 checkpoint weight와 맞는다.
         self.model = build_model(cfg, num_classes=len(self.class_names))
-        state = extract_model_state(checkpoint)
         self.model.load_state_dict(state)
-        self.model.to(self.device)
+        if self.autocast_dtype is None:
+            self.model.to(self.device)
+        else:
+            # Runtime inference에서는 optimizer/master weight가 필요 없으므로 모델
+            # 파라미터와 floating buffer까지 선택 precision으로 내려 VRAM을 줄인다.
+            self.model.to(device=self.device, dtype=self.autocast_dtype)
         self.model.eval()
+        self.warmup(max(0, int(warmup_iterations)))
 
     @torch.inference_mode()
     def predict(self, image: np.ndarray, color_order: str = "bgr") -> SegmentationResult:
@@ -153,16 +161,34 @@ class SegmentationPredictor:
             return nullcontext()
         return torch.autocast(device_type=self.device.type, dtype=self.autocast_dtype)
 
+    @torch.inference_mode()
+    def warmup(self, iterations: int) -> None:
+        """Run a few dummy forwards to initialize CUDA kernels and allocators."""
+        if iterations <= 0 or self.device.type != "cuda":
+            return
+
+        width, height = self.image_size
+        dummy = torch.zeros((1, 3, height, width), device=self.device)
+        with self.autocast_context():
+            for _ in range(iterations):
+                _ = self.model(dummy)
+        torch.cuda.synchronize(self.device)
+
 
 def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:
-    """Load a PyTorch/Lightning checkpoint saved by ``train.py``."""
+    """Load a PyTorch/Lightning checkpoint saved by ``train.py``.
+
+    Lightning ``.ckpt`` files may include optimizer state and other training-only
+    tensors. Keep the checkpoint on CPU so those extra tensors do not consume
+    inference VRAM; only the restored model is moved to the requested device.
+    """
     path = Path(path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {path}")
     try:
-        return torch.load(path, map_location=device, weights_only=False)
+        return torch.load(path, map_location="cpu", weights_only=False)
     except TypeError:
-        return torch.load(path, map_location=device)
+        return torch.load(path, map_location="cpu")
 
 
 def extract_model_state(checkpoint: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,10 +200,52 @@ def extract_model_state(checkpoint: Dict[str, Any]) -> Dict[str, Any]:
     if state is None:
         return checkpoint
 
+    model_keys = [key for key in state if key.startswith("model.")]
+    if model_keys:
+        return {key[6:]: state[key] for key in model_keys}
+
     return {
         (key[6:] if key.startswith("model.") else key): value
         for key, value in state.items()
+        if not key.startswith("criterion.")
     }
+
+
+def checkpoint_config(checkpoint: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = checkpoint.get("config")
+    if isinstance(cfg, dict):
+        return dict(cfg)
+
+    hparams = checkpoint.get("hyper_parameters")
+    if isinstance(hparams, dict):
+        nested_cfg = hparams.get("cfg") or hparams.get("config")
+        if isinstance(nested_cfg, dict):
+            return dict(nested_cfg)
+        return dict(hparams)
+
+    return {}
+
+
+def infer_missing_config_from_state(cfg: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill small compatibility gaps for older Lightning checkpoints."""
+    cfg = dict(cfg)
+    model_cfg = cfg.get("model")
+    if isinstance(model_cfg, str):
+        model_cfg = {"name": model_cfg}
+    elif isinstance(model_cfg, dict):
+        model_cfg = dict(model_cfg)
+    else:
+        model_cfg = {}
+
+    if "norm" not in model_cfg and "norm" not in cfg:
+        has_norm_affine = any(key.endswith(".block.1.weight") for key in state)
+        has_batch_stats = any(key.endswith(".running_mean") for key in state)
+        if has_norm_affine and not has_batch_stats:
+            model_cfg["norm"] = "group"
+
+    if model_cfg:
+        cfg["model"] = model_cfg
+    return cfg
 
 
 def load_config(path: str | Path) -> Dict[str, Any]:

@@ -52,6 +52,7 @@ class SegmentationInferenceNode:
         config_path = rospy.get_param("~config_path", None) or None
         device = rospy.get_param("~device", None) or None
         inference_precision = rospy.get_param("~inference_precision", "fp16")
+        cuda_warmup_iterations = int(rospy.get_param("~cuda_warmup_iterations", 1))
         image_size_param = rospy.get_param("~image_size", None)
         image_size = parse_image_size(image_size_param) if image_size_param else None
         # cv_bridge가 ROS Image를 OpenCV 배열로 바꿀 때 사용할 encoding.
@@ -72,6 +73,7 @@ class SegmentationInferenceNode:
             device=device,
             image_size=image_size,
             inference_precision=inference_precision,
+            warmup_iterations=cuda_warmup_iterations,
         )
 
         # input_mode는 이 노드의 ROS 입출력 형태를 고른다.
@@ -113,7 +115,7 @@ class SegmentationInferenceNode:
                 queue_size=queue_size,
             )
             rospy.loginfo(
-                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s batch_inference=%s batch_size=%d classes=%s",
+                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s batch_inference=%s batch_size=%d warmup=%d classes=%s",
                 bundle_topic,
                 class_map_bundle_topic,
                 self.predictor.device,
@@ -122,6 +124,7 @@ class SegmentationInferenceNode:
                 self.predictor.image_size[1],
                 self.bundle_batch_inference,
                 self.bundle_batch_size,
+                cuda_warmup_iterations,
                 ",".join(self.predictor.class_names),
             )
         elif input_mode == "image":

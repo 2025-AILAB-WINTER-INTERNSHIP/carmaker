@@ -9,6 +9,7 @@ config_path: ""
 device: ""
 image_size: ""
 inference_precision: "fp16"  # fp32, fp16, bf16, auto
+cuda_warmup_iterations: 1
 
 # ROS I/O mode.
 #
