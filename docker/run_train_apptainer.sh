@@ -12,6 +12,10 @@
 
 set -euo pipefail
 
+# Prevent container Python from loading host's user site-packages (~/.local)
+export PYTHONNOUSERSITE=1
+export APPTAINERENV_PYTHONNOUSERSITE=1
+
 # Path Configurations
 SIF_IMAGE="/home/ailab/AILabSSD/01_SlurmWorkspace/2026-intern-unet-multi.sif"
 HOST_WORKSPACE="/home/ailab/AILabSSD/04_Shared_Repository/2026-intern/carmaker"

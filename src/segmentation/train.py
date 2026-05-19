@@ -10,6 +10,11 @@
 
 from __future__ import annotations
 
+import sys
+# Apptainer/Singularity 환경에서 호스트의 ~/.local 패키지가 마운트되어
+# 컨테이너 내부의 패키지와 충돌하는 현상을 방지하기 위해 sys.path에서 제거합니다.
+sys.path = [p for p in sys.path if "/.local/" not in p]
+
 import argparse
 import atexit
 import importlib.util
