@@ -70,6 +70,7 @@ public:
 private:
     std::string image_type_;
     BevConfig bev_cfg_;
+    std::string camera_name_;
 
     // Tuning Parameters
     double r_max_;
@@ -87,7 +88,7 @@ private:
     // Vehicle footprint filter (Fr1A frame)
     bool has_vehicle_footprint_;
     double veh_x_min_, veh_x_max_, veh_y_half_;
-    std::string camera_name_;
+    cv::Mat footprint_mask_;
 };
 
 } // namespace carmaker_localization

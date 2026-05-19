@@ -163,6 +163,22 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
         has_optimal_point_ = false;
     }
 
+    // [Step 6: Build Footprint Mask]
+    // 룩업테이블 X, Y 좌표가 완성된 후, 고정된 차량 범위(Footprint)를 바이너리 마스크로 pre-compute해 둡니다.
+    footprint_mask_ = cv::Mat::zeros(bev_cfg_.height, bev_cfg_.width, CV_8UC1);
+    if (has_vehicle_footprint_) {
+        for (int v = 0; v < bev_cfg_.height; ++v) {
+            for (int u = 0; u < bev_cfg_.width; ++u) {
+                float x = cartesian_lut_x_.at<float>(v, u);
+                float y = cartesian_lut_y_.at<float>(v, u);
+                if (x >= veh_x_min_ && x <= veh_x_max_ &&
+                    std::abs(y) <= veh_y_half_) {
+                    footprint_mask_.at<uint8_t>(v, u) = 255;
+                }
+            }
+        }
+    }
+
     lut_initialized_ = true;
 }
 
@@ -191,56 +207,33 @@ std::vector<LocalFeature> FeatureExtractor::process(
             // 배경은 흰색(255,255,255)으로 채움 → 이후 시각화에서 검은색 배경으로 덮어쓰게 됨
             cv::remap(seg_img, out_bev_image, map1_, map2_, cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(255, 255, 255));
 
-            for (int v = 0; v < bev_cfg_.height; ++v) {
-                for (int u = 0; u < bev_cfg_.width; ++u) {
-                    float x = cartesian_lut_x_.at<float>(v, u);
-                    float y = cartesian_lut_y_.at<float>(v, u);
+            // 채널 분리 (R=0, G=1, B=2)
+            std::vector<cv::Mat> img_channels;
+            cv::split(out_bev_image, img_channels);
 
-                    // [cam_z 유효성 검사]
-                    // LUT에서 cam_z ≤ 0으로 마킹된 픽셀(-1, -1)은 카메라 FOV 외부이므로 검은 배경 처리.
-                    // remap이 이미 BORDER_CONSTANT(흰색)으로 채웠을 수 있으므로 여기서 명시적으로 덮어씀.
-                    if (map1_.at<float>(v, u) < 0.0f) {
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
-                        continue;
-                    }
+            // 검은색 픽셀(차선) 및 노란색 픽셀(랜드마크) 마스크 생성
+            cv::Mat is_black_mask = (img_channels[0] == 0) & (img_channels[1] == 0) & (img_channels[2] == 0);
+            cv::Mat is_yellow_mask = (img_channels[0] == 255) & (img_channels[1] == 150) & (img_channels[2] == 0);
 
-                    // [자차(Ego) 풋프린트 마스킹]
-                    // Fr1A 기준 자차 점유 영역은 GT 이미지에서 차체 외곽선(검은 테두리)이
-                    // 차선으로 오분류되므로 검은 배경으로 소거한다.
-                    if (has_vehicle_footprint_ &&
-                        x >= veh_x_min_ && x <= veh_x_max_ &&
-                        std::abs(y) <= veh_y_half_) {
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
-                        continue;
-                    }
-
-                    cv::Vec3b color = out_bev_image.at<cv::Vec3b>(v, u);
-                    uint8_t r = color[0];
-                    uint8_t g = color[1];
-                    uint8_t b = color[2];
-
-                    // GT 이미지 픽셀 분류 → OSM class_id 매핑
-                    // class_id=1 (차선/주차선): 검은 픽셀
-                    // class_id=2 (랜드마크):   노란 픽셀 (EV충전소, 특수 마킹 등)
-                    bool is_black  = (r == 0 && g == 0 && b == 0);
-                    bool is_yellow = (r == 255 && g == 150 && b == 0);
-
-                    if (is_black) {
-                        mask.at<uint8_t>(v, u) = 255;
-                        class_map.at<uint8_t>(v, u) = 1; // 차선 / 주차선
-                        // 흰 선으로 변경
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 255, 255);
-                    } else if (is_yellow) {
-                        mask.at<uint8_t>(v, u) = 255;
-                        class_map.at<uint8_t>(v, u) = 2; // 랜드마크
-                        // 노란색 유지
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 150, 0);
-                    } else {
-                        // 그 외(배경, 차체 등)는 검은 배경
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
-                    }
-                }
+            // 유효하지 않은 영역(FOV 밖 또는 자차 풋프린트 범위) 마스크 생성
+            cv::Mat invalid_mask = (map1_ < 0.0f);
+            if (has_vehicle_footprint_) {
+                invalid_mask |= footprint_mask_;
             }
+
+            // 유효하지 않은 영역은 검출 마스크에서 소거
+            is_black_mask.setTo(0, invalid_mask);
+            is_yellow_mask.setTo(0, invalid_mask);
+
+            // 특징점 추출용 마스크 및 클래스 맵 설정 (루프 없이 고속 연산)
+            mask = is_black_mask | is_yellow_mask;
+            class_map.setTo(1, is_black_mask);
+            class_map.setTo(2, is_yellow_mask);
+
+            // 시각화 컬러 렌더링
+            out_bev_image = cv::Mat::zeros(bev_cfg_.height, bev_cfg_.width, CV_8UC3);
+            out_bev_image.setTo(cv::Scalar(255, 255, 255), is_black_mask); // 차선: 흰색
+            out_bev_image.setTo(cv::Scalar(255, 150, 0), is_yellow_mask);  // 랜드마크: 노란색
         }
     }
 
@@ -254,6 +247,12 @@ std::vector<LocalFeature> FeatureExtractor::process(
             cv::remap(seg_img, bev_class, map1_, map2_, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
             cv::cvtColor(bev_class, out_bev_image, cv::COLOR_GRAY2RGB);
         }
+
+        // [자차(Ego) 풋프린트 마스킹]
+        // Raw 이미지에서도 차량 보닛이나 차체가 카메라에 찍혀 왜곡 투영되는 영역을 검은색으로 소거합니다.
+        if (has_vehicle_footprint_) {
+            out_bev_image.setTo(cv::Scalar(0, 0, 0), footprint_mask_);
+        }
     }
     // 3. 일반 세그멘테이션 모드 (image_type_ == "segmentation")
     else {
@@ -264,20 +263,16 @@ std::vector<LocalFeature> FeatureExtractor::process(
             mask = bev_class > 0;
             class_map = bev_class;
 
-            // 세그멘테이션 클래스 색상 매핑
+            // 각 클래스별 바이너리 마스크 생성
+            cv::Mat val_1_mask = (bev_class == 1);
+            cv::Mat val_2_mask = (bev_class == 2);
+            cv::Mat val_other_mask = (bev_class > 0) & (bev_class != 1) & (bev_class != 2);
+
+            // 세그멘테이션 클래스 색상 매핑 (루프 없이 고속 렌더링)
             out_bev_image = cv::Mat::zeros(bev_cfg_.height, bev_cfg_.width, CV_8UC3);
-            for (int v = 0; v < bev_cfg_.height; ++v) {
-                for (int u = 0; u < bev_cfg_.width; ++u) {
-                    uint8_t val = bev_class.at<uint8_t>(v, u);
-                    if (val == 1) {
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 255, 255); // 차선: 흰색
-                    } else if (val == 2) {
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 76, 76);   // 랜드마크: 코랄색
-                    } else if (val > 0) {
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(100, 255, 100); // 기타 세그먼트: 연초록
-                    }
-                }
-            }
+            out_bev_image.setTo(cv::Scalar(255, 255, 255), val_1_mask);   // 차선: 흰색
+            out_bev_image.setTo(cv::Scalar(255, 76, 76), val_2_mask);     // 랜드마크: 코랄색
+            out_bev_image.setTo(cv::Scalar(100, 255, 100), val_other_mask); // 기타 세그먼트: 연초록
         }
     }
 
@@ -306,8 +301,7 @@ std::vector<LocalFeature> FeatureExtractor::process(
         // GT 이미지의 차량 외곽선(검은 테두리)이 차선으로 잘못 검출되는 것을 방지
         // Fr1A 좌표계 기준 차량 점유 영역 내 픽셀은 특징점에서 제외
         if (has_vehicle_footprint_ &&
-            x >= veh_x_min_ && x <= veh_x_max_ &&
-            std::abs(y) <= veh_y_half_) {
+            footprint_mask_.at<uint8_t>(v, u) == 255) {
             continue;
         }
 
