@@ -1,4 +1,5 @@
 #include "carmaker_localization/localization_nodelet.h"
+#include <ros/console.h>
 #include "carmaker_localization/osm_map_loader.h"
 #include "carmaker_localization/icp_matcher.h"
 #include <XmlRpcValue.h>
@@ -8,6 +9,14 @@
 namespace carmaker_localization {
 
 void LocalizationNodelet::onInit() {
+    // Suppress high-frequency TF2 time-jump warnings caused by simulator clocks
+    if (ros::console::set_logger_level("ros.tf2", ros::console::levels::Error)) {
+        ros::console::notifyLoggerLevelsChanged();
+    }
+    if (ros::console::set_logger_level("ros.tf2_ros", ros::console::levels::Error)) {
+        ros::console::notifyLoggerLevelsChanged();
+    }
+
     NODELET_INFO("Initializing carmaker_localization Nodelet...");
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
@@ -341,19 +350,20 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
         return;
     }
 
-    double dt = current_time - last_prediction_time_;
-    if (dt < -0.05 || dt > 1.0) {
-        NODELET_WARN_THROTTLE(2.0, "Major time jump detected (dt: %.3f). Resetting EKF...", dt);
+    // 1. Check for real major time jumps (e.g. bag loop or simulation restart)
+    double raw_dt = current_time - last_prediction_time_;
+    if (raw_dt < -1.0 || raw_dt > 5.0) {
+        NODELET_WARN_THROTTLE(2.0, "Major time jump detected (dt: %.3f). Resetting EKF...", raw_dt);
         last_prediction_time_ = 0.0;
         return;
     }
 
-    if (dt <= 0.0001) {
-        if (dt < -0.001) {
-            NODELET_WARN_THROTTLE(2.0, "Minor time jitter/reverse detected (dt: %.3f). Skipping this prediction step...", dt);
-        }
-        return;
+    // 2. Monotonic Clamping: Ensure time always progresses monotonically for uninterrupted 100Hz TF & Odom stream
+    if (current_time <= last_prediction_time_) {
+        current_time = last_prediction_time_ + 0.0001; // Minimum 0.1ms monotonic step
     }
+
+    double dt = current_time - last_prediction_time_;
 
     // 1. EKF Prediction
     ekf_core_->prediction(current_time);
