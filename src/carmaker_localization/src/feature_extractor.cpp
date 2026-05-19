@@ -7,7 +7,9 @@ namespace carmaker_localization {
 FeatureExtractor::FeatureExtractor(const std::string& camera_name)
     : r_max_(15.0), cov_k_(1.0), max_fov_(180.0), is_initialized_(false), lut_initialized_(false),
         has_optimal_point_(false), has_vehicle_footprint_(false),
-        veh_x_min_(0.0), veh_x_max_(0.0), veh_y_half_(0.0), veh_height_(1.605),
+        veh_x_min_(0.0), veh_x_max_(0.0), veh_y_half_(0.0),
+        phys_x_min_(0.0), phys_x_max_(0.0), phys_y_half_(0.0),
+        veh_height_(1.605), cam_origin_x_(0.0), cam_origin_y_(0.0),
         camera_name_(camera_name) {
 }
 
@@ -52,6 +54,12 @@ void FeatureExtractor::setVehicleFootprint(double x_min, double x_max, double y_
     veh_x_max_ = x_max + margin;
     veh_y_half_ = y_half + margin;
     veh_height_ = height;
+
+    // 3D Ray-Casting용 물리적 uninflated 규격 저장
+    phys_x_min_ = x_min;
+    phys_x_max_ = x_max;
+    phys_y_half_ = y_half;
+
     has_vehicle_footprint_ = true;
 }
 
@@ -134,6 +142,9 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     double origin_in_base_y = t_cam_base.at<double>(1, 0);
     double origin_in_base_z = t_cam_base.at<double>(2, 0);
 
+    cam_origin_x_ = origin_in_base_x;
+    cam_origin_y_ = origin_in_base_y;
+
     double ray_dir_in_base_x = R_cam_base.at<double>(0, 2);
     double ray_dir_in_base_y = R_cam_base.at<double>(1, 2);
     double ray_dir_in_base_z = R_cam_base.at<double>(2, 2);
@@ -160,7 +171,9 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
                     double ry = origin_in_base_y + t * (gy - origin_in_base_y);
                     double rz = origin_in_base_z * (1.0 - t);
                     // 자차의 3D 바디 범위(높이 Z <= veh_height_)를 가로막으면 시야가 차단된 것
-                    if (rx >= veh_x_min_ && rx <= veh_x_max_ && std::abs(ry) <= veh_y_half_ && rz <= veh_height_) {
+                    // 3D Ray-Casting 시에는 카메라 마운트가 차체 외곽선 경계에 걸쳐 상시 차단되는 오작동을 피하기 위해
+                    // 인플레이션 마진이 없는 순수 물리적 차체 크기(phys_x_min_, phys_x_max_, phys_y_half_)를 기준으로 비교해야 합니다.
+                    if (rx >= phys_x_min_ && rx <= phys_x_max_ && std::abs(ry) <= phys_y_half_ && rz <= veh_height_) {
                         is_blocked = true;
                         break;
                     }
@@ -354,12 +367,16 @@ std::vector<LocalFeature> FeatureExtractor::process(
         }
 
         // [3-1. 방향 벡터 계산]
-        // Base 기준점(0,0)에서 특징점(x,y)을 향하는 방사형(Radial) 단위 벡터
-        float e_r_x = x / r;
-        float e_r_y = y / r;
+        // 카메라 광학 원점(cam_origin_x, cam_origin_y)에서 특징점(x,y)을 향하는 실제 방사형(Radial) 단위 벡터
+        float dx_cam = x - cam_origin_x_;
+        float dy_cam = y - cam_origin_y_;
+        float r_cam = std::sqrt(dx_cam*dx_cam + dy_cam*dy_cam);
+
+        float e_r_x = dx_cam / (r_cam + 1e-6f);
+        float e_r_y = dy_cam / (r_cam + 1e-6f);
         // 방사형 벡터에 수직인 접선형(Tangential) 단위 벡터 (90도 회전)
-        float e_t_x = -y / r;
-        float e_t_y = x / r;
+        float e_t_x = -e_r_y;
+        float e_t_y = e_r_x;
 
         // [3-2. 불확실성(Sigma) 계산]
         // 최적점(Optimal Point: 렌즈 축이 바닥에 닿는 가장 선명한 곳)으로부터의 거리 제곱 계산

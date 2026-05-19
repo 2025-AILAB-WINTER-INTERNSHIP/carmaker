@@ -94,7 +94,10 @@ private:
 
     // Vehicle footprint filter (Fr1A frame)
     bool has_vehicle_footprint_;
-    double veh_x_min_, veh_x_max_, veh_y_half_, veh_height_;
+    double veh_x_min_, veh_x_max_, veh_y_half_;
+    double phys_x_min_, phys_x_max_, phys_y_half_;
+    double veh_height_;
+    double cam_origin_x_, cam_origin_y_;
     cv::Mat footprint_mask_;
 };
 
