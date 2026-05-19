@@ -39,13 +39,6 @@ void EkfCore::initialize(double x, double y, double yaw, double timestamp, doubl
     updateBuffer(timestamp);
 }
 
-void EkfCore::setParameters(double tire_radius, double wheelbase, double track_width, double rear_axle_x) {
-    tire_radius_ = tire_radius;
-    wheelbase_ = wheelbase;
-    track_width_ = track_width;
-    rear_axle_x_ = rear_axle_x;
-}
-
 void EkfCore::setProcessNoise(const Eigen::MatrixXd& Q) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (Q.rows() == STATE_DIM && Q.cols() == STATE_DIM) {

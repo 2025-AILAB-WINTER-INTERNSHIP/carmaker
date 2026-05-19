@@ -44,7 +44,6 @@ add_library(carmaker_localization_nodelet
   src/localization_nodelet.cpp
   src/feature_extractor.cpp
   src/ekf_core.cpp
-  src/state_buffer.cpp
   src/visualizer.cpp
   src/osm_map_loader.cpp
   src/icp_matcher.cpp

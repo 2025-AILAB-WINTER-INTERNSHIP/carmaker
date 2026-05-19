@@ -39,11 +39,19 @@ void LocalizationNodelet::onInit() {
 bool LocalizationNodelet::loadParameters() {
     ros::NodeHandle& pnh = getPrivateNodeHandle();
 
+    image_type_ = pnh.param("setting/image_type", std::string("gt"));
+
     global_frame_ = pnh.param("frames/global", std::string("map"));
     prediction_frame_ = pnh.param("frames/prediction", std::string("Fr1A_pred"));
-    tire_radius_ = pnh.param("vehicle/tire_radius", 0.327);
 
-    image_type_ = pnh.param("setting/image_type", std::string("gt"));
+    tire_radius_ = pnh.param("vehicle/tire_radius", 0.327);
+    track_width_ = pnh.param("vehicle/track_width", 1.655);
+    rear_axle_x_ = pnh.param("vehicle/rear_axle_offset_x", 0.79);
+
+    wheel_speed_std_ = pnh.param("ekf/wheel_noise/speed_std", 0.05);
+    imu_acc_std_ = pnh.param("ekf/imu/acc_std", 0.1);
+    imu_gyro_std_ = pnh.param("ekf/imu/gyro_std", 0.01);
+
     resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
     r_max_ = pnh.param("feature_extractor/extraction/r_max", 15.0);
     cov_k_ = pnh.param("feature_extractor/extraction/covariance_k", 1.0);
@@ -166,16 +174,11 @@ void LocalizationNodelet::initEkf() {
     double imu_y = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_y", 0.0);
     double imu_z = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_z", 0.298);
 
-    double rear_axle_x = pnh.param("vehicle/rear_axle_offset_x", 0.79);
-    double wheelbase = pnh.param("vehicle/wheelbase", 3.0);
-    double track_width = pnh.param("vehicle/track_width", 1.655);
-
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 1e-4;
-    Q(VX, VX) = std::pow(pnh.param("ekf/imu/acc_std", 0.1), 2);
+    Q(VX, VX) = std::pow(imu_acc_std_, 2);
     Q(VY, VY) = Q(VX, VX);
-    Q(YAW_RATE, YAW_RATE) = std::pow(pnh.param("ekf/imu/gyro_std", 0.01), 2);
+    Q(YAW_RATE, YAW_RATE) = std::pow(imu_gyro_std_, 2);
 
-    ekf_core_->setParameters(tire_radius_, wheelbase, track_width, rear_axle_x);
     ekf_core_->setProcessNoise(Q);
 
     NODELET_INFO("Selected IMU: %d (offset_x: %.2f)", imu_id_, imu_x);
@@ -383,27 +386,39 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     ekf_core_->prediction(current_time);
 
     // 2. IMU Observation Correction
-    ros::NodeHandle& pnh = getPrivateNodeHandle();
     Eigen::Matrix3d R_imu = Eigen::Matrix3d::Identity();
-    R_imu(0, 0) = std::pow(pnh.param("ekf/imu/acc_std", 0.1), 2);
+    R_imu(0, 0) = std::pow(imu_acc_std_, 2);
     R_imu(1, 1) = R_imu(0, 0);
-    R_imu(2, 2) = std::pow(pnh.param("ekf/imu/gyro_std", 0.01), 2);
+    R_imu(2, 2) = std::pow(imu_gyro_std_, 2);
 
     ekf_core_->correctImu(latest_dynamics_.Sensor_Inertial_0_Acc_B_x,
                           latest_dynamics_.Sensor_Inertial_0_Acc_B_y,
                           latest_dynamics_.Sensor_Inertial_0_Omega_B_z,
                           R_imu, current_time);
 
-    // 3. Wheel Speed Observation Correction
+    // 3. Wheel Speed Observation Correction & Kinematic Constraints
     double v_left = latest_dynamics_.Vhcl_RL_rotv * tire_radius_;
     double v_right = latest_dynamics_.Vhcl_RR_rotv * tire_radius_;
+
+    // 3-1. 종방향 속도 및 휠 기반 회전 각속도 도출
     double vx_wheel = (v_left + v_right) / 2.0;
+    double yaw_rate_wheel = (v_right - v_left) / track_width_;
+
+    // 3-2. 비홀로노믹 제약(NHC) + 레버 암 효과
+    // 차량 뒷바퀴 축은 측면 미끄러짐이 없으므로, Fr1A 기준 측면 속도(vy)는 순수 회전에 의해 발생함
+    double vy_nhc = -yaw_rate_wheel * rear_axle_x_;
 
     Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
-    R_wheel(0, 0) = std::pow(pnh.param("ekf/wheel_noise/speed_std", 0.05), 2);
-    R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint (vy ~ 0)
+    R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);
+    R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint uncertainty
 
-    ekf_core_->correctVelocity(vx_wheel, 0.0, R_wheel, current_time);
+    ekf_core_->correctVelocity(vx_wheel, vy_nhc, R_wheel, current_time);
+
+    // 3-3. 휠 오도메트리 Yaw Rate 기반 IMU 바이어스 교정 (Redundancy)
+    Eigen::Matrix3d R_wheel_imu = Eigen::Matrix3d::Identity() * 1e6; // ax, ay 무시 (무한대 노이즈)
+    R_wheel_imu(2, 2) = std::pow(wheel_speed_std_ / track_width_, 2); // Yaw rate 노이즈 전파 계산
+
+    ekf_core_->correctImu(0.0, 0.0, yaw_rate_wheel, R_wheel_imu, current_time);
 
     // 4. Publish Final Estimation
     publishEstimation(ros::Time(current_time));

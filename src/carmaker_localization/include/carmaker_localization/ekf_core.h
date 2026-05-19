@@ -38,7 +38,6 @@ public:
     bool isInitialized() const { return is_initialized_; }
 
     // Parameters
-    void setParameters(double tire_radius, double wheelbase, double track_width, double rear_axle_x);
     void setProcessNoise(const Eigen::MatrixXd& Q);
 
     // EKF Core Cycle
@@ -61,9 +60,6 @@ private:
     Eigen::VectorXd x_; // [11x1]
     Eigen::MatrixXd P_; // [11x11]
     Eigen::MatrixXd Q_; // Process Noise [11x11]
-
-    // Vehicle Params
-    double tire_radius_, wheelbase_, track_width_, rear_axle_x_;
 
     // Timing & History
     double last_time_;

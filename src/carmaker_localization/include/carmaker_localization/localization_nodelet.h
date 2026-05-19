@@ -114,11 +114,23 @@ private:
     double svm_y_max_ = 3.0;
     double svm_y_min_ = -3.0;
 
-    // FeatureExtractor Config
+    // Feature Extractor Config
     std::string image_type_;
-    double resolution_ = 0.05;
     double r_max_ = 15.0;
     double cov_k_ = 1.0;
+
+    // Map Loader Config
+    double resolution_ = 0.05;
+
+    // Vehicle Kinematics
+    double tire_radius_ = 0.327;
+    double track_width_ = 1.655;
+    double rear_axle_x_ = 0.79;
+
+    // EKF Noise Config
+    double wheel_speed_std_ = 0.05;
+    double imu_acc_std_ = 0.1;
+    double imu_gyro_std_ = 0.01;
 
     // EKF Initial State Config
     bool use_manual_initial_state_ = false;
@@ -177,10 +189,6 @@ private:
     // CameraInfo buffer protected by mutex to prevent Data Race
     std::mutex info_array_mutex_;
     sensor_msgs::CameraInfoConstPtr latest_infos_[NUM_CAMERAS];
-
-    // Camera Bundle index cache
-    std::vector<int> bundle_index_cache_;
-    std::once_flag bundle_cache_flag_;
 
     // SVM Canvas & Masks
     cv::Mat svm_canvas_;

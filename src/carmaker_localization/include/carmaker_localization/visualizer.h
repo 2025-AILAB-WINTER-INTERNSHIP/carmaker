@@ -3,7 +3,6 @@
 
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
-#include <sensor_msgs/PointCloud2.h>
 #include <carmaker_msgs/LocalFeatures.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -30,7 +29,6 @@ public:
 private:
     ros::NodeHandle nh_;
     ros::Publisher svm_pub_;
-    ros::Publisher feature_pc_pub_;
     ros::Publisher estimation_marker_pub_;
     ros::Publisher correction_marker_pub_;
     ros::Publisher estimation_trajectory_pub_;

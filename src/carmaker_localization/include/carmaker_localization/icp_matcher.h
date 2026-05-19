@@ -2,7 +2,6 @@
 #define CARMAKER_LOCALIZATION_ICP_MATCHER_H
 
 #include "carmaker_localization/matcher_base.h"
-#include <opencv2/flann.hpp>
 
 namespace carmaker_localization {
 
