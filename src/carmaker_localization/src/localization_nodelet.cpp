@@ -213,6 +213,8 @@ void LocalizationNodelet::initSvm() {
     svm_masks_["rear"] = (index_map == 2);
     svm_masks_["left"] = (index_map == 3);
     svm_masks_["right"] = (index_map == 4);
+
+    seam_line_points_ = {p_fc, p_l1_fl, p_l2_fl, p_rc, p_l1_rl, p_l2_rl};
 }
 
 void LocalizationNodelet::setupRosIo() {
@@ -662,7 +664,24 @@ void LocalizationNodelet::processImages(
         }
     }
 
-    visualizer_->publishSvmImage(svm_canvas_);
+    // Draw seam lines if visualizer is active for visual validation
+    if (visualizer_) {
+        cv::Mat svm_canvas_with_seams = svm_canvas_.clone();
+        if (seam_line_points_.size() >= 6) {
+            cv::Point p_fc = seam_line_points_[0];
+            cv::Point p_l1_fl = seam_line_points_[1];
+            cv::Point p_l2_fl = seam_line_points_[2];
+            cv::Point p_rc = seam_line_points_[3];
+            cv::Point p_l1_rl = seam_line_points_[4];
+            cv::Point p_l2_rl = seam_line_points_[5];
+
+            cv::line(svm_canvas_with_seams, p_fc, p_l1_fl, cv::Scalar(255, 255, 255), 1);
+            cv::line(svm_canvas_with_seams, p_fc, p_l2_fl, cv::Scalar(255, 255, 255), 1);
+            cv::line(svm_canvas_with_seams, p_rc, p_l1_rl, cv::Scalar(255, 255, 255), 1);
+            cv::line(svm_canvas_with_seams, p_rc, p_l2_rl, cv::Scalar(255, 255, 255), 1);
+        }
+        visualizer_->publishSvmImage(svm_canvas_with_seams);
+    }
 
     if (fusion_ && !combined.features.empty() && map_matcher_enabled_ && map_loader_ && matcher_) {
         performCorrection(combined);

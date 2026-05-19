@@ -183,6 +183,7 @@ private:
     cv::Mat svm_canvas_;
     std::mutex svm_mutex_;
     std::map<std::string, cv::Mat> svm_masks_;
+    std::vector<cv::Point> seam_line_points_;
 };
 
 } // namespace carmaker_localization
