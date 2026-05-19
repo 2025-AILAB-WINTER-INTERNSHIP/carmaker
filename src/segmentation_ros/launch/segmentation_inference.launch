@@ -12,7 +12,7 @@
   <arg name="class_map_topic" default="/segmentation/class_map" />
   <arg name="drop_while_busy" default="true" />
   <arg name="bundle_batch_inference" default="true" />
-  <arg name="bundle_batch_size" default="4" />
+  <arg name="bundle_batch_size" default="" />
   <arg name="log_timing" default="true" />
 
   <node pkg="segmentation_ros" type="segmentation_inference_node.py" name="segmentation_inference_node" output="screen">
@@ -31,7 +31,7 @@
     <param name="class_map_topic" value="$(arg class_map_topic)" />
     <param name="drop_while_busy" value="$(arg drop_while_busy)" />
     <param name="bundle_batch_inference" value="$(arg bundle_batch_inference)" />
-    <param name="bundle_batch_size" value="$(arg bundle_batch_size)" />
+    <param if="$(eval arg('bundle_batch_size') != '')" name="bundle_batch_size" value="$(arg bundle_batch_size)" />
     <param name="log_timing" value="$(arg log_timing)" />
   </node>
 </launch>

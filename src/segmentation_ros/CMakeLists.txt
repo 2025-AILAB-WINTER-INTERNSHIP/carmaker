@@ -22,6 +22,14 @@ catkin_install_python(PROGRAMS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+if(UNIX)
+  add_custom_target(${PROJECT_NAME}_chmod_generated_python_nodes ALL
+    COMMAND /bin/sh -c "for f in '${CMAKE_CURRENT_BINARY_DIR}/catkin_generated/installspace/bundle_image_visualizer_node.py' '${CMAKE_CURRENT_BINARY_DIR}/catkin_generated/installspace/segmentation_inference_node.py'; do if [ -f \"$$f\" ]; then chmod +x \"$$f\" || exit 1; fi; done"
+    COMMENT "Ensuring generated Python node wrappers are executable"
+    VERBATIM
+  )
+endif()
+
 install(DIRECTORY config launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )

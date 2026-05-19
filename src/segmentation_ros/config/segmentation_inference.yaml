@@ -32,7 +32,9 @@ input_encoding: "bgr8"
 queue_size: 1
 drop_while_busy: true
 bundle_batch_inference: true
-bundle_batch_size: 4
+
+#bundle_batch_size: 4
+bundle_batch_size: 1 
 
 # Print inference latency/FPS to the ROS log for debugging.
 log_timing: true
