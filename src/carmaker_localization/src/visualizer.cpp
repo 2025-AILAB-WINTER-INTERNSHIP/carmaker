@@ -39,7 +39,7 @@ void Visualizer::publishSvmImage(const cv::Mat& svm_image) {
         std_msgs::Header header;
         header.stamp = ros::Time::now();
         header.frame_id = prediction_frame_;
-        cv_bridge::CvImage cv_img(header, "bgr8", svm_image);
+        cv_bridge::CvImage cv_img(header, "rgb8", svm_image);
         svm_pub_.publish(cv_img.toImageMsg());
     }
 }

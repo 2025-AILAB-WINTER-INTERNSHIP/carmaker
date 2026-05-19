@@ -574,7 +574,13 @@ void LocalizationNodelet::processImages(
     for (size_t i = 0; i < NUM_CAMERAS; ++i) {
         cv_bridge::CvImagePtr cv_seg;
         try {
-            cv_seg = cv_bridge::toCvCopy(imgs[i], imgs[i]->encoding);
+            std::string target_encoding = imgs[i]->encoding;
+            if (target_encoding == "bgr8") {
+                target_encoding = "rgb8";
+            } else if (target_encoding == "bgra8") {
+                target_encoding = "rgba8";
+            }
+            cv_seg = cv_bridge::toCvCopy(imgs[i], target_encoding);
         } catch (cv_bridge::Exception& e) {
             NODELET_ERROR("cv_bridge exception: %s", e.what());
             continue;

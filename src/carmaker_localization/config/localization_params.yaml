@@ -46,7 +46,7 @@ topics:
         bev_y_range: [-3.0, 0.0]
 
 setting:
-  image_type: "gt" # "gt" or "segmentation"
+  image_type: "raw" # "gt" or "segmentation" or "raw"
 
 frames:
   global: "map"

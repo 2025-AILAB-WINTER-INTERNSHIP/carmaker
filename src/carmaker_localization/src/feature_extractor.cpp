@@ -215,27 +215,26 @@ std::vector<LocalFeature> FeatureExtractor::process(
                     }
 
                     cv::Vec3b color = out_bev_image.at<cv::Vec3b>(v, u);
-                    uint8_t b = color[0];
+                    uint8_t r = color[0];
                     uint8_t g = color[1];
-                    uint8_t r = color[2];
+                    uint8_t b = color[2];
 
                     // GT 이미지 픽셀 분류 → OSM class_id 매핑
                     // class_id=1 (차선/주차선): 검은 픽셀
                     // class_id=2 (랜드마크):   노란 픽셀 (EV충전소, 특수 마킹 등)
-                    bool is_black  = (r < 50 && g < 50 && b < 50);
-                    bool is_yellow = ((r > 200 && g > 100 && b < 50) ||   // BGR 정상
-                                     (b > 200 && g > 100 && r < 50));     // RGB로 읽힌 경우 대응
+                    bool is_black  = (r == 0 && g == 0 && b == 0);
+                    bool is_yellow = (r == 255 && g == 150 && b == 0);
 
                     if (is_black) {
                         mask.at<uint8_t>(v, u) = 255;
                         class_map.at<uint8_t>(v, u) = 1; // 차선 / 주차선
-                        // 시각화: 검은 배경 위에 차선이 보이도록 흰색으로 표시
+                        // 흰 선으로 변경
                         out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 255, 255);
                     } else if (is_yellow) {
                         mask.at<uint8_t>(v, u) = 255;
                         class_map.at<uint8_t>(v, u) = 2; // 랜드마크
-                        // 시각화: 노란색 유지
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 200, 255);
+                        // 노란색 유지
+                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 150, 0);
                     } else {
                         // 그 외(배경, 차체 등)는 검은 배경
                         out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(0, 0, 0);
@@ -253,7 +252,7 @@ std::vector<LocalFeature> FeatureExtractor::process(
         } else if (seg_img.channels() == 1) {
             cv::Mat bev_class;
             cv::remap(seg_img, bev_class, map1_, map2_, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
-            cv::cvtColor(bev_class, out_bev_image, cv::COLOR_GRAY2BGR);
+            cv::cvtColor(bev_class, out_bev_image, cv::COLOR_GRAY2RGB);
         }
     }
     // 3. 일반 세그멘테이션 모드 (image_type_ == "segmentation")
@@ -273,7 +272,7 @@ std::vector<LocalFeature> FeatureExtractor::process(
                     if (val == 1) {
                         out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 255, 255); // 차선: 흰색
                     } else if (val == 2) {
-                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(76, 76, 255);   // 랜드마크: 코랄색
+                        out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(255, 76, 76);   // 랜드마크: 코랄색
                     } else if (val > 0) {
                         out_bev_image.at<cv::Vec3b>(v, u) = cv::Vec3b(100, 255, 100); // 기타 세그먼트: 연초록
                     }
