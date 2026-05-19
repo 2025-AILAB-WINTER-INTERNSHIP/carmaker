@@ -55,21 +55,28 @@ except ImportError:
         overlay_mask_gpu,
     )
 
+import_errors = []
+
 try:
     import lightning.pytorch as L
     from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
     from lightning.pytorch.loggers import TensorBoardLogger
     from lightning.pytorch.strategies import DDPStrategy
     from lightning.pytorch.utilities.rank_zero import rank_zero_info
-except ImportError:
+except ImportError as e:
+    import_errors.append(f"lightning.pytorch import failed: {e}")
     try:
         import pytorch_lightning as L
         from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
         from pytorch_lightning.loggers import TensorBoardLogger
         from pytorch_lightning.strategies import DDPStrategy
         from pytorch_lightning.utilities.rank_zero import rank_zero_info
-    except ImportError:
+    except ImportError as e2:
+        import_errors.append(f"pytorch_lightning import failed: {e2}")
         L = None
+        def rank_zero_info(*args, **kwargs):
+            # Fallback to standard print when lightning is not available
+            print(*args, **kwargs)
 
 
 class SegmentationDataModule(L.LightningDataModule if L else object):
