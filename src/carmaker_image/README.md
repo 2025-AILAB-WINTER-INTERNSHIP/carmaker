@@ -203,6 +203,9 @@ GT 이미지에 차체 마스크를 적용하여 픽셀을 lane / landmark / bac
 # 기본 실행
 roslaunch carmaker_image apply_mask.launch
 
+# raw train10 시나리오만 처리
+roslaunch carmaker_image apply_mask.launch mode:=raw scenario:=train10
+
 # 배치 추출 이후: 서브디렉토리 재귀 탐색 (기본값)
 roslaunch carmaker_image apply_mask.launch recursive:=true
 
@@ -211,6 +214,7 @@ roslaunch carmaker_image apply_mask.launch refresh_masks:=true
 
 # CLI
 rosrun carmaker_image apply_mask.py --suffix _post --recursive
+rosrun carmaker_image apply_mask.py --mode raw --scenario train10 --recursive
 ```
 
 주요 옵션:
@@ -218,8 +222,12 @@ rosrun carmaker_image apply_mask.py --suffix _post --recursive
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `--gt-input-dir` | `data/gt_images` | GT 입력 디렉토리 |
+| `--raw-input-dir` | `data/raw_images` | raw 입력 디렉토리 |
 | `--mask-dir` | `data/mask` | JSON/마스크 파일 디렉토리 |
 | `--gt-output-dir` | `data/gt_post_processed` | 결과 저장 디렉토리 |
+| `--raw-output-dir` | `data/raw_post_processed` | raw 결과 저장 디렉토리 |
+| `--mode` | `both` | 처리 대상 (`both`, `gt`, `raw`) |
+| `--scenario` | 없음 | 시나리오 이름. 예: `train10`이면 `raw_images/train10` → `raw_post_processed/train10` |
 | `--suffix` | `_post` | 출력 파일명 접미사 |
 | `--cameras` | `front,left,rear,right` | 카메라 이름 목록 |
 | `--recursive` | `true` | 하위 디렉토리 재귀 탐색 (배치 추출 후 기본 동작) |

@@ -34,6 +34,14 @@ DEFAULT_RAW_DIR = DATA_ROOT / "raw_images"
 DEFAULT_RAW_POST_DIR = DATA_ROOT / "raw_post_processed"
 DEFAULT_GT_DIR = DATA_ROOT / "gt_images"
 DEFAULT_GT_POST_DIR = DATA_ROOT / "gt_post_processed"
+INPUT_ROOTS = {
+    "gt": DEFAULT_GT_DIR,
+    "raw": DEFAULT_RAW_DIR,
+}
+OUTPUT_ROOTS = {
+    "gt": DEFAULT_GT_POST_DIR,
+    "raw": DEFAULT_RAW_POST_DIR,
+}
 
 CLASS_BACKGROUND = 0
 CLASS_LANE_BLACK = 1
@@ -80,6 +88,22 @@ def parse_args(argv=None):
         help=(
             "마스크 생성만 수행하고 종료합니다 (GT 이미지 처리 없음). "
             "--json 또는 --cameras 와 함께 사용."
+        ),
+    )
+    parser.add_argument(
+        "--mode",
+        "--kind",
+        choices=("both", "gt", "raw"),
+        default="both",
+        help="처리 대상 선택: both, gt, raw (기본: both).",
+    )
+    parser.add_argument(
+        "--scenario",
+        "--scenario-name",
+        default="",
+        help=(
+            "시나리오 디렉토리 이름. 예: --mode raw --scenario train10 은 "
+            "data/raw_images/train10 -> data/raw_post_processed/train10 으로 처리."
         ),
     )
 
@@ -135,13 +159,19 @@ def parse_args(argv=None):
         "--gt-output-dir",
         "--output-dir",
         dest="gt_output_dir",
-        default=str(DEFAULT_GT_POST_DIR),
-        help=f"후처리 결과 저장 디렉토리 (기본: {DEFAULT_GT_POST_DIR}).",
+        default="",
+        help=(
+            f"GT 후처리 결과 저장 디렉토리. 비우면 입력 경로와 scenario로 자동 판단 "
+            f"(기본 root: {DEFAULT_GT_POST_DIR})."
+        ),
     )
     parser.add_argument(
         "--raw-output-dir",
-        default=str(DEFAULT_RAW_POST_DIR),
-        help=f"raw 후처리 결과 저장 디렉토리 (기본: {DEFAULT_RAW_POST_DIR}).",
+        default="",
+        help=(
+            f"raw 후처리 결과 저장 디렉토리. 비우면 입력 경로와 scenario로 자동 판단 "
+            f"(기본 root: {DEFAULT_RAW_POST_DIR})."
+        ),
     )
     parser.add_argument(
         "--image-glob",
@@ -199,7 +229,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--recursive",
         action="store_true",
-        help="gt-input-dir 하위 폴더를 재귀 탐색 (batch_extract 이후 사용).",
+        help="입력 디렉토리 하위 폴더를 재귀 탐색 (batch_extract 이후 사용).",
     )
 
     # Use ROS-aware argv detection if not explicitly provided
@@ -362,6 +392,69 @@ def find_images(input_dir, image_glob, recursive):
     if recursive:
         return sorted(input_dir.rglob(image_glob))
     return sorted(input_dir.glob(image_glob))
+
+
+def _resolve_path(path):
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def _same_path(left, right):
+    return _resolve_path(left) == _resolve_path(right)
+
+
+def _append_scenario(path, scenario):
+    path = Path(path)
+    if not scenario or path.name == scenario:
+        return path
+    return path / scenario
+
+
+def _infer_output_dir(input_dir, input_root, output_root):
+    input_dir = Path(input_dir)
+    input_root = Path(input_root)
+    output_root = Path(output_root)
+
+    try:
+        rel_dir = _resolve_path(input_dir).relative_to(_resolve_path(input_root))
+    except ValueError:
+        return output_root
+
+    if str(rel_dir) == ".":
+        return output_root
+    return output_root / rel_dir
+
+
+def resolve_processing_paths(args):
+    """Normalize input/output roots from explicit dirs, mode, and scenario.
+
+    Examples:
+      --mode raw --scenario train10
+        data/raw_images/train10 -> data/raw_post_processed/train10
+      --mode raw --raw-input-dir data/raw_images/train10
+        data/raw_images/train10 -> data/raw_post_processed/train10
+    """
+    scenario = args.scenario.strip().strip("/\\")
+
+    for kind in ("gt", "raw"):
+        input_attr = f"{kind}_input_dir"
+        output_attr = f"{kind}_output_dir"
+        input_root = INPUT_ROOTS[kind]
+        output_root = OUTPUT_ROOTS[kind]
+
+        input_dir = Path(getattr(args, input_attr) or input_root)
+        output_value = getattr(args, output_attr)
+        output_dir = Path(output_value) if output_value else output_root
+
+        if scenario:
+            input_dir = _append_scenario(input_dir, scenario)
+            output_dir = _append_scenario(output_dir, scenario)
+        elif not output_value or _same_path(output_dir, output_root):
+            output_dir = _infer_output_dir(input_dir, input_root, output_root)
+
+        setattr(args, input_attr, str(input_dir))
+        setattr(args, output_attr, str(output_dir))
+
+    return args
 
 
 def classify_post_processed_image(
@@ -587,8 +680,11 @@ def main():
     if args.generate_only:
         run_generate_only(args)
     else:
-        run_gt_processing(args)
-        run_raw_processing(args)
+        args = resolve_processing_paths(args)
+        if args.mode in ("both", "gt"):
+            run_gt_processing(args)
+        if args.mode in ("both", "raw"):
+            run_raw_processing(args)
 
 
 if __name__ == "__main__":
