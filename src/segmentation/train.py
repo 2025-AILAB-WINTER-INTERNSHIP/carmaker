@@ -74,12 +74,16 @@ except ImportError as e:
     except ImportError as e2:
         import_errors.append(f"pytorch_lightning import failed: {e2}")
         L = None
-        def rank_zero_info(*args, **kwargs):
-            # Fallback to standard print when lightning is not available
-            print(*args, **kwargs)
+
+if L is None:
+    raise ImportError(
+        "PyTorch Lightning is required for training, but importing it failed.\n"
+        "Please make sure the library is installed in your container/environment.\n"
+        "Details of import failures:\n" + "\n".join(f"  - {err}" for err in import_errors)
+    )
 
 
-class SegmentationDataModule(L.LightningDataModule if L else object):
+class SegmentationDataModule(L.LightningDataModule):
     """PyTorch Lightning용 DataModule.
 
     Adapter 생성, Dataset Split, DataLoader 구성을 담당한다.
@@ -152,7 +156,7 @@ class SegmentationDataModule(L.LightningDataModule if L else object):
         )
 
 
-class SegmentationLightningModule(L.LightningModule if L else object):
+class SegmentationLightningModule(L.LightningModule):
     """PyTorch Lightning용 Module.
 
     모델, 손실 함수, 최적화 및 메트릭 계산 로직을 포함한다.
@@ -586,7 +590,7 @@ class SegmentationLightningModule(L.LightningModule if L else object):
         }
 
 
-class ImageLoggingCallback(L.Callback if L else object):
+class ImageLoggingCallback(L.Callback):
     """매 validation epoch마다 샘플 이미지를 TensorBoard에 로깅하는 콜백."""
 
     def __init__(self, debug_loaders, palette):
