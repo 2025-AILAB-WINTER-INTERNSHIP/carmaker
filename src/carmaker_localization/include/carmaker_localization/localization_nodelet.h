@@ -102,10 +102,6 @@ private:
     int imu_id_ = 0;
     std::string global_frame_;
     std::string prediction_frame_;
-    double search_radius_ = 20.0;
-    double tire_radius_ = 0.327;
-    double fitness_threshold_ = 0.5;
-    bool map_matcher_enabled_ = true;  // map_matcher/enable 파라미터로 제어
 
     // SVM Config
     double svm_res_ = 0.05;
@@ -119,8 +115,11 @@ private:
     double r_max_ = 15.0;
     double cov_k_ = 1.0;
 
-    // Map Loader Config
+    // Map Loader / Map Matcher Config
     double resolution_ = 0.05;
+    bool map_matcher_enabled_ = true;  // map_matcher/enable 파라미터로 제어
+    double search_radius_ = 20.0;
+    double fitness_threshold_ = 0.5;
 
     // Vehicle Kinematics
     double tire_radius_ = 0.327;
