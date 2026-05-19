@@ -37,7 +37,13 @@ public:
     /**
      * @brief Set tuning parameters for feature extraction
      */
-    void setExtractionParameters(double r_max, double cov_k);
+    /**
+     * @brief Set tuning parameters for feature extraction
+     * @param r_max  Maximum valid observation range [m]
+     * @param cov_k  Covariance scaling factor
+     * @param max_fov Maximum Field of View of camera lens [deg]
+     */
+    void setExtractionParameters(double r_max, double cov_k, double max_fov = 180.0);
 
     /**
      * @brief Set vehicle bounding box in Fr1A frame for footprint filtering.
@@ -47,7 +53,7 @@ public:
      * @param x_max  Front edge of vehicle [m]
      * @param y_half Half-width of vehicle (symmetric) [m]
      */
-    void setVehicleFootprint(double x_min, double x_max, double y_half, double margin = 0.15);
+    void setVehicleFootprint(double x_min, double x_max, double y_half, double height, double margin = 0.15);
 
     /**
      * @brief Check if the extractor has been initialized
@@ -75,6 +81,7 @@ private:
     // Tuning Parameters
     double r_max_;
     double cov_k_;
+    double max_fov_;
 
     // Look-Up Table for remap
     cv::Mat map1_, map2_;
@@ -87,7 +94,7 @@ private:
 
     // Vehicle footprint filter (Fr1A frame)
     bool has_vehicle_footprint_;
-    double veh_x_min_, veh_x_max_, veh_y_half_;
+    double veh_x_min_, veh_x_max_, veh_y_half_, veh_height_;
     cv::Mat footprint_mask_;
 };
 

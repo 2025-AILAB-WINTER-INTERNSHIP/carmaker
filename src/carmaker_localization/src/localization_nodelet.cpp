@@ -102,16 +102,26 @@ bool LocalizationNodelet::loadParameters() {
                 y_range[1] = static_cast<double>(ch_cfg["bev_y_range"][1]);
             }
 
+            double ch_max_fov = 180.0;
+            if (ch_cfg.hasMember("max_fov")) {
+                if (ch_cfg["max_fov"].getType() == XmlRpc::XmlRpcValue::TypeDouble) {
+                    ch_max_fov = static_cast<double>(ch_cfg["max_fov"]);
+                } else if (ch_cfg["max_fov"].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+                    ch_max_fov = static_cast<int>(ch_cfg["max_fov"]);
+                }
+            }
+
             ch.extractor = std::make_shared<FeatureExtractor>(ch.name);
             ch.extractor->initialize(x_range, y_range, image_type_, resolution_);
-            ch.extractor->setExtractionParameters(r_max_, cov_k_);
+            ch.extractor->setExtractionParameters(r_max_, cov_k_, ch_max_fov);
 
             // 차량 풋프린트 필터: GT 이미지에서 차량 외곽선(검은 테두리)이 차선으로 오검출되는 것 방지
             // Fr1A 원점 = 후방 범퍼 중앙, x=[0, length], y=[-width/2, width/2]
             double veh_length       = pnh.param("vehicle/length", 4.635);
             double veh_width        = pnh.param("vehicle/width",  1.9);
+            double veh_height       = pnh.param("vehicle/height", 1.605);
             double footprint_margin = pnh.param("svm/footprint_margin", 0.15);
-            ch.extractor->setVehicleFootprint(0.0, veh_length, veh_width / 2.0, footprint_margin);
+            ch.extractor->setVehicleFootprint(0.0, veh_length, veh_width / 2.0, veh_height, footprint_margin);
             ch.bev_x_range = x_range;
             ch.bev_y_range = y_range;
         }

@@ -5,9 +5,9 @@
 namespace carmaker_localization {
 
 FeatureExtractor::FeatureExtractor(const std::string& camera_name)
-    : r_max_(15.0), cov_k_(1.0), is_initialized_(false), lut_initialized_(false),
+    : r_max_(15.0), cov_k_(1.0), max_fov_(180.0), is_initialized_(false), lut_initialized_(false),
         has_optimal_point_(false), has_vehicle_footprint_(false),
-        veh_x_min_(0.0), veh_x_max_(0.0), veh_y_half_(0.0),
+        veh_x_min_(0.0), veh_x_max_(0.0), veh_y_half_(0.0), veh_height_(1.605),
         camera_name_(camera_name) {
 }
 
@@ -36,13 +36,14 @@ void FeatureExtractor::initialize(const std::vector<double>& x_range, const std:
     is_initialized_ = true;
 }
 
-void FeatureExtractor::setExtractionParameters(double r_max, double cov_k) {
+void FeatureExtractor::setExtractionParameters(double r_max, double cov_k, double max_fov) {
     r_max_ = r_max;
     cov_k_ = cov_k;
+    max_fov_ = max_fov;
 }
 
 void FeatureExtractor::setVehicleFootprint(double x_min, double x_max, double y_half,
-                                            double margin) {
+                                            double height, double margin) {
     // Fr1A 좌표계 기준 차량 점유 영역 설정 + margin 적용
     // GT 이미지에서 차체 외곽선(검은 테두리)은 bbox 경계에 그려지므로,
     // 테두리 픽셀이 BEV 해상도 기준으로 footprint 경계 바깥에 1~2픽셀씩 걸칠 수 있음.
@@ -50,6 +51,7 @@ void FeatureExtractor::setVehicleFootprint(double x_min, double x_max, double y_
     veh_x_min_ = x_min - margin;
     veh_x_max_ = x_max + margin;
     veh_y_half_ = y_half + margin;
+    veh_height_ = height;
     has_vehicle_footprint_ = true;
 }
 
@@ -124,26 +126,7 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
         cv::projectPoints(cam_points, rvec, tvec, K, D, image_points);
     }
 
-    // [Step 4: Backward Mapping LUT Construction]
-    // cv::remap을 위한 룩업 테이블 생성: 빈 3D 캔버스(u, v)에 원본 이미지의 어느 픽셀(x, y)을 가져올지 기록
-    map1_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32FC1);
-    map2_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32FC1);
-    for (int v = 0; v < bev_cfg_.height; ++v) {
-        for (int u = 0; u < bev_cfg_.width; ++u) {
-            int idx = v * bev_cfg_.width + u;
-            // 카메라 후방 좌표계 제거
-            if (cam_points[idx].z <= 0.0f) {
-                map1_.at<float>(v, u) = -1.0f;
-                map2_.at<float>(v, u) = -1.0f;
-            } else {
-                map1_.at<float>(v, u) = image_points[idx].x;
-                map2_.at<float>(v, u) = image_points[idx].y;
-            }
-        }
-    }
-
-    // [Step 5: Calculate Optimal Ground Point (Sweet Spot)]
-    // 카메라 광학 축(Z축)이 바닥 평면(Z=0)과 만나는 교점 계산 (물리적 오차/Covariance 모델링용)
+    // 카메라 원점 및 광선 방향의 Base 프레임 기준 좌표 사전 계산
     cv::Mat R_cam_base = R_base_cam.t();
     cv::Mat t_cam_base = -R_cam_base * t_base_cam;
 
@@ -155,6 +138,53 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     double ray_dir_in_base_y = R_cam_base.at<double>(1, 2);
     double ray_dir_in_base_z = R_cam_base.at<double>(2, 2);
 
+    // [Step 4: Backward Mapping LUT Construction]
+    // cv::remap을 위한 룩업 테이블 생성: 빈 3D 캔버스(u, v)에 원본 이미지의 어느 픽셀(x, y)을 가져올지 기록
+    map1_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32FC1);
+    map2_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32FC1);
+    for (int v = 0; v < bev_cfg_.height; ++v) {
+        for (int u = 0; u < bev_cfg_.width; ++u) {
+            int idx = v * bev_cfg_.width + u;
+
+            // 물리적 지면 격자 좌표 (Base 프레임 기준)
+            double gx = cartesian_lut_x_.at<float>(v, u);
+            double gy = cartesian_lut_y_.at<float>(v, u);
+
+            // [Ray-casting Ego Occlusion Check]
+            // 지면 격자점과 카메라 원점을 잇는 광선이 자차 3D 바디 박스를 통과(오클루전)하는지 검사
+            bool is_blocked = false;
+            if (has_vehicle_footprint_) {
+                for (int step = 1; step <= 10; ++step) {
+                    double t = 0.1 + 0.8 * (step / 10.0); // t in [0.18, 0.90]
+                    double rx = origin_in_base_x + t * (gx - origin_in_base_x);
+                    double ry = origin_in_base_y + t * (gy - origin_in_base_y);
+                    double rz = origin_in_base_z * (1.0 - t);
+                    // 자차의 3D 바디 범위(높이 Z <= veh_height_)를 가로막으면 시야가 차단된 것
+                    if (rx >= veh_x_min_ && rx <= veh_x_max_ && std::abs(ry) <= veh_y_half_ && rz <= veh_height_) {
+                        is_blocked = true;
+                        break;
+                    }
+                }
+            }
+
+            // Exclude points behind the camera optical plane or blocked by vehicle body to prevent mathematical fold-over.
+            // 어안렌즈의 물리적 최대 화각 한계선(max_fov_)을 일반 삼각법 공식으로 엄밀하게 필터링합니다.
+            double r = cv::norm(cam_points[idx]);
+            double cos_theta = cam_points[idx].z / (r + 1e-6);   // zero division 방지
+            double cos_fov_max = std::cos((max_fov_ / 2.0) * M_PI / 180.0); // 설정된 최대 화각 한계선 적용
+
+            if (is_blocked || cos_theta < cos_fov_max) {
+                map1_.at<float>(v, u) = -1.0f;
+                map2_.at<float>(v, u) = -1.0f;
+            } else {
+                map1_.at<float>(v, u) = image_points[idx].x;
+                map2_.at<float>(v, u) = image_points[idx].y;
+            }
+        }
+    }
+
+    // [Step 5: Calculate Optimal Ground Point (Sweet Spot)]
+    // 카메라 광학 축(Z축)이 바닥 평면(Z=0)과 만나는 교점 계산 (물리적 오차/Covariance 모델링용)
     // Z=0 평면과의 교차점: origin.z + lambda * ray_dir.z = 0
     if (std::abs(ray_dir_in_base_z) > 1e-3) {
         double lambda = -origin_in_base_z / ray_dir_in_base_z;

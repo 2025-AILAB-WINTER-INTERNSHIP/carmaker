@@ -23,6 +23,7 @@ topics:
         info_topic: /synced/front/camera_info
         bev_x_range: [4.68, 7.68]
         bev_y_range: [-3.0, 3.0]
+        max_fov: 210.0
 
       - name: rear
         frame: rear_optical
@@ -30,6 +31,7 @@ topics:
         info_topic: /synced/rear/camera_info
         bev_x_range: [-3.0, 0.0]
         bev_y_range: [-3.0, 3.0]
+        max_fov: 210.0
 
       - name: left
         frame: left_optical
@@ -37,6 +39,7 @@ topics:
         info_topic: /synced/left/camera_info
         bev_x_range: [-3.0, 7.68]
         bev_y_range: [0.0, 3.0]
+        max_fov: 210.0
 
       - name: right
         frame: right_optical
@@ -44,9 +47,10 @@ topics:
         info_topic: /synced/right/camera_info
         bev_x_range: [-3.0, 7.68]
         bev_y_range: [-3.0, 0.0]
+        max_fov: 210.0
 
 setting:
-  image_type: "raw" # "gt" or "segmentation" or "raw"
+  image_type: "gt" # "gt" or "segmentation" or "raw"
 
 frames:
   global: "Fr0"
@@ -88,7 +92,7 @@ ekf:
   divergence_threshold: 100.0   # divergence_threshold : 필터 발산 판정 임계값 (Trace(P))
 
 map_matcher:
-  enable: false                 # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
+  enable: true                 # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
   type: "icp"                   # "icp" | 추후 "ndt", "point_to_line" 추가
   map_format: "osm"             # "osm" | 추후 "lanelet2", "pcd" 추가
   map_file: ""                  # launch argument로 지정
