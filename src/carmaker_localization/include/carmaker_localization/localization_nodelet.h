@@ -27,6 +27,7 @@
 #include <carmaker_msgs/CameraBundle.h>
 #include <nav_msgs/Odometry.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <diagnostic_updater/diagnostic_updater.h>
 
 namespace carmaker_localization {
 
@@ -88,6 +89,7 @@ private:
 
     void performCorrection(const carmaker_msgs::LocalFeatures& features);
     void infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx);
+    void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
 
     // =========================================================================
     // 1. Hardware Constants
@@ -132,6 +134,7 @@ private:
     ros::Publisher pose_pub_;
     ros::Publisher estimation_data_pub_;
     ros::Publisher correction_data_pub_;
+    diagnostic_updater::Updater diagnostic_updater_;
     std::map<std::string, ros::Publisher> feature_data_pubs_;
     ros::Timer prediction_timer_;
 

@@ -289,6 +289,10 @@ void LocalizationNodelet::setupRosIo() {
     estimation_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_estimation_data, 10);
     correction_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_correction_data, 10);
 
+    // Setup Diagnostics Updater (publishes directly to the standard /diagnostics topic)
+    diagnostic_updater_.setHardwareID("carmaker_localization");
+    diagnostic_updater_.add("Localization Status", this, &LocalizationNodelet::produceDiagnostics);
+
     // Pre-initialize all feature publishers on nodelet startup (Thread-safe)
     std::string prefix = pnh.param("topics/publish/data/features_prefix", std::string("/localization/data/features"));
     for (const auto& ch : channels_) {
@@ -452,6 +456,9 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     tf_msg.transform.translation.z = 0.0;
     tf_msg.transform.rotation = pose_msg.pose.pose.orientation;
     tf_broadcaster_->sendTransform(tf_msg);
+
+    // 5. Update Diagnostics (Diagnostic Updater handles its own frequency and publishes directly to /diagnostics)
+    diagnostic_updater_.update();
 }
 
 void LocalizationNodelet::imagesCallback(
@@ -790,6 +797,49 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
     } else {
         ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Match FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, features.features.size(), ref_features.size());
     }
+void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
+    std::lock_guard<std::mutex> lock(estimation_mutex_);
+
+    if (!ekf_core_->isInitialized()) {
+        stat.summary(diagnostic_updater::DiagnosticStatusWrapper::WARN, "EKF is not initialized yet");
+        return;
+    }
+
+    auto state_frame = ekf_core_->getState();
+    const auto& x = state_frame.x;
+    const auto& P = state_frame.P;
+
+    double std_x = std::sqrt(std::max(0.0, P(X, X)));
+    double std_y = std::sqrt(std::max(0.0, P(Y, Y)));
+    double std_yaw = std::sqrt(std::max(0.0, P(YAW, YAW))) * 180.0 / M_PI; // Degrees
+    double std_vx = std::sqrt(std::max(0.0, P(VX, VX)));
+    double std_vy = std::sqrt(std::max(0.0, P(VY, VY)));
+    double std_yaw_rate = std::sqrt(std::max(0.0, P(YAW_RATE, YAW_RATE))) * 180.0 / M_PI; // Deg/s
+    double pos_uncertainty = std::sqrt(std_x * std_x + std_y * std_y);
+
+    if (pos_uncertainty < 0.15) {
+        stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Localization is active and converged");
+    } else if (pos_uncertainty < 0.40) {
+        stat.summary(diagnostic_updater::DiagnosticStatusWrapper::WARN, "Localization uncertainty is rising");
+    } else {
+        stat.summary(diagnostic_updater::DiagnosticStatusWrapper::ERROR, "Localization is LOST (high uncertainty)");
+    }
+
+    stat.add("Uncertainty Position X (m)", std_x);
+    stat.add("Uncertainty Position Y (m)", std_y);
+    stat.add("Uncertainty Yaw (deg)", std_yaw);
+    stat.add("Uncertainty Velocity Vx (m/s)", std_vx);
+    stat.add("Uncertainty Velocity Vy (m/s)", std_vy);
+    stat.add("Uncertainty Yaw Rate (deg/s)", std_yaw_rate);
+    stat.add("Position 2D Uncertainty (m)", pos_uncertainty);
+
+    // Current State Values for convenient centralized monitoring
+    stat.add("Estimated X (m)", x(X));
+    stat.add("Estimated Y (m)", x(Y));
+    stat.add("Estimated Yaw (deg)", x(YAW) * 180.0 / M_PI);
+    stat.add("Estimated Vx (m/s)", x(VX));
+    stat.add("Estimated Vy (m/s)", x(VY));
+    stat.add("Estimated Yaw Rate (deg/s)", x(YAW_RATE) * 180.0 / M_PI);
 }
 
 } // namespace carmaker_localization
