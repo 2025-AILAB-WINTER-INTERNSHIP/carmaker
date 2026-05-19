@@ -186,7 +186,7 @@ roslaunch carmaker_image apply_mask.launch \
 ```bash
 python3 src/segmentation/tools/debug_dataset.py \
   --count 10 \
-  --image-size 1920,1080
+  --image-size 720,480
 ```
 
 결과 overlay는 다음 위치에 저장된다.
@@ -211,7 +211,7 @@ python3 src/segmentation/tools/debug_dataset.py \
   --data-root /path/to/carmaker_image/data \
   --manifest /path/to/carmaker_image/data/csv/manifest.csv \
   --count 10 \
-  --image-size 1920,1080
+  --image-size 720,480
 ```
 
 ### 4. Overfit Smoke Test
@@ -677,7 +677,7 @@ manifest: ../../carmaker_image/data/csv/manifest.csv
 cameras: front,left,rear,right
 use_raw_post_processed: false
 
-image_size: [1920, 1080]
+image_size: [720, 480]
 num_workers: 4
 batch_size: 1
 
@@ -704,23 +704,23 @@ image_log_interval: 1
 run_dir: ../runs
 ```
 
-원본 1920x1080 이미지를 그대로 사용하므로 GPU memory가 부족할 수 있다. 부족하면 먼저 `base_channels`를 줄인다.
+현재 기본 입력은 720x480이다. GPU memory가 부족하면 먼저 `base_channels`를 줄인다.
 
 ```yaml
 model:
   base_channels: 16
 ```
 
-그래도 부족하면 16:9 비율을 유지하면서 `image_size`를 줄인다.
+그래도 부족하면 3:2 비율을 유지하면서 `image_size`를 줄인다.
 
 ```yaml
-image_size: [1280, 720]
+image_size: [576, 384]
 ```
 
 또는:
 
 ```yaml
-image_size: [960, 540]
+image_size: [480, 320]
 ```
 
 ## 모델 구조

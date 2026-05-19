@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT))
     parser.add_argument("--manifest", default="")
     parser.add_argument("--cameras", default="")
-    parser.add_argument("--image-size", default="1920,1080")
+    parser.add_argument("--image-size", default="720,480")
     parser.add_argument("--count", type=int, default=8)
     parser.add_argument("--out-dir", default=str(SEGMENTATION_ROOT / "runs" / "debug_dataset"))
     return parser.parse_args()

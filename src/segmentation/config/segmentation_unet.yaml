@@ -1,7 +1,7 @@
 # Standalone CarMaker fisheye semantic segmentation baseline.
 #
 # Run from /workspace:
-#   python3 src/segmentation/tools/debug_dataset.py --count 10 --image-size 1920,1080
+#   python3 src/segmentation/tools/debug_dataset.py --count 10 --image-size 720,480
 #   python3 src/segmentation/train.py --overfit-count 10 --epochs 50
 
 data_root: ../../carmaker_image/data
@@ -9,9 +9,8 @@ manifest: ../../carmaker_image/data/csv/manifest.csv
 cameras: front,left,rear,right
 use_raw_post_processed: false
 
-# Original CarMaker image size. This preserves the 16:9 geometry, but it is
-# much heavier than 512x512, so start with batch_size: 1.
-image_size: [1920, 1080]
+# Segmentation input size, in [width, height] order.
+image_size: [720, 480]
 num_workers: -1  # -1 = CPU 코어 수와 GPU 개수를 기반으로 자동 설정
 batch_size: 2
 val_ratio: 0.2
