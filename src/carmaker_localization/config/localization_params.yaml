@@ -93,5 +93,5 @@ map_matcher:
   map_format: "osm"             # "osm" | 추후 "lanelet2", "pcd" 추가
   map_file: ""                  # launch argument로 지정
   search_radius: 20.0           # 지도 조회 반경 [m]
-  fitness_threshold: 0.5        # 매칭 유효 판정 임계값
+  fitness_threshold: 0.35       # 매칭 유효 판정 임계값
   max_iterations: 50            # ICP 반복 횟수

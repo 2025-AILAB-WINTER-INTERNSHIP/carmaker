@@ -14,6 +14,18 @@ MatchResult IcpMatcher::match(
     result.success = false;
     if (observed.empty() || reference.size() < 3) return result;
 
+    // Uniform step downsampling to prevent CPU saturation while preserving spatial distribution
+    std::vector<LocalFeature> observed_used;
+    if (observed.size() > 400) {
+        size_t step = observed.size() / 400;
+        observed_used.reserve(400);
+        for (size_t i = 0; i < observed.size(); i += step) {
+            observed_used.push_back(observed[i]);
+        }
+    } else {
+        observed_used = observed;
+    }
+
     // Group map features by class for faster filtering
     std::map<int, std::vector<MapFeature>> map_by_class;
     for (const auto& ref : reference) {
@@ -29,7 +41,7 @@ MatchResult IcpMatcher::match(
         std::vector<Eigen::Vector2d> dst_pts;
         double current_error = 0.0;
 
-        for (const auto& obs : observed) {
+        for (const auto& obs : observed_used) {
             if (map_by_class.find(obs.class_id) == map_by_class.end()) continue;
 
             Eigen::Vector2d pt_obs(obs.x, obs.y);
@@ -95,7 +107,7 @@ MatchResult IcpMatcher::match(
     // Final Verification and Covariance Estimation
     int inliers = 0;
     Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
-    for (const auto& obs : observed) {
+    for (const auto& obs : observed_used) {
         if (map_by_class.find(obs.class_id) == map_by_class.end()) continue;
 
         Eigen::Vector2d pt_map = transform * Eigen::Vector2d(obs.x, obs.y);
@@ -120,7 +132,7 @@ MatchResult IcpMatcher::match(
     }
 
     int valid_observed_count = 0;
-    for (const auto& obs : observed) {
+    for (const auto& obs : observed_used) {
         if (map_by_class.find(obs.class_id) != map_by_class.end()) {
             valid_observed_count++;
         }
