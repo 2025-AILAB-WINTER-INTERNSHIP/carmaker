@@ -56,7 +56,6 @@ def profile_single_case(
             "ok": False,
             "error": "BF16 is not supported on this GPU",
             "precision": precision,
-            
             "batch_size": batch_size,
             "unsupported": True,
         }
@@ -318,8 +317,8 @@ def parse_args():
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--width", type=int, default=720)
     parser.add_argument("--warmup", type=int, default=2)
-    parser.add_argument("--measured-runs", type=int, default=3)
-    parser.add_argument("--suite-trials", type=int, default=3)
+    parser.add_argument("--measured-runs", type=int, default=10)
+    parser.add_argument("--suite-trials", type=int, default=5)
     return parser.parse_args()
 
 
