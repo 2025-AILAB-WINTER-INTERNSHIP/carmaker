@@ -49,7 +49,7 @@ setting:
   image_type: "raw" # "gt" or "segmentation" or "raw"
 
 frames:
-  global: "map"
+  global: "Fr0"
   prediction: "Fr1A_pred"
 
 feature_extractor:
