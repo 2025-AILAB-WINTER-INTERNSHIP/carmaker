@@ -347,10 +347,15 @@ void LocalizationNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoCons
 }
 
 void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
-    std::lock_guard<std::mutex> dyn_lock(dyn_mutex_);
-    if (!dynamics_received_) return;
+    carmaker_msgs::DynamicsInfo current_dynamics;
+    {
+        std::lock_guard<std::mutex> dyn_lock(dyn_mutex_);
+        if (!dynamics_received_) return;
+        current_dynamics = latest_dynamics_;
+    }
 
-    std::unique_lock<std::mutex> estimation_lock(estimation_mutex_);
+    {
+        std::lock_guard<std::mutex> estimation_lock(estimation_mutex_);
 
     // Use simulated time directly from ROS master clock if use_sim_time is true
     double current_time = ros::Time::now().toSec();
@@ -358,11 +363,11 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
 
     if (last_prediction_time_ <= 0.0) {
         last_prediction_time_ = current_time;
-        double init_x = use_manual_initial_state_ ? init_x_ : latest_dynamics_.Car_x;
-        double init_y = use_manual_initial_state_ ? init_y_ : latest_dynamics_.Car_y;
-        double init_yaw = use_manual_initial_state_ ? init_yaw_ : latest_dynamics_.Car_Yaw;
-        double init_vx = use_manual_initial_state_ ? 0.0 : latest_dynamics_.Car_vx;
-        double init_vy = use_manual_initial_state_ ? 0.0 : latest_dynamics_.Car_vy;
+        double init_x = use_manual_initial_state_ ? init_x_ : current_dynamics.Car_x;
+        double init_y = use_manual_initial_state_ ? init_y_ : current_dynamics.Car_y;
+        double init_yaw = use_manual_initial_state_ ? init_yaw_ : current_dynamics.Car_Yaw;
+        double init_vx = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vx;
+        double init_vy = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vy;
 
         ekf_core_->initialize(init_x, init_y, init_yaw, current_time, init_vx, init_vy);
         NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vel [%.2f, %.2f]", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx, init_vy);
@@ -393,14 +398,14 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     R_imu(1, 1) = R_imu(0, 0);
     R_imu(2, 2) = std::pow(imu_gyro_std_, 2);
 
-    ekf_core_->correctImu(latest_dynamics_.Sensor_Inertial_0_Acc_B_x,
-                          latest_dynamics_.Sensor_Inertial_0_Acc_B_y,
-                          latest_dynamics_.Sensor_Inertial_0_Omega_B_z,
+    ekf_core_->correctImu(current_dynamics.Sensor_Inertial_0_Acc_B_x,
+                          current_dynamics.Sensor_Inertial_0_Acc_B_y,
+                          current_dynamics.Sensor_Inertial_0_Omega_B_z,
                           R_imu, current_time);
 
     // 3. Wheel Speed Observation Correction & Kinematic Constraints
-    double v_left = latest_dynamics_.Vhcl_RL_rotv * tire_radius_;
-    double v_right = latest_dynamics_.Vhcl_RR_rotv * tire_radius_;
+    double v_left = current_dynamics.Vhcl_RL_rotv * tire_radius_;
+    double v_right = current_dynamics.Vhcl_RR_rotv * tire_radius_;
 
     // 3-1. 종방향 속도 및 휠 기반 회전 각속도 도출
     double vx_wheel = (v_left + v_right) / 2.0;
@@ -423,11 +428,11 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     ekf_core_->correctImu(0.0, 0.0, yaw_rate_wheel, R_wheel_imu, current_time);
 
     // 4. Publish Final Estimation
-    publishEstimation(ros::Time(current_time));
-    last_prediction_time_ = current_time;
+        publishEstimation(ros::Time(current_time));
+        last_prediction_time_ = current_time;
+    }
 
     // 5. Update Diagnostics (Lock released beforehand to prevent Self-Deadlock)
-    estimation_lock.unlock();
     diagnostic_updater_.update();
 }
 
