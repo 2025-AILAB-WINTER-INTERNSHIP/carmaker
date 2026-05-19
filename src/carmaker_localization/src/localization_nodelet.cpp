@@ -348,7 +348,7 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     std::lock_guard<std::mutex> dyn_lock(dyn_mutex_);
     if (!dynamics_received_) return;
 
-    std::lock_guard<std::mutex> estimation_lock(estimation_mutex_);
+    std::unique_lock<std::mutex> estimation_lock(estimation_mutex_);
 
     // Use simulated time directly from ROS master clock if use_sim_time is true
     double current_time = ros::Time::now().toSec();
@@ -423,6 +423,10 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     // 4. Publish Final Estimation
     publishEstimation(ros::Time(current_time));
     last_prediction_time_ = current_time;
+
+    // 5. Update Diagnostics (Lock released beforehand to prevent Self-Deadlock)
+    estimation_lock.unlock();
+    diagnostic_updater_.update();
 }
 
 void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
