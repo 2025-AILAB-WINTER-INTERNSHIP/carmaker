@@ -77,8 +77,10 @@ void Visualizer::publishObservation(const std::string& channel_name, const carma
         m.scale.z = 0.01;
 
         if (feat.class_id == 1) { // Lane
+            // Yellow
             m.color.r = 1.0; m.color.g = 1.0; m.color.b = 0.0; m.color.a = 0.8;
         } else if (feat.class_id == 2) { // Landmark
+            // Cyan
             m.color.r = 0.0; m.color.g = 1.0; m.color.b = 1.0; m.color.a = 0.8;
         } else {
             m.color.r = 1.0; m.color.g = 1.0; m.color.b = 1.0; m.color.a = 0.5;
@@ -93,10 +95,20 @@ void Visualizer::publishObservation(const std::string& channel_name, const carma
         cov.type = visualization_msgs::Marker::CYLINDER;
         cov.action = visualization_msgs::Marker::ADD;
 
-        double sigma_x = std::sqrt(std::max(0.001f, feat.cov_xx));
-        double sigma_y = std::sqrt(std::max(0.001f, feat.cov_yy));
-        double sigma_xy = feat.cov_xy;
-        double angle = 0.5 * std::atan2(2.0 * sigma_xy, sigma_x*sigma_x - sigma_y*sigma_y);
+        double cov_xx = feat.cov_xx;
+        double cov_yy = feat.cov_yy;
+        double cov_xy = feat.cov_xy;
+
+        // 고유값(Eigenvalue) 분석을 통한 참값 타원 장축/단축 및 각도 계산
+        double sum = cov_xx + cov_yy;
+        double diff = cov_xx - cov_yy;
+        double term = std::sqrt(diff * diff + 4.0 * cov_xy * cov_xy);
+        double lambda1 = 0.5 * (sum + term);
+        double lambda2 = 0.5 * (sum - term);
+
+        double sigma_major = std::sqrt(std::max(0.001, lambda1));
+        double sigma_minor = std::sqrt(std::max(0.001, lambda2));
+        double angle = 0.5 * std::atan2(2.0 * cov_xy, diff);
 
         cov.pose.position.x = feat.x;
         cov.pose.position.y = feat.y;
@@ -106,9 +118,9 @@ void Visualizer::publishObservation(const std::string& channel_name, const carma
         q.setRPY(0, 0, angle);
         cov.pose.orientation = tf2::toMsg(q);
 
-        cov.scale.x = sigma_x * 2.0;
-        cov.scale.y = sigma_y * 2.0;
-        cov.scale.z = 0.001;
+        cov.scale.x = sigma_major * 2.0;
+        cov.scale.y = sigma_minor * 2.0;
+        cov.scale.z = 0.0025;
 
         cov.color = m.color;
         cov.color.a = 0.3;
@@ -132,6 +144,7 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
     m.action = visualization_msgs::Marker::ADD;
     m.scale.x = 1.0; m.scale.y = 0.1; m.scale.z = 0.1;
     m.pose = pose.pose.pose;
+    m.pose.position.z = 0.01;
     m.color.r = 0.0; m.color.g = 1.0; m.color.b = 0.0; m.color.a = 1.0;
     marker_array.markers.push_back(m);
 
@@ -143,11 +156,11 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
     cov.type = visualization_msgs::Marker::CYLINDER;
     cov.action = visualization_msgs::Marker::ADD;
     cov.pose = pose.pose.pose;
+    cov.pose.position.z = 0.005;
     cov.color.r = 0.0; cov.color.g = 1.0; cov.color.b = 0.0; cov.color.a = 0.3;
     cov.scale.x = std::sqrt(std::max(0.01, pose.pose.covariance[0])) * 2.0;
     cov.scale.y = std::sqrt(std::max(0.01, pose.pose.covariance[7])) * 2.0;
     cov.scale.z = 0.01;
-    cov.pose.position.z = 0.02;
     marker_array.markers.push_back(cov);
 
     // 3. Vehicle Body & Label
@@ -185,11 +198,11 @@ void Visualizer::publishCorrection(const geometry_msgs::PoseWithCovarianceStampe
     cov.type = visualization_msgs::Marker::CYLINDER;
     cov.action = visualization_msgs::Marker::ADD;
     cov.pose = pose.pose.pose;
+    cov.pose.position.z = 0.005;
     cov.color.r = 1.0; cov.color.g = 0.0; cov.color.b = 0.0; cov.color.a = 0.3;
     cov.scale.x = std::sqrt(std::max(0.01, pose.pose.covariance[0])) * 2.0;
     cov.scale.y = std::sqrt(std::max(0.01, pose.pose.covariance[7])) * 2.0;
     cov.scale.z = 0.01;
-    cov.pose.position.z = 0.02;
     marker_array.markers.push_back(cov);
 
     // 2. Vehicle Body & Label
