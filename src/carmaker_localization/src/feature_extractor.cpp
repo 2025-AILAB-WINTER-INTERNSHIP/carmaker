@@ -131,8 +131,14 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     for (int v = 0; v < bev_cfg_.height; ++v) {
         for (int u = 0; u < bev_cfg_.width; ++u) {
             int idx = v * bev_cfg_.width + u;
-            map1_.at<float>(v, u) = image_points[idx].x;
-            map2_.at<float>(v, u) = image_points[idx].y;
+            // 카메라 후방 좌표계 제거
+            if (cam_points[idx].z <= 0.0f) {
+                map1_.at<float>(v, u) = -1.0f;
+                map2_.at<float>(v, u) = -1.0f;
+            } else {
+                map1_.at<float>(v, u) = image_points[idx].x;
+                map2_.at<float>(v, u) = image_points[idx].y;
+            }
         }
     }
 
@@ -216,7 +222,8 @@ std::vector<LocalFeature> FeatureExtractor::process(
             cv::Mat is_yellow_mask = (img_channels[0] == 255) & (img_channels[1] == 150) & (img_channels[2] == 0);
 
             // 유효하지 않은 영역(FOV 밖 또는 자차 풋프린트 범위) 마스크 생성
-            cv::Mat invalid_mask = (map1_ < 0.0f);
+            cv::Mat invalid_mask = (map1_ < 0.0f) | (map1_ >= (float)seg_img.cols) |
+                                   (map2_ < 0.0f) | (map2_ >= (float)seg_img.rows);
             if (has_vehicle_footprint_) {
                 invalid_mask |= footprint_mask_;
             }
@@ -263,10 +270,21 @@ std::vector<LocalFeature> FeatureExtractor::process(
             mask = bev_class > 0;
             class_map = bev_class;
 
-            // 각 클래스별 바이너리 마스크 생성
-            cv::Mat val_1_mask = (bev_class == 1);
-            cv::Mat val_2_mask = (bev_class == 2);
-            cv::Mat val_other_mask = (bev_class > 0) & (bev_class != 1) & (bev_class != 2);
+            // 유효하지 않은 영역(FOV 밖 또는 자차 풋프린트 범위) 마스크 생성
+            cv::Mat invalid_mask = (map1_ < 0.0f) | (map1_ >= (float)seg_img.cols) |
+                                   (map2_ < 0.0f) | (map2_ >= (float)seg_img.rows);
+            if (has_vehicle_footprint_) {
+                invalid_mask |= footprint_mask_;
+            }
+
+            // 유효하지 않은 영역은 검출 마스크에서 소거
+            mask.setTo(0, invalid_mask);
+            class_map.setTo(0, invalid_mask);
+
+            // 각 클래스별 바이너리 마스크 생성 (필터링된 class_map 기준)
+            cv::Mat val_1_mask = (class_map == 1);
+            cv::Mat val_2_mask = (class_map == 2);
+            cv::Mat val_other_mask = (class_map > 0) & (class_map != 1) & (class_map != 2);
 
             // 세그멘테이션 클래스 색상 매핑 (루프 없이 고속 렌더링)
             out_bev_image = cv::Mat::zeros(bev_cfg_.height, bev_cfg_.width, CV_8UC3);
