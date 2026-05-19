@@ -155,11 +155,29 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
     cov.id = 1;
     cov.type = visualization_msgs::Marker::CYLINDER;
     cov.action = visualization_msgs::Marker::ADD;
-    cov.pose = pose.pose.pose;
+
+    // Calculate position covariance ellipse orientation and scale using eigenvalue decomposition
+    double p_cov_xx = pose.pose.covariance[0];
+    double p_cov_xy = pose.pose.covariance[1];
+    double p_cov_yy = pose.pose.covariance[7];
+
+    double sum = p_cov_xx + p_cov_yy;
+    double diff = p_cov_xx - p_cov_yy;
+    double term = std::sqrt(diff * diff + 4.0 * p_cov_xy * p_cov_xy);
+    double lambda1 = 0.5 * (sum + term);
+    double lambda2 = 0.5 * (sum - term);
+    double angle = 0.5 * std::atan2(2.0 * p_cov_xy, diff);
+
+    cov.pose.position = pose.pose.pose.position;
     cov.pose.position.z = 0.005;
+
+    tf2::Quaternion q;
+    q.setRPY(0, 0, angle);
+    cov.pose.orientation = tf2::toMsg(q);
+
     cov.color.r = 0.0; cov.color.g = 1.0; cov.color.b = 0.0; cov.color.a = 0.3;
-    cov.scale.x = std::sqrt(std::max(0.01, pose.pose.covariance[0])) * 2.0;
-    cov.scale.y = std::sqrt(std::max(0.01, pose.pose.covariance[7])) * 2.0;
+    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 2.0;
+    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 2.0;
     cov.scale.z = 0.01;
     marker_array.markers.push_back(cov);
 
@@ -197,11 +215,29 @@ void Visualizer::publishCorrection(const geometry_msgs::PoseWithCovarianceStampe
     cov.id = 0;
     cov.type = visualization_msgs::Marker::CYLINDER;
     cov.action = visualization_msgs::Marker::ADD;
-    cov.pose = pose.pose.pose;
+
+    // Calculate position covariance ellipse orientation and scale using eigenvalue decomposition
+    double p_cov_xx = pose.pose.covariance[0];
+    double p_cov_xy = pose.pose.covariance[1];
+    double p_cov_yy = pose.pose.covariance[7];
+
+    double sum = p_cov_xx + p_cov_yy;
+    double diff = p_cov_xx - p_cov_yy;
+    double term = std::sqrt(diff * diff + 4.0 * p_cov_xy * p_cov_xy);
+    double lambda1 = 0.5 * (sum + term);
+    double lambda2 = 0.5 * (sum - term);
+    double angle = 0.5 * std::atan2(2.0 * p_cov_xy, diff);
+
+    cov.pose.position = pose.pose.pose.position;
     cov.pose.position.z = 0.005;
+
+    tf2::Quaternion q;
+    q.setRPY(0, 0, angle);
+    cov.pose.orientation = tf2::toMsg(q);
+
     cov.color.r = 1.0; cov.color.g = 0.0; cov.color.b = 0.0; cov.color.a = 0.3;
-    cov.scale.x = std::sqrt(std::max(0.01, pose.pose.covariance[0])) * 2.0;
-    cov.scale.y = std::sqrt(std::max(0.01, pose.pose.covariance[7])) * 2.0;
+    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 2.0;
+    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 2.0;
     cov.scale.z = 0.01;
     marker_array.markers.push_back(cov);
 

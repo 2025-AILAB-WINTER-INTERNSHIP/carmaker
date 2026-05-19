@@ -87,13 +87,13 @@ void EkfCore::prediction(double timestamp) {
 
     // --- Jacobian Matrix F [11x11] ---
     Eigen::MatrixXd F = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM);
-    F(X, YAW) = (-vx * sin_y - vy * cos_y) * dt;
+    F(X, YAW) = (-vx * sin_y - vy * cos_y) * dt + 0.5 * (-ax * sin_y - ay * cos_y) * dt * dt;
     F(X, VX) = cos_y * dt;
     F(X, VY) = -sin_y * dt;
     F(X, AX) = 0.5 * cos_y * dt * dt;
     F(X, AY) = -0.5 * sin_y * dt * dt;
 
-    F(Y, YAW) = (vx * cos_y - vy * sin_y) * dt;
+    F(Y, YAW) = (vx * cos_y - vy * sin_y) * dt + 0.5 * (ax * cos_y - ay * sin_y) * dt * dt;
     F(Y, VX) = sin_y * dt;
     F(Y, VY) = cos_y * dt;
     F(Y, AX) = 0.5 * sin_y * dt * dt;
@@ -138,8 +138,10 @@ void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d&
     Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
 
     x_ += K * y_res;
-    P_ = (Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H) * P_;
-    P_ = (P_ + P_.transpose()) * 0.5;
+
+    // Joseph Form covariance update for numerical stability: P = (I - KH) * P * (I - KH)^T + K * R * K^T
+    Eigen::MatrixXd I_KH = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H;
+    P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
 void EkfCore::correctVelocity(double vx, double vy, const Eigen::Matrix2d& R, double timestamp) {
@@ -156,8 +158,10 @@ void EkfCore::correctVelocity(double vx, double vy, const Eigen::Matrix2d& R, do
     Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
 
     x_ += K * (z - h);
-    P_ = (Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H) * P_;
-    P_ = (P_ + P_.transpose()) * 0.5;
+
+    // Joseph Form covariance update for numerical stability: P = (I - KH) * P * (I - KH)^T + K * R * K^T
+    Eigen::MatrixXd I_KH = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H;
+    P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
 void EkfCore::correctImu(double ax_raw, double ay_raw, double yaw_rate_raw, const Eigen::Matrix3d& R, double timestamp) {
@@ -178,8 +182,10 @@ void EkfCore::correctImu(double ax_raw, double ay_raw, double yaw_rate_raw, cons
     Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
 
     x_ += K * (z - h);
-    P_ = (Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H) * P_;
-    P_ = (P_ + P_.transpose()) * 0.5;
+
+    // Joseph Form covariance update for numerical stability: P = (I - KH) * P * (I - KH)^T + K * R * K^T
+    Eigen::MatrixXd I_KH = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H;
+    P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
 StateFrame EkfCore::getState() const {
