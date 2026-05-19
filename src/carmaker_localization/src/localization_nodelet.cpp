@@ -343,13 +343,15 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
 
     double dt = current_time - last_prediction_time_;
     if (dt < -0.05 || dt > 1.0) {
-        NODELET_WARN("Major time jump detected (dt: %.3f). Resetting EKF...", dt);
+        NODELET_WARN_THROTTLE(2.0, "Major time jump detected (dt: %.3f). Resetting EKF...", dt);
         last_prediction_time_ = 0.0;
         return;
     }
 
-    if (dt <= 0.0) {
-        NODELET_WARN("Minor time jitter detected (dt: %.3f). Skipping this prediction step...", dt);
+    if (dt <= 0.0001) {
+        if (dt < -0.001) {
+            NODELET_WARN_THROTTLE(2.0, "Minor time jitter/reverse detected (dt: %.3f). Skipping this prediction step...", dt);
+        }
         return;
     }
 

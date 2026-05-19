@@ -63,10 +63,10 @@ feature_extractor:
     covariance_k: 1.0   # 방사 방향 공분산 스케일 계수
 
 svm:
-  seam_front_offset: -0.5
-  seam_rear_offset: 0.5
-  seam_slope_front: 1.9         # (Width/2) / |offset| = 0.95 / 0.5 = 1.9
-  seam_slope_rear: 1.9          # (Width/2) / |offset| = 0.95 / 0.5 = 1.9
+  seam_front_offset: -2.3175    # -Length/2 = -2.3175 (Geometric Center)
+  seam_rear_offset: 2.3175      # Length/2 = 2.3175 (Geometric Center)
+  seam_slope_front: 0.409924    # Width / Length = 1.9 / 4.635 = 0.409924 (Diagonal Slope)
+  seam_slope_rear: 0.409924     # Width / Length = 1.9 / 4.635 = 0.409924 (Diagonal Slope)
   footprint_margin: 0.15
 
 ekf:
