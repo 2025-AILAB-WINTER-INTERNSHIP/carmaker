@@ -41,32 +41,63 @@ MatchResult IcpMatcher::match(
         std::vector<Eigen::Vector2d> dst_pts;
         double current_error = 0.0;
 
+        // 1:1 Unique Matching Competition Map: class_id -> (ref_idx -> {pt_obs, min_mahalanobis_dist})
+        std::map<int, std::map<size_t, std::pair<Eigen::Vector2d, double>>> best_matches;
+        Eigen::Matrix2d R_curr = transform.linear();
+
         for (const auto& obs : observed_used) {
             if (map_by_class.find(obs.class_id) == map_by_class.end()) continue;
 
             Eigen::Vector2d pt_obs(obs.x, obs.y);
             Eigen::Vector2d pt_map_guess = transform * pt_obs;
 
-            // Simple nearest neighbor within the same class
-            double min_dist_sq = 4.0; // 2.0m search threshold
-            int best_idx = -1;
+            // 1. 공분산을 Map 좌표계로 회전 후 정보 행렬(Information Matrix) 도출
+            Eigen::Matrix2d C_obs;
+            C_obs << obs.cov_xx, obs.cov_xy,
+                     obs.cov_xy, obs.cov_yy;
+            Eigen::Matrix2d C_map = R_curr * C_obs * R_curr.transpose();
+
+            // 특이 행렬 방지(Invertibility 보장)를 위해 대각 성분에 아주 작은 노이즈 추가
+            C_map(0,0) += 1e-3;
+            C_map(1,1) += 1e-3;
+            Eigen::Matrix2d Info_map = C_map.inverse();
+
+            // 2. 마할라노비스 거리 기반 최근접 맵 특징점 탐색
+            double min_dist_sq = 9.0; // Chi-square threshold (약 3 Sigma 수준의 통계적 허용치)
+            int best_ref_idx = -1;
 
             for (size_t i = 0; i < map_by_class[obs.class_id].size(); ++i) {
                 const auto& ref = map_by_class[obs.class_id][i];
-                double dx = ref.x - pt_map_guess.x();
-                double dy = ref.y - pt_map_guess.y();
-                double d2 = dx*dx + dy*dy;
-                if (d2 < min_dist_sq) {
-                    min_dist_sq = d2;
-                    best_idx = i;
+                Eigen::Vector2d dp(ref.x - pt_map_guess.x(), ref.y - pt_map_guess.y());
+
+                // 마할라노비스 거리 제곱: D^2 = dp^T * Info * dp
+                double d2_mahalanobis = dp.transpose() * Info_map * dp;
+
+                if (d2_mahalanobis < min_dist_sq) {
+                    min_dist_sq = d2_mahalanobis;
+                    best_ref_idx = i;
                 }
             }
 
-            if (best_idx != -1) {
-                src_pts.push_back(pt_obs);
-                dst_pts.push_back(Eigen::Vector2d(map_by_class[obs.class_id][best_idx].x,
-                                                 map_by_class[obs.class_id][best_idx].y));
-                current_error += min_dist_sq;
+            // 3. 1:1 유니크 매칭 강제 (이미 해당 맵 포인트에 할당된 짝이 있다면 더 가까운 것만 생존)
+            if (best_ref_idx != -1) {
+                auto& class_matches = best_matches[obs.class_id];
+                if (class_matches.find(best_ref_idx) == class_matches.end() ||
+                    min_dist_sq < class_matches[best_ref_idx].second) {
+                    class_matches[best_ref_idx] = {pt_obs, min_dist_sq};
+                }
+            }
+        }
+
+        // 생존한 1:1 매칭 쌍들만 SVD 연산 배열에 수집
+        for (const auto& class_pair : best_matches) {
+            int class_id = class_pair.first;
+            for (const auto& ref_pair : class_pair.second) {
+                size_t ref_idx = ref_pair.first;
+                src_pts.push_back(ref_pair.second.first);
+                dst_pts.push_back(Eigen::Vector2d(map_by_class[class_id][ref_idx].x,
+                                                  map_by_class[class_id][ref_idx].y));
+                current_error += ref_pair.second.second;
             }
         }
 
@@ -138,6 +169,8 @@ MatchResult IcpMatcher::match(
         }
     }
 
+    result.num_observed = observed.size();
+    result.num_reference = reference.size();
     result.fitness_score = (valid_observed_count == 0) ? 0.0 : (double)inliers / valid_observed_count;
     if (result.fitness_score >= fitness_threshold_) {
         result.success = true;

@@ -793,9 +793,9 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         }
         correction_data_pub_.publish(correction_msg);
         visualizer_->publishCorrection(correction_msg);
-        ROS_INFO_THROTTLE(2.0, "performCorrection: ICP Match SUCCESS! Fitness score: %.3f (threshold: %.3f)", match_result.fitness_score, fitness_threshold_);
+        ROS_INFO_THROTTLE(2.0, "performCorrection: ICP Match SUCCESS! Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, match_result.num_observed, match_result.num_reference);
     } else {
-        ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Match FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, features.features.size(), ref_features.size());
+        ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Match FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, match_result.num_observed, match_result.num_reference);
     }
 void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
     std::lock_guard<std::mutex> lock(estimation_mutex_);

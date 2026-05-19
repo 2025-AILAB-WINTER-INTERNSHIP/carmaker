@@ -13,6 +13,8 @@ struct MatchResult {
     Eigen::Isometry2d transform; // Correction transform (dx, dy, dyaw)
     Eigen::Matrix3d covariance;  // Matching uncertainty
     double fitness_score;        // 0.0 ~ 1.0
+    size_t num_observed;         // Number of features observed
+    size_t num_reference;        // Number of map features used
 };
 
 /**
