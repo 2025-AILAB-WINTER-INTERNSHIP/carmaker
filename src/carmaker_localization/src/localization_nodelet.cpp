@@ -471,9 +471,6 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     tf_msg.transform.translation.z = 0.0;
     tf_msg.transform.rotation = pose_msg.pose.pose.orientation;
     tf_broadcaster_->sendTransform(tf_msg);
-
-    // 5. Update Diagnostics (Diagnostic Updater handles its own frequency and publishes directly to /diagnostics)
-    diagnostic_updater_.update();
 }
 
 void LocalizationNodelet::imagesCallback(
