@@ -3,7 +3,6 @@
 
 #include <Eigen/Dense>
 #include <vector>
-#include <deque>
 #include <mutex>
 
 namespace carmaker_localization {
@@ -30,7 +29,7 @@ struct StateFrame {
 
 class EkfCore {
 public:
-    EkfCore(double buffer_duration = 1.0);
+    EkfCore();
     ~EkfCore() = default;
 
     // Initialization
@@ -50,11 +49,9 @@ public:
 
     // Getters
     StateFrame getState() const;
-    StateFrame getStateAt(double timestamp) const;
 
 private:
     void handleTimeJump(double timestamp);
-    void updateBuffer(double timestamp);
 
     // State
     Eigen::VectorXd x_; // [11x1]
@@ -64,8 +61,6 @@ private:
     // Timing & History
     double last_time_;
     bool is_initialized_;
-    std::deque<StateFrame> state_buffer_;
-    double buffer_duration_;
     mutable std::mutex mutex_;
 };
 

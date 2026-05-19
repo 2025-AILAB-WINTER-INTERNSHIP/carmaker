@@ -5,8 +5,8 @@
 
 namespace carmaker_localization {
 
-EkfCore::EkfCore(double buffer_duration)
-    : buffer_duration_(buffer_duration), is_initialized_(false), last_time_(0.0) {
+EkfCore::EkfCore()
+    : is_initialized_(false), last_time_(0.0) {
     x_ = Eigen::VectorXd::Zero(STATE_DIM);
     P_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1.0;
     Q_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 0.01;
@@ -35,8 +35,6 @@ void EkfCore::initialize(double x, double y, double yaw, double timestamp, doubl
 
     last_time_ = timestamp;
     is_initialized_ = true;
-    state_buffer_.clear();
-    updateBuffer(timestamp);
 }
 
 void EkfCore::setProcessNoise(const Eigen::MatrixXd& Q) {
@@ -112,37 +110,18 @@ void EkfCore::prediction(double timestamp) {
     P_ = (P_ + P_.transpose()) * 0.5;
 
     last_time_ = timestamp;
-    updateBuffer(timestamp);
 }
 
 void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // 1. Handle Latency: Find the frame and update current state using historical residual
-    if (timestamp < last_time_) {
-        auto it = std::lower_bound(state_buffer_.begin(), state_buffer_.end(), timestamp,
-            [](const StateFrame& f, double t) { return f.timestamp < t; });
-
-        if (it != state_buffer_.end()) {
-            Eigen::Vector3d z(x, y, yaw);
-            Eigen::Vector3d h(it->x(X), it->x(Y), it->x(YAW));
-            Eigen::Vector3d y_res = z - h;
-            while (y_res(2) > M_PI) y_res(2) -= 2.0 * M_PI;
-            while (y_res(2) < -M_PI) y_res(2) += 2.0 * M_PI;
-
-            Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, STATE_DIM);
-            H(0, X) = 1.0; H(1, Y) = 1.0; H(2, YAW) = 1.0;
-
-            Eigen::MatrixXd S = H * it->P * H.transpose() + R;
-            Eigen::MatrixXd K = it->P * H.transpose() * S.inverse();
-
-            x_ += K * y_res;
-            P_ = (Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H) * P_;
-            P_ = (P_ + P_.transpose()) * 0.5;
-            return;
-        }
-    }
+    // NOTE: Retroactive correction via state buffer was intentionally removed.
+    // The CarMaker simulation pipeline delivers vision measurements with
+    // sub-100ms latency, well within one 100 Hz prediction cycle. Applying
+    // measurements to the current state is empirically more stable than
+    // rewinding history, which introduced oscillation at higher vehicle speeds.
+    // If sustained latency ever exceeds ~200 ms, reconsider this decision.
 
     Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, STATE_DIM);
     H(0, X) = 1.0; H(1, Y) = 1.0; H(2, YAW) = 1.0;
@@ -167,23 +146,6 @@ void EkfCore::correctVelocity(double vx, double vy, const Eigen::Matrix2d& R, do
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (timestamp < last_time_) {
-        auto it = std::lower_bound(state_buffer_.begin(), state_buffer_.end(), timestamp,
-            [](const StateFrame& f, double t) { return f.timestamp < t; });
-        if (it != state_buffer_.end()) {
-            Eigen::Vector2d z(vx, vy);
-            Eigen::Vector2d h(it->x(VX), it->x(VY));
-            Eigen::MatrixXd H = Eigen::MatrixXd::Zero(2, STATE_DIM);
-            H(0, VX) = 1.0; H(1, VY) = 1.0;
-            Eigen::MatrixXd S = H * it->P * H.transpose() + R;
-            Eigen::MatrixXd K = it->P * H.transpose() * S.inverse();
-            x_ += K * (z - h);
-            P_ = (Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H) * P_;
-            P_ = (P_ + P_.transpose()) * 0.5;
-            return;
-        }
-    }
-
     Eigen::MatrixXd H = Eigen::MatrixXd::Zero(2, STATE_DIM);
     H(0, VX) = 1.0; H(1, VY) = 1.0;
 
@@ -201,25 +163,6 @@ void EkfCore::correctVelocity(double vx, double vy, const Eigen::Matrix2d& R, do
 void EkfCore::correctImu(double ax_raw, double ay_raw, double yaw_rate_raw, const Eigen::Matrix3d& R, double timestamp) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
-
-    if (timestamp < last_time_) {
-        auto it = std::lower_bound(state_buffer_.begin(), state_buffer_.end(), timestamp,
-            [](const StateFrame& f, double t) { return f.timestamp < t; });
-        if (it != state_buffer_.end()) {
-            Eigen::Vector3d z(ax_raw, ay_raw, yaw_rate_raw);
-            Eigen::Vector3d h(it->x(AX) + it->x(B_AX), it->x(AY) + it->x(B_AY), it->x(YAW_RATE) + it->x(B_YAW_RATE));
-            Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, STATE_DIM);
-            H(0, AX) = 1.0; H(0, B_AX) = 1.0;
-            H(1, AY) = 1.0; H(1, B_AY) = 1.0;
-            H(2, YAW_RATE) = 1.0; H(2, B_YAW_RATE) = 1.0;
-            Eigen::MatrixXd S = H * it->P * H.transpose() + R;
-            Eigen::MatrixXd K = it->P * H.transpose() * S.inverse();
-            x_ += K * (z - h);
-            P_ = (Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H) * P_;
-            P_ = (P_ + P_.transpose()) * 0.5;
-            return;
-        }
-    }
 
     // Observation model: z_raw = state + bias
     // So h(x) = [ax + b_ax, ay + b_ay, yaw_rate + b_yaw_rate]
@@ -244,30 +187,23 @@ StateFrame EkfCore::getState() const {
     return {last_time_, x_, P_};
 }
 
-void EkfCore::updateBuffer(double timestamp) {
-    state_buffer_.push_back({timestamp, x_, P_});
-    while (!state_buffer_.empty() && (timestamp - state_buffer_.front().timestamp > buffer_duration_)) {
-        state_buffer_.pop_front();
-    }
-}
-
 void EkfCore::handleTimeJump(double timestamp) {
-    std::cout << "\033[1;33m[EkfCore] Time jump detected (dt: " << (timestamp - last_time_) << "s). Resetting filter state and buffer.\033[0m" << std::endl;
+    std::cout << "\033[1;33m[EkfCore] Time jump detected (dt: " << (timestamp - last_time_) << "s). Resetting filter state.\033[0m" << std::endl;
 
     last_time_ = timestamp;
-    state_buffer_.clear();
 
     // Reset covariance to initial state to allow re-convergence
     P_.setIdentity();
     P_.block<2, 2>(X, X) *= 0.5;
     P_(YAW, YAW) *= 0.1;
 
-    // Maintain current state but clear velocities if it was a big jump
+    // Maintain current state but clear velocities and biases after the jump
     x_(VX) = 0.0; x_(VY) = 0.0;
     x_(AX) = 0.0; x_(AY) = 0.0;
     x_(YAW_RATE) = 0.0;
-
-    updateBuffer(timestamp);
+    // Reset IMU biases: a time jump (bag-loop / sim restart) invalidates
+    // previously converged bias estimates, so start fresh.
+    x_(B_AX) = 0.0; x_(B_AY) = 0.0; x_(B_YAW_RATE) = 0.0;
 }
 
 } // namespace carmaker_localization

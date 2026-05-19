@@ -36,9 +36,6 @@ public:
 
     /**
      * @brief Set tuning parameters for feature extraction
-     */
-    /**
-     * @brief Set tuning parameters for feature extraction
      * @param r_max  Maximum valid observation range [m]
      * @param cov_k  Covariance scaling factor
      * @param max_fov Maximum Field of View of camera lens [deg]

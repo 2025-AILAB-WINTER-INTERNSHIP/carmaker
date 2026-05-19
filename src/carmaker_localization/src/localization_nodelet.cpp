@@ -163,8 +163,10 @@ void LocalizationNodelet::initEkf() {
         NODELET_WARN("Currently only 2D EKF is supported! Overriding dimension to 2.");
     }
 
-    double buffer_duration = pnh.param("ekf/state_buffer_duration", 0.5);
-    ekf_core_ = std::make_shared<EkfCore>(buffer_duration);
+    // NOTE: ekf/state_buffer_duration is intentionally no longer consumed.
+    // The retroactive state-buffer correction was removed; sub-100ms vision
+    // latency is now applied directly to the current state (see EkfCore).
+    ekf_core_ = std::make_shared<EkfCore>();
 
     double slip_thresh = pnh.param("ekf/wheel_noise/slip_threshold", 0.5);
     double wheel_std = pnh.param("ekf/wheel_noise/speed_std", 0.05);

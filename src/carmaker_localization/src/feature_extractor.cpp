@@ -386,12 +386,14 @@ std::vector<LocalFeature> FeatureExtractor::process(
 
         float base_sigma_m_per_px = bev_cfg_.resolution;
 
-        // 방사형 오차(sigma_r): 최적점에서 멀어질수록 픽셀이 덮는 물리적 거리가 넓어짐(늘어남)을 모델링
+        // 방사형 오차(sigma_r, 깊이 방향): 카메라 원근법에 의해 거리의 제곱(Z^2)에 비례하여 오차가 급증함
         float sigma_r = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt_sq);
         float sigma_r_sq = sigma_r * sigma_r;
 
-        // 접선형 오차(sigma_t): 좌우 해상도는 그리드 해상도에 크게 의존하므로 상수로 가정
-        float sigma_t_sq = bev_cfg_.resolution * bev_cfg_.resolution;
+        // 접선형 오차(sigma_t, 좌우 각도 방향): 픽셀의 각도(FOV)에 의해 거리에 선형적(Z)으로 비례하여 오차가 증가함
+        float dist_opt = std::sqrt(dist_opt_sq);
+        float sigma_t = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt);
+        float sigma_t_sq = sigma_t * sigma_t;
 
         // [3-3. 공분산(Covariance) 행렬 생성]
         // 극좌표계(Radial, Tangential) 기준의 오차를 데카르트 좌표계(X, Y)로 투영(Projection)

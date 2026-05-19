@@ -76,7 +76,6 @@ svm:
 ekf:
   dimension: 2                  # 2D (추후 3D 전환 시 3으로 변경)
   frequency: 100.0              # ekf state 업데이트 주기 [Hz]
-  state_buffer_duration: 0.5    # state_buffer_duration : state_buffer의 지속 시간, 지연 보상 버퍼 길이 [s]
 
   # initial_state: [0.0, 0.0, 0.0]  # 초기 상태 설정: [x(m), y(m), yaw(deg)]. GT 사용 시 주석 처리
 
