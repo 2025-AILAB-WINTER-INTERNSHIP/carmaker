@@ -53,6 +53,18 @@ bool OsmMapLoader::load(const std::string& path) {
         return inside;
     };
 
+    auto distance_to_segment = [](double px, double py, double x1, double y1, double x2, double y2) -> double {
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double l2 = dx*dx + dy*dy;
+        if (l2 < 1e-9) return std::sqrt((px-x1)*(px-x1) + (py-y1)*(py-y1));
+        double t = ((px - x1) * dx + (py - y1) * dy) / l2;
+        t = std::max(0.0, std::min(1.0, t));
+        double tx = x1 + t * dx;
+        double ty = y1 + t * dy;
+        return std::sqrt((px-tx)*(px-tx) + (py-ty)*(py-ty));
+    };
+
     std::vector<Way> ways;
     Way current_way;
     bool in_way = false;
@@ -165,6 +177,32 @@ bool OsmMapLoader::load(const std::string& path) {
 
     features_.clear();
 
+    auto add_lane_features_with_width = [&](double cx, double cy, double nx, double ny, int cid) {
+        // Lane width in OSM is 0.1m, so offset spans from -0.05m to 0.05m
+        double max_offset = 0.05;
+        double step = resolution_;
+        if (step > max_offset) {
+            // Sample at boundaries (-0.05, 0.05) and center (0.0)
+            std::vector<double> ds = {-max_offset, 0.0, max_offset};
+            for (double d : ds) {
+                MapFeature f;
+                f.x = cx + d * nx;
+                f.y = cy + d * ny;
+                f.class_id = cid;
+                features_.push_back(f);
+            }
+        } else {
+            // Sample uniformly at resolution_ step size
+            for (double d = -max_offset; d <= max_offset + 1e-9; d += step) {
+                MapFeature f;
+                f.x = cx + d * nx;
+                f.y = cy + d * ny;
+                f.class_id = cid;
+                features_.push_back(f);
+            }
+        }
+    };
+
     // Iterate over valid ways, inserting nodes and interpolating segments at resolution
     for (const auto& way : ways) {
         int class_id = 1; // Default to 1 (Lane markings, parking spots)
@@ -174,48 +212,46 @@ bool OsmMapLoader::load(const std::string& path) {
             class_id = 2; // EV charging
         }
 
-        for (size_t i = 0; i + 1 < way.nodes.size(); ++i) {
-            int id_a = way.nodes[i];
-            int id_b = way.nodes[i+1];
-            if (node_map.find(id_a) == node_map.end() || node_map.find(id_b) == node_map.end()) {
-                continue;
+        if (class_id == 1) {
+            double last_nx = 0.0;
+            double last_ny = 0.0;
+            for (size_t i = 0; i + 1 < way.nodes.size(); ++i) {
+                int id_a = way.nodes[i];
+                int id_b = way.nodes[i+1];
+                if (node_map.find(id_a) == node_map.end() || node_map.find(id_b) == node_map.end()) {
+                    continue;
+                }
+
+                const auto& node_a = node_map[id_a];
+                const auto& node_b = node_map[id_b];
+
+                double dx = node_b.x - node_a.x;
+                double dy = node_b.y - node_a.y;
+                double len = std::sqrt(dx*dx + dy*dy);
+                if (len < 1e-9) continue;
+
+                double nx = -dy / len;
+                double ny = dx / len;
+                last_nx = nx;
+                last_ny = ny;
+
+                // Add the segment start node (expanded to lane width)
+                add_lane_features_with_width(node_a.x, node_a.y, nx, ny, class_id);
+
+                // Interpolate points between node_a and node_b using exact resolution step!
+                int steps = std::ceil(len / resolution_);
+                for (int s = 1; s < steps; ++s) {
+                    double t = (double)s / steps;
+                    add_lane_features_with_width(node_a.x + t * dx, node_a.y + t * dy, nx, ny, class_id);
+                }
             }
 
-            const auto& node_a = node_map[id_a];
-            const auto& node_b = node_map[id_b];
-
-            // Add the segment start node
-            MapFeature feat_a;
-            feat_a.x = node_a.x;
-            feat_a.y = node_a.y;
-            feat_a.class_id = class_id;
-            features_.push_back(feat_a);
-
-            // Interpolate points between node_a and node_b using exact resolution step!
-            double dx = node_b.x - node_a.x;
-            double dy = node_b.y - node_a.y;
-            double len = std::sqrt(dx*dx + dy*dy);
-
-            int steps = std::ceil(len / resolution_);
-            for (int s = 1; s < steps; ++s) {
-                double t = (double)s / steps;
-                MapFeature feat;
-                feat.x = node_a.x + t * dx;
-                feat.y = node_a.y + t * dy;
-                feat.class_id = class_id;
-                features_.push_back(feat);
-            }
-        }
-
-        // Add the closing node of the way to ensure a complete outline
-        if (!way.nodes.empty()) {
-            int last_id = way.nodes.back();
-            if (node_map.find(last_id) != node_map.end()) {
-                MapFeature feat_last;
-                feat_last.x = node_map[last_id].x;
-                feat_last.y = node_map[last_id].y;
-                feat_last.class_id = class_id;
-                features_.push_back(feat_last);
+            // Add the closing node of the way to ensure a complete outline
+            if (!way.nodes.empty()) {
+                int last_id = way.nodes.back();
+                if (node_map.find(last_id) != node_map.end()) {
+                    add_lane_features_with_width(node_map[last_id].x, node_map[last_id].y, last_nx, last_ny, class_id);
+                }
             }
         }
 
@@ -242,11 +278,23 @@ bool OsmMapLoader::load(const std::string& path) {
                 for (double gx = min_x + resolution_/2.0; gx < max_x; gx += resolution_) {
                     for (double gy = min_y + resolution_/2.0; gy < max_y; gy += resolution_) {
                         if (is_point_in_polygon(gx, gy, poly_nodes)) {
-                            MapFeature feat;
-                            feat.x = gx;
-                            feat.y = gy;
-                            feat.class_id = class_id;
-                            features_.push_back(feat);
+                            // Ensure the grid point's physical size (radius = resolution / 2.0) does not exceed the boundary
+                            bool inside_with_clearance = true;
+                            for (size_t i = 0; i < poly_nodes.size(); ++i) {
+                                size_t next_i = (i + 1) % poly_nodes.size();
+                                double dist = distance_to_segment(gx, gy, poly_nodes[i].x, poly_nodes[i].y, poly_nodes[next_i].x, poly_nodes[next_i].y);
+                                if (dist < resolution_ / 2.0) {
+                                    inside_with_clearance = false;
+                                    break;
+                                }
+                            }
+                            if (inside_with_clearance) {
+                                MapFeature feat;
+                                feat.x = gx;
+                                feat.y = gy;
+                                feat.class_id = class_id;
+                                features_.push_back(feat);
+                            }
                         }
                     }
                 }
