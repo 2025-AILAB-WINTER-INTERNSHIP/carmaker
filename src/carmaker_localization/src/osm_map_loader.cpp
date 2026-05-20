@@ -178,27 +178,46 @@ bool OsmMapLoader::load(const std::string& path) {
     features_.clear();
 
     auto add_lane_features_with_width = [&](double cx, double cy, double nx, double ny, int cid) {
-        // Lane width in OSM is 0.1m, so offset spans from -0.05m to 0.05m
-        double max_offset = 0.05;
-        double step = resolution_;
-        if (step > max_offset) {
-            // Sample at boundaries (-0.05, 0.05) and center (0.0)
-            std::vector<double> ds = {-max_offset, 0.0, max_offset};
-            for (double d : ds) {
-                MapFeature f;
-                f.x = cx + d * nx;
-                f.y = cy + d * ny;
-                f.class_id = cid;
-                features_.push_back(f);
-            }
+        // Dynamic lane clearance: Subtract the particle radius (resolution / 2.0) from the physical half-width (0.05m)
+        // to prevent the features from bleeding outside the lane boundary.
+        double max_offset = 0.05 - (resolution_ / 2.0);
+        if (max_offset <= 0.0) {
+            // Particle is larger than or equal to the lane half-width; place a single point at the centerline.
+            MapFeature f;
+            f.x = cx;
+            f.y = cy;
+            f.class_id = cid;
+            features_.push_back(f);
         } else {
-            // Sample uniformly at resolution_ step size
-            for (double d = -max_offset; d <= max_offset + 1e-9; d += step) {
-                MapFeature f;
-                f.x = cx + d * nx;
-                f.y = cy + d * ny;
-                f.class_id = cid;
-                features_.push_back(f);
+            // Place centerline point
+            MapFeature f_center;
+            f_center.x = cx;
+            f_center.y = cy;
+            f_center.class_id = cid;
+            features_.push_back(f_center);
+
+            // Place boundary points shifted inward by the particle radius
+            MapFeature f_left, f_right;
+            f_left.x = cx - max_offset * nx;
+            f_left.y = cy - max_offset * ny;
+            f_left.class_id = cid;
+            features_.push_back(f_left);
+
+            f_right.x = cx + max_offset * nx;
+            f_right.y = cy + max_offset * ny;
+            f_right.class_id = cid;
+            features_.push_back(f_right);
+
+            // If resolution is fine enough, fill the gap uniformly
+            double step = resolution_;
+            if (step < max_offset) {
+                for (double d = -max_offset + step; d < max_offset - 1e-9; d += step) {
+                    MapFeature f;
+                    f.x = cx + d * nx;
+                    f.y = cy + d * ny;
+                    f.class_id = cid;
+                    features_.push_back(f);
+                }
             }
         }
     };
@@ -278,12 +297,14 @@ bool OsmMapLoader::load(const std::string& path) {
                 for (double gx = min_x + resolution_/2.0; gx < max_x; gx += resolution_) {
                     for (double gy = min_y + resolution_/2.0; gy < max_y; gy += resolution_) {
                         if (is_point_in_polygon(gx, gy, poly_nodes)) {
-                            // Ensure the grid point's physical size (radius = resolution / 2.0) does not exceed the boundary
+                            // Use a minimal clearance (e.g. 1mm) to allow grid points to fill tightly up to the boundary,
+                            // preventing any hollow or unfilled corners in the landmark polygon.
                             bool inside_with_clearance = true;
+                            double clearance = 1e-3;
                             for (size_t i = 0; i < poly_nodes.size(); ++i) {
                                 size_t next_i = (i + 1) % poly_nodes.size();
                                 double dist = distance_to_segment(gx, gy, poly_nodes[i].x, poly_nodes[i].y, poly_nodes[next_i].x, poly_nodes[next_i].y);
-                                if (dist < resolution_ / 2.0) {
+                                if (dist < clearance) {
                                     inside_with_clearance = false;
                                     break;
                                 }
