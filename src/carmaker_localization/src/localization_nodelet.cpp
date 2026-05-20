@@ -884,6 +884,11 @@ void LocalizationNodelet::resetLocalization() {
     NODELET_INFO("Resetting Localization pipeline ...");
 
     {
+        std::lock_guard<std::mutex> lock(dyn_mutex_);
+        dynamics_received_ = false;
+    }
+
+    {
         std::lock_guard<std::mutex> lock(estimation_mutex_);
         last_prediction_time_ = 0.0;
     }
