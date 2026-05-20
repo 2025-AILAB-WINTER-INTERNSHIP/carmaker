@@ -87,14 +87,13 @@ void ImageSynchronizerNodelet::onInit() {
     sync_->setInterMessageLowerBound(ros::Duration(slop_));
     sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
 
-    // 5. Setup Diagnostics Timer (diag_period_) to ensure diagnostics are sent even if sync stalls
-    diag_timer_ = nh_.createTimer(ros::Duration(diag_period_), &ImageSynchronizerNodelet::timerCallback, this);
+    // 5. Setup Diagnostics Timer (diag_period_) using WallTimer to ensure diagnostics are sent even if sync/ROS time stalls
+    diag_timer_ = nh_.createWallTimer(ros::WallDuration(diag_period_), &ImageSynchronizerNodelet::timerCallback, this);
 
     NODELET_INFO("Image Synchronizer with Diagnostics Started. Master: [%s]", channels_[master_index_].name.c_str());
 }
 
 void ImageSynchronizerNodelet::imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index) {
-    checkTimeJump(msg->header.stamp);
     channels_[index].received_count++;
 }
 
@@ -106,7 +105,18 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
     processSyncedImages(images);
 }
 
-void ImageSynchronizerNodelet::timerCallback(const ros::TimerEvent& event) {
+void ImageSynchronizerNodelet::timerCallback(const ros::WallTimerEvent& event) {
+    // Detect time jump from the timer path (extremely useful if time jumps but no messages are published yet)
+    ros::Time now = ros::Time::now();
+    if (!now.isZero() && !last_timer_time_.isZero()) {
+        double diff = (now - last_timer_time_).toSec();
+        if (diff < -1.0 || diff > 5.0) {
+            NODELET_WARN("[Time Jump Detected in Timer] Diff: %.2f sec. Resetting pipeline...", diff);
+            resetSynchronizer();
+        }
+    }
+    last_timer_time_ = now;
+
     diagnostic_updater_->update();
 }
 
@@ -140,29 +150,9 @@ void ImageSynchronizerNodelet::resetSynchronizer() {
 
     // 4. Force diagnostic update immediately
     diagnostic_updater_->force_update();
-
-    // 5. Re-create the diagnostic timer to prevent it from getting stuck on time jump
-    diag_timer_ = nh_.createTimer(ros::Duration(diag_period_), &ImageSynchronizerNodelet::timerCallback, this);
 }
 
-void ImageSynchronizerNodelet::checkTimeJump(const ros::Time& current_time) {
-    std::lock_guard<std::mutex> lock(time_mutex_);
 
-    if (last_image_time_.isZero()) {
-        last_image_time_ = current_time;
-        return;
-    }
-
-    double diff = (current_time - last_image_time_).toSec();
-
-    // Detect time jump (backward or significant forward jump)
-    if (diff < -1.0 || diff > 5.0) {
-        NODELET_WARN("[Time Jump Detected] Diff: %.2f sec. Resetting pipeline...", diff);
-        resetSynchronizer();
-    }
-
-    last_image_time_ = current_time;
-}
 
 bool ImageSynchronizerNodelet::getValidCameraInfo(size_t index, const ros::Time& sync_time, sensor_msgs::CameraInfo& out_info) {
     std::lock_guard<std::mutex> lock(info_mutex_);

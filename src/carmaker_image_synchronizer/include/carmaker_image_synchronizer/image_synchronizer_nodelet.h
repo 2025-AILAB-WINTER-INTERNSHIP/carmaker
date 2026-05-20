@@ -69,11 +69,10 @@ private:
                         const sensor_msgs::ImageConstPtr& rear,
                         const sensor_msgs::ImageConstPtr& left,
                         const sensor_msgs::ImageConstPtr& right);
-    void timerCallback(const ros::TimerEvent& event);
+    void timerCallback(const ros::WallTimerEvent& event);
 
     // Helpers
     void resetSynchronizer();
-    void checkTimeJump(const ros::Time& current_time);
     bool getValidCameraInfo(size_t index, const ros::Time& sync_time, sensor_msgs::CameraInfo& out_info);
     void processSyncedImages(const std::array<sensor_msgs::ImageConstPtr, 4>& images);
     void publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time);
@@ -81,7 +80,8 @@ private:
 
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
-    ros::Timer diag_timer_;
+    ros::WallTimer diag_timer_;
+    ros::Time last_timer_time_;
     ros::Publisher bundle_pub_;
 
     // Channels, Data
@@ -100,10 +100,6 @@ private:
     double slop_ = 0.05;
     double info_timeout_ = 2.0;
     double diag_period_ = 1.0;
-
-    // Time Jump Tracking
-    ros::Time last_image_time_;
-    std::mutex time_mutex_;
 
     // Diagnostics
     std::unique_ptr<diagnostic_updater::Updater> diagnostic_updater_;
