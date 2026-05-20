@@ -1,14 +1,55 @@
 #include "carmaker_localization/icp_matcher.h"
+#include "carmaker_localization/nanoflann.hpp"
+
+#include <map>
+#include <memory>
+#include <cmath>
 
 namespace carmaker_localization {
 
+// ─────────────────────────────────────────────────────────────────────────────
+// nanoflann point-cloud adapter for MapFeature (2D: x, y)
+// ─────────────────────────────────────────────────────────────────────────────
+struct MapFeatureCloud {
+    const std::vector<MapFeature>& pts;
+    explicit MapFeatureCloud(const std::vector<MapFeature>& p) : pts(p) {}
+
+    // nanoflann interface
+    inline size_t kdtree_get_point_count() const { return pts.size(); }
+    inline double kdtree_get_pt(const size_t idx, const size_t dim) const {
+        return (dim == 0) ? pts[idx].x : pts[idx].y;
+    }
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX& /*bb*/) const { return false; }
+};
+
+using KDTree2D = nanoflann::KDTreeSingleIndexAdaptor<
+    nanoflann::L2_Simple_Adaptor<double, MapFeatureCloud>,
+    MapFeatureCloud,
+    2 /* dims */>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: 2×2 대칭 행렬 [[a, b], [b, c]] 의 최대 고유값
+//   → Euclidean 보수 탐색 반경 r² = χ²_threshold × λ_max(C_map) 계산에 사용
+// ─────────────────────────────────────────────────────────────────────────────
+static double maxEigenvalue2x2(double a, double b, double c) {
+    double half_trace = 0.5 * (a + c);
+    double disc       = std::sqrt(0.25 * (a - c) * (a - c) + b * b);
+    return half_trace + disc;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IcpMatcher
+// ─────────────────────────────────────────────────────────────────────────────
 IcpMatcher::IcpMatcher(double fitness_threshold, int max_iterations, double vision_base_std)
-    : fitness_threshold_(fitness_threshold), max_iterations_(max_iterations), vision_base_std_(vision_base_std) {}
+    : fitness_threshold_(fitness_threshold),
+      max_iterations_(max_iterations),
+      vision_base_std_(vision_base_std) {}
 
 MatchResult IcpMatcher::match(
     const std::vector<LocalFeature>& observed,
-    const std::vector<MapFeature>& reference,
-    const Eigen::Isometry2d& initial_guess) {
+    const std::vector<MapFeature>&   reference,
+    const Eigen::Isometry2d&         initial_guess) {
 
     MatchResult result;
     result.success = false;
@@ -19,34 +60,48 @@ MatchResult IcpMatcher::match(
     if (observed.size() > 400) {
         size_t step = observed.size() / 400;
         observed_used.reserve(400);
-        for (size_t i = 0; i < observed.size(); i += step) {
+        for (size_t i = 0; i < observed.size(); i += step)
             observed_used.push_back(observed[i]);
-        }
     } else {
         observed_used = observed;
     }
 
-    // Group map features by class for faster filtering
+    // Group map features by class for class-specific matching
     std::map<int, std::vector<MapFeature>> map_by_class;
-    for (const auto& ref : reference) {
+    for (const auto& ref : reference)
         map_by_class[ref.class_id].push_back(ref);
+
+    // ── 클래스별 KD-tree 구축 (ICP 반복 루프 시작 전 1회) ─────────────────────
+    //   KDTree2D 는 참조(reference)를 보관하므로 map_by_class 의 수명 내에서만 사용
+    std::map<int, std::unique_ptr<MapFeatureCloud>> clouds;
+    std::map<int, std::unique_ptr<KDTree2D>>        kdtrees;
+
+    for (const auto& kv : map_by_class) {
+        int cid   = kv.first;
+        auto cloud = std::make_unique<MapFeatureCloud>(kv.second);
+        auto tree  = std::make_unique<KDTree2D>(
+                         2, *cloud,
+                         nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf size */));
+        tree->buildIndex();
+        clouds .emplace(cid, std::move(cloud));
+        kdtrees.emplace(cid, std::move(tree));
     }
 
-    Eigen::Isometry2d transform = initial_guess;
-    double prev_error = 1e9;
+    Eigen::Isometry2d transform  = initial_guess;
+    double            prev_error = 1e9;
 
-    // ICP Iterations
+    // ── ICP 반복 ──────────────────────────────────────────────────────────────
     for (int iter = 0; iter < max_iterations_; ++iter) {
         std::vector<Eigen::Vector2d> dst_pts;
-        double current_error = 0.0;
+        double current_error      = 0.0;
         double total_error_weight = 0.0;
 
-        // 1:1 Unique Matching Competition Map: class_id -> (ref_idx -> {LocalFeature, min_mahalanobis_dist})
+        // 1:1 유니크 매칭 테이블: class_id → (ref_idx → {LocalFeature, min_dist²})
         std::map<int, std::map<size_t, std::pair<LocalFeature, double>>> best_matches;
         Eigen::Matrix2d R_curr = transform.linear();
 
         for (const auto& obs : observed_used) {
-            if (map_by_class.find(obs.class_id) == map_by_class.end()) continue;
+            if (kdtrees.find(obs.class_id) == kdtrees.end()) continue;
 
             Eigen::Vector2d pt_obs(obs.x, obs.y);
             Eigen::Vector2d pt_map_guess = transform * pt_obs;
@@ -62,24 +117,33 @@ MatchResult IcpMatcher::match(
             C_map(1,1) += 1e-3;
             Eigen::Matrix2d Info_map = C_map.inverse();
 
-            // 2. 마할라노비스 거리 기반 최근접 맵 특징점 탐색
-            double min_dist_sq = 9.0; // Chi-square threshold (약 3 Sigma 수준의 통계적 허용치)
-            int best_ref_idx = -1;
+            // 2. KD-tree 반경 탐색
+            //    마할라노비스 3σ 타원의 Euclidean 외접 반경: r² = χ²_th × λ_max(C_map)
+            //    이 반경 내에 있는 점만 마할라노비스 조건을 통과할 수 있음(보수적 bound)
+            double lambda_max       = maxEigenvalue2x2(C_map(0,0), C_map(0,1), C_map(1,1));
+            double search_radius_sq = 9.0 * lambda_max;  // χ²_threshold = 9.0 (≈3σ)
 
-            for (size_t i = 0; i < map_by_class[obs.class_id].size(); ++i) {
-                const auto& ref = map_by_class[obs.class_id][i];
+            double query_pt[2] = { pt_map_guess.x(), pt_map_guess.y() };
+            std::vector<nanoflann::ResultItem<uint32_t, double>> ret_matches;
+            nanoflann::SearchParameters params;
+            params.sorted = false;  // 순서 불필요 → 약간의 추가 절약
+            kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
+
+            // 3. 반경 내 후보들 중 최소 마할라노비스 거리 선택
+            double min_dist_sq = 9.0;  // χ² threshold
+            int    best_ref_idx = -1;
+
+            for (const auto& m : ret_matches) {
+                const auto& ref = map_by_class[obs.class_id][m.first];
                 Eigen::Vector2d dp(ref.x - pt_map_guess.x(), ref.y - pt_map_guess.y());
-
-                // 마할라노비스 거리 제곱: D^2 = dp^T * Info * dp
-                double d2_mahalanobis = dp.transpose() * Info_map * dp;
-
-                if (d2_mahalanobis < min_dist_sq) {
-                    min_dist_sq = d2_mahalanobis;
-                    best_ref_idx = i;
+                double d2 = dp.transpose() * Info_map * dp;
+                if (d2 < min_dist_sq) {
+                    min_dist_sq  = d2;
+                    best_ref_idx = static_cast<int>(m.first);
                 }
             }
 
-            // 3. 1:1 유니크 매칭 강제 (이미 해당 맵 포인트에 할당된 짝이 있다면 더 가까운 것만 생존)
+            // 4. 1:1 유니크 매칭 강제 (이미 할당된 맵 포인트가 있다면 더 가까운 것만 생존)
             if (best_ref_idx != -1) {
                 auto& class_matches = best_matches[obs.class_id];
                 if (class_matches.find(best_ref_idx) == class_matches.end() ||
@@ -94,26 +158,24 @@ MatchResult IcpMatcher::match(
         for (const auto& class_pair : best_matches) {
             int class_id = class_pair.first;
             for (const auto& ref_pair : class_pair.second) {
-                size_t ref_idx = ref_pair.first;
+                size_t ref_idx  = ref_pair.first;
                 const auto& feat = ref_pair.second.first;
                 double w = 1.0 / (feat.cov_xx + feat.cov_yy + 1e-4);
                 src_feats.push_back(feat);
                 dst_pts.push_back(Eigen::Vector2d(map_by_class[class_id][ref_idx].x,
                                                   map_by_class[class_id][ref_idx].y));
-                current_error += w * ref_pair.second.second;
-                total_error_weight += w;
+                current_error       += w * ref_pair.second.second;
+                total_error_weight  += w;
             }
         }
 
         if (src_feats.size() < 3) break;
 
-        // Weighted Procrustes Analysis (Point-to-Point closed form weighted by inverse covariance trace)
+        // Weighted Procrustes Analysis (Point-to-Point, closed-form, weighted by inv-cov trace)
         std::vector<double> weights;
         weights.reserve(src_feats.size());
         double total_weight = 0.0;
         for (const auto& feat : src_feats) {
-            // 가중치 w_i = 1.0 / (trace(C) + epsilon)
-            // 즉, 카메라 최적 투영 부근의 오차가 작고 선명한 매칭 점일수록 더 높은 최적화 가중치를 받게 됩니다.
             double w = 1.0 / (feat.cov_xx + feat.cov_yy + 1e-4);
             weights.push_back(w);
             total_weight += w;
@@ -145,8 +207,8 @@ MatchResult IcpMatcher::match(
             R = svd.matrixU() * V.transpose();
         }
 
-        Eigen::Vector2d t = dst_mean - R * src_mean;
-        transform.linear() = R;
+        Eigen::Vector2d t       = dst_mean - R * src_mean;
+        transform.linear()      = R;
         transform.translation() = t;
 
         if (total_error_weight > 1e-6) current_error /= total_error_weight;
@@ -154,47 +216,56 @@ MatchResult IcpMatcher::match(
         prev_error = current_error;
     }
 
-    // Final Verification: count inliers using consistent Mahalanobis threshold
-    int inliers = 0;
+    // ── Final Verification: KD-tree 가속 인라이어 카운팅 ─────────────────────
+    int inliers             = 0;
     int valid_observed_count = 0;
     Eigen::Matrix2d R_final = transform.linear();
+
     for (const auto& obs : observed_used) {
-        if (map_by_class.find(obs.class_id) == map_by_class.end()) continue;
+        if (kdtrees.find(obs.class_id) == kdtrees.end()) continue;
         valid_observed_count++;
 
         Eigen::Vector2d pt_map = transform * Eigen::Vector2d(obs.x, obs.y);
 
-        // Reuse same Mahalanobis metric as NN search for consistency
+        // 매칭 루프와 동일한 마할라노비스 메트릭 재사용 (일관성 보장)
         Eigen::Matrix2d C_obs;
         C_obs << obs.cov_xx, obs.cov_xy, obs.cov_xy, obs.cov_yy;
         Eigen::Matrix2d C_map = R_final * C_obs * R_final.transpose();
         C_map(0,0) += 1e-3; C_map(1,1) += 1e-3;
         Eigen::Matrix2d Info_map = C_map.inverse();
 
-        for (const auto& ref : map_by_class[obs.class_id]) {
+        double lambda_max       = maxEigenvalue2x2(C_map(0,0), C_map(0,1), C_map(1,1));
+        double search_radius_sq = 9.0 * lambda_max;
+
+        double query_pt[2] = { pt_map.x(), pt_map.y() };
+        std::vector<nanoflann::ResultItem<uint32_t, double>> ret_matches;
+        nanoflann::SearchParameters params;
+        params.sorted = false;
+        kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
+
+        for (const auto& m : ret_matches) {
+            const auto& ref = map_by_class[obs.class_id][m.first];
             Eigen::Vector2d dp(ref.x - pt_map.x(), ref.y - pt_map.y());
-            if (dp.transpose() * Info_map * dp < 9.0) { // same 3-sigma threshold
+            if (dp.transpose() * Info_map * dp < 9.0) {
                 inliers++;
                 break;
             }
         }
     }
 
-    result.num_observed = observed.size();
+    result.num_observed  = observed.size();
     result.num_reference = reference.size();
-    result.fitness_score = (valid_observed_count == 0) ? 0.0 : (double)inliers / valid_observed_count;
+    result.fitness_score = (valid_observed_count == 0) ? 0.0
+                         : static_cast<double>(inliers) / valid_observed_count;
+
     if (result.fitness_score >= fitness_threshold_) {
-        result.success = true;
+        result.success   = true;
         result.transform = transform;
 
-        // Covariance is inversely proportional to the combined confidence of the match.
-        // confidence = inliers * fitness_score represents the "effective quality observation count":
-        //   - more inliers → higher confidence → smaller uncertainty
-        //   - higher fitness (closer matches) → higher confidence → smaller uncertainty
-        // This gives sigma_sq a clear physical unit: base_var / effective_observations.
-        double base_var = vision_base_std_ * vision_base_std_;
+        // Covariance inversely proportional to combined confidence of the match
+        double base_var   = vision_base_std_ * vision_base_std_;
         double confidence = static_cast<double>(inliers) * result.fitness_score;
-        double sigma_sq = base_var / std::max(confidence, 1.0);
+        double sigma_sq   = base_var / std::max(confidence, 1.0);
         result.covariance = Eigen::Matrix3d::Identity() * sigma_sq;
     }
 
