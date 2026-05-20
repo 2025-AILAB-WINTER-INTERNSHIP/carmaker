@@ -74,21 +74,23 @@ private:
     void setupRosIo();
 
     // Callbacks
+    void infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx);
     void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
     void predictionCallback(const ros::TimerEvent& event);
-    void publishEstimation(const ros::Time& stamp);
     void imagesCallback(
         const sensor_msgs::ImageConstPtr& img0,
         const sensor_msgs::ImageConstPtr& img1,
         const sensor_msgs::ImageConstPtr& img2,
         const sensor_msgs::ImageConstPtr& img3);
     void bundleCallback(const carmaker_msgs::CameraBundleConstPtr& msg);
+    void diagTimerCallback(const ros::WallTimerEvent& event);
+
+    // Helpers
     void processImages(
         const std::array<sensor_msgs::ImageConstPtr, 4>& imgs,
         const std::array<sensor_msgs::CameraInfoConstPtr, 4>& infos);
-
     void performCorrection(const carmaker_msgs::LocalFeatures& features);
-    void infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx);
+    void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
 
     // =========================================================================
@@ -145,9 +147,14 @@ private:
     ros::Publisher pose_pub_;
     ros::Publisher estimation_data_pub_;
     ros::Publisher correction_data_pub_;
-    diagnostic_updater::Updater diagnostic_updater_;
     std::map<std::string, ros::Publisher> feature_data_pubs_;
     ros::Timer prediction_timer_;
+
+    // Diagnostics
+    std::unique_ptr<diagnostic_updater::Updater> diagnostic_updater_;
+    ros::WallTimer diag_timer_;
+    ros::Time last_timer_time_;
+    double diag_period_ = 1.0;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

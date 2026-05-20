@@ -56,6 +56,8 @@ bool LocalizationNodelet::loadParameters() {
     r_max_ = pnh.param("feature_extractor/extraction/r_max", 15.0);
     cov_k_ = pnh.param("feature_extractor/extraction/covariance_k", 1.0);
 
+    pnh.param<double>("diagnostic_period", diag_period_, 1.0);
+
     // Manual Initial State Configuration
     XmlRpc::XmlRpcValue init_state_val;
     if (pnh.getParam("ekf/initial_state", init_state_val) && init_state_val.getType() == XmlRpc::XmlRpcValue::TypeArray && init_state_val.size() == 3) {
@@ -152,6 +154,7 @@ bool LocalizationNodelet::loadParameters() {
     // Bounds Fallback
     if (svm_x_min_ > svm_x_max_) { svm_x_min_ = -3.0; svm_x_max_ = 7.68; }
     if (svm_y_min_ > svm_y_max_) { svm_y_min_ = -3.0; svm_y_max_ = 3.0; }
+
     return true;
 }
 
@@ -295,8 +298,12 @@ void LocalizationNodelet::setupRosIo() {
     correction_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_correction_data, 10);
 
     // Setup Diagnostics Updater (publishes directly to the standard /diagnostics topic)
-    diagnostic_updater_.setHardwareID("carmaker_localization");
-    diagnostic_updater_.add("Localization Status", this, &LocalizationNodelet::produceDiagnostics);
+    diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh, pnh);
+    diagnostic_updater_->setHardwareID("carmaker_localization");
+    diagnostic_updater_->add("Localization Status", this, &LocalizationNodelet::produceDiagnostics);
+
+    // Setup Diagnostics WallTimer
+    diag_timer_ = nh.createWallTimer(ros::WallDuration(diag_period_), &LocalizationNodelet::diagTimerCallback, this);
 
     // Pre-initialize all feature publishers on nodelet startup (Thread-safe)
     std::string prefix = pnh.param("topics/publish/data/features_prefix", std::string("/localization/data/features"));
@@ -377,7 +384,7 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     // 1. Check for real major time jumps (e.g. bag loop or simulation restart)
     double raw_dt = current_time - last_prediction_time_;
     if (raw_dt < -1.0 || raw_dt > 5.0) {
-        NODELET_WARN_THROTTLE(2.0, "Major time jump detected (dt: %.3f). Resetting EKF...", raw_dt);
+        NODELET_WARN_THROTTLE(2.0, "EKF Time jump detected (dt: %.3f). Resetting EKF...", raw_dt);
         last_prediction_time_ = 0.0;
         return;
     }
@@ -431,57 +438,6 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
         publishEstimation(ros::Time(current_time));
         last_prediction_time_ = current_time;
     }
-
-    // 5. Update Diagnostics (Lock released beforehand to prevent Self-Deadlock)
-    diagnostic_updater_.update();
-}
-
-void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
-    auto state_frame = ekf_core_->getState();
-    const auto& x = state_frame.x;
-    const auto& P = state_frame.P;
-
-    geometry_msgs::PoseWithCovarianceStamped pose_msg;
-    pose_msg.header.stamp = stamp;
-    pose_msg.header.frame_id = global_frame_;
-    pose_msg.pose.pose.position.x = x(X);
-    pose_msg.pose.pose.position.y = x(Y);
-    pose_msg.pose.pose.position.z = 0.0;
-
-    tf2::Quaternion q;
-    q.setRPY(0, 0, x(YAW));
-    pose_msg.pose.pose.orientation = tf2::toMsg(q);
-
-    for (int i = 0; i < 2; ++i) {
-        for (int j = 0; j < 2; ++j) {
-            pose_msg.pose.covariance[i * 6 + j] = P(i, j);
-        }
-    }
-    pose_msg.pose.covariance[35] = P(YAW, YAW);
-
-    pose_pub_.publish(pose_msg);
-    estimation_data_pub_.publish(pose_msg);
-    visualizer_->publishEstimation(pose_msg);
-
-    nav_msgs::Odometry odom_msg;
-    odom_msg.header = pose_msg.header;
-    odom_msg.child_frame_id = prediction_frame_;
-    odom_msg.pose = pose_msg.pose;
-    odom_msg.twist.twist.linear.x = x(VX);
-    odom_msg.twist.twist.linear.y = x(VY);
-    odom_msg.twist.twist.angular.z = x(YAW_RATE);
-    odom_pub_.publish(odom_msg);
-
-    // Broadcast TF: global -> prediction
-    geometry_msgs::TransformStamped tf_msg;
-    tf_msg.header.stamp = stamp;
-    tf_msg.header.frame_id = global_frame_;
-    tf_msg.child_frame_id = prediction_frame_;
-    tf_msg.transform.translation.x = x(X);
-    tf_msg.transform.translation.y = x(Y);
-    tf_msg.transform.translation.z = 0.0;
-    tf_msg.transform.rotation = pose_msg.pose.pose.orientation;
-    tf_broadcaster_->sendTransform(tf_msg);
 }
 
 void LocalizationNodelet::imagesCallback(
@@ -540,6 +496,21 @@ void LocalizationNodelet::bundleCallback(const carmaker_msgs::CameraBundleConstP
     }
 
     processImages(imgs, infos);
+}
+
+void LocalizationNodelet::diagTimerCallback(const ros::WallTimerEvent& event) {
+    ros::Time now = ros::Time::now();
+    if (!now.isZero() && !last_timer_time_.isZero()) {
+        double diff = (now - last_timer_time_).toSec();
+        if (diff < -1.0 || diff > 5.0) {
+            NODELET_WARN("[Time Jump Detected in Timer] Diff: %.2f sec. Resetting diagnostics time...", diff);
+            diagnostic_updater_->force_update();
+        }
+    }
+    last_timer_time_ = now;
+    if (diagnostic_updater_) {
+        diagnostic_updater_->update();
+    }
 }
 
 void LocalizationNodelet::processImages(
@@ -820,6 +791,53 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
     } else {
         ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Match FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, match_result.num_observed, match_result.num_reference);
     }
+}
+void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
+    auto state_frame = ekf_core_->getState();
+    const auto& x = state_frame.x;
+    const auto& P = state_frame.P;
+
+    geometry_msgs::PoseWithCovarianceStamped pose_msg;
+    pose_msg.header.stamp = stamp;
+    pose_msg.header.frame_id = global_frame_;
+    pose_msg.pose.pose.position.x = x(X);
+    pose_msg.pose.pose.position.y = x(Y);
+    pose_msg.pose.pose.position.z = 0.0;
+
+    tf2::Quaternion q;
+    q.setRPY(0, 0, x(YAW));
+    pose_msg.pose.pose.orientation = tf2::toMsg(q);
+
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            pose_msg.pose.covariance[i * 6 + j] = P(i, j);
+        }
+    }
+    pose_msg.pose.covariance[35] = P(YAW, YAW);
+
+    pose_pub_.publish(pose_msg);
+    estimation_data_pub_.publish(pose_msg);
+    visualizer_->publishEstimation(pose_msg);
+
+    nav_msgs::Odometry odom_msg;
+    odom_msg.header = pose_msg.header;
+    odom_msg.child_frame_id = prediction_frame_;
+    odom_msg.pose = pose_msg.pose;
+    odom_msg.twist.twist.linear.x = x(VX);
+    odom_msg.twist.twist.linear.y = x(VY);
+    odom_msg.twist.twist.angular.z = x(YAW_RATE);
+    odom_pub_.publish(odom_msg);
+
+    // Broadcast TF: global -> prediction
+    geometry_msgs::TransformStamped tf_msg;
+    tf_msg.header.stamp = stamp;
+    tf_msg.header.frame_id = global_frame_;
+    tf_msg.child_frame_id = prediction_frame_;
+    tf_msg.transform.translation.x = x(X);
+    tf_msg.transform.translation.y = x(Y);
+    tf_msg.transform.translation.z = 0.0;
+    tf_msg.transform.rotation = pose_msg.pose.pose.orientation;
+    tf_broadcaster_->sendTransform(tf_msg);
 }
 
 void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
