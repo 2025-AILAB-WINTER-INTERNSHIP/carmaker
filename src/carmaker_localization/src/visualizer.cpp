@@ -18,12 +18,14 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
     std::string topic_estimation_markers = pnh.param("topics/publish/debug/estimation_markers", std::string("/localization/debug/estimation_markers"));
     std::string topic_correction_markers = pnh.param("topics/publish/debug/correction_markers", std::string("/localization/debug/correction_markers"));
     std::string topic_estimation_trajectory = pnh.param("topics/publish/debug/estimation_trajectory", std::string("/localization/debug/estimation_trajectory"));
+    std::string topic_map_features = pnh.param("topics/publish/debug/map_features", std::string("/localization/debug/map_features"));
 
     // 3. Publishers
     svm_pub_ = nh_.advertise<sensor_msgs::Image>(topic_svm, 1);
     estimation_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_estimation_markers, 1);
     correction_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_correction_markers, 1);
     estimation_trajectory_pub_ = nh_.advertise<nav_msgs::Path>(topic_estimation_trajectory, 1);
+    map_features_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_map_features, 1, true); // latched = true for static map
 
     // 4. Vehicle dimensions
     vehicle_width_ = pnh.param("vehicle/width", 1.9);
@@ -321,9 +323,26 @@ void Visualizer::clearObservation(const std::string& channel_name) {
     pub.publish(marker_array);
 }
 
+void Visualizer::clearMapFeatures() {
+    if (map_features_pub_.getNumSubscribers() == 0) return;
+
+    visualization_msgs::MarkerArray marker_array;
+    std::vector<std::string> namespaces = {"map_lanes", "map_landmarks"};
+    for (const auto& ns : namespaces) {
+        visualization_msgs::Marker m;
+        m.header.frame_id = global_frame_;
+        m.header.stamp = ros::Time::now();
+        m.ns = ns;
+        m.action = visualization_msgs::Marker::DELETEALL;
+        marker_array.markers.push_back(m);
+    }
+    map_features_pub_.publish(marker_array);
+}
+
 void Visualizer::reset() {
     clearEstimation();
     clearCorrection();
+    clearMapFeatures();
     for (const auto& pair : observation_pub_map_) {
         clearObservation(pair.first);
     }
@@ -367,6 +386,55 @@ void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array
     text.color.r = 1.0; text.color.g = 1.0; text.color.b = 1.0; text.color.a = 1.0;
     text.text = label;
     marker_array.markers.push_back(text);
+}
+
+void Visualizer::publishMapFeatures(const std::vector<MapFeature>& map_features) {
+    if (map_features_pub_.getNumSubscribers() == 0 && !map_features_pub_.isLatched()) return;
+
+    visualization_msgs::MarkerArray marker_array;
+
+    // 1. Lane Points (Class 1) - SPHERE_LIST
+    visualization_msgs::Marker lane_marker;
+    lane_marker.header.frame_id = global_frame_;
+    lane_marker.header.stamp = ros::Time::now();
+    lane_marker.ns = "map_lanes";
+    lane_marker.id = 0;
+    lane_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+    lane_marker.action = visualization_msgs::Marker::ADD;
+    lane_marker.scale.x = resolution_;
+    lane_marker.scale.y = resolution_;
+    lane_marker.scale.z = 0.01;
+    lane_marker.color.r = 1.0; lane_marker.color.g = 1.0; lane_marker.color.b = 1.0; lane_marker.color.a = 0.8; // White
+    lane_marker.pose.orientation.w = 1.0;
+
+    // 2. Landmark Points (Class 2) - SPHERE_LIST
+    visualization_msgs::Marker landmark_marker;
+    landmark_marker.header = lane_marker.header;
+    landmark_marker.ns = "map_landmarks";
+    landmark_marker.id = 1;
+    landmark_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+    landmark_marker.action = visualization_msgs::Marker::ADD;
+    landmark_marker.scale.x = resolution_;
+    landmark_marker.scale.y = resolution_;
+    landmark_marker.scale.z = 0.01;
+    landmark_marker.color.r = 1.0; landmark_marker.color.g = 0.3; landmark_marker.color.b = 0.3; landmark_marker.color.a = 0.8; // Coral Red
+    landmark_marker.pose.orientation.w = 1.0;
+
+    for (const auto& feat : map_features) {
+        geometry_msgs::Point p;
+        p.x = feat.x;
+        p.y = feat.y;
+        p.z = 0.01;
+        if (feat.class_id == 1) {
+            lane_marker.points.push_back(p);
+        } else if (feat.class_id == 2) {
+            landmark_marker.points.push_back(p);
+        }
+    }
+
+    marker_array.markers.push_back(lane_marker);
+    marker_array.markers.push_back(landmark_marker);
+    map_features_pub_.publish(marker_array);
 }
 
 } // namespace carmaker_localization

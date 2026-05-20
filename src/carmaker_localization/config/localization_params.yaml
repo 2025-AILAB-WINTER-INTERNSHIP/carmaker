@@ -8,6 +8,7 @@ topics:
       features_prefix: "/localization/data/features"
     debug:
       svm_image: "/localization/debug/svm_image"
+      map_features: "/localization/debug/map_features"
       observation_prefix: "/localization/debug/observation"
       estimation_markers: "/localization/debug/estimation_markers"
       correction_markers: "/localization/debug/correction_markers"
@@ -95,6 +96,6 @@ map_matcher:
   type: "icp"                   # "icp" | 추후 "ndt", "point_to_line" 추가
   map_format: "osm"             # "osm" | 추후 "lanelet2", "pcd" 추가
   map_file: ""                  # launch argument로 지정
-  search_radius: 20.0           # 지도 조회 반경 [m]
+  search_radius: -1.0           # 지도 조회 반경 [m] (음수 설정 시 전체 맵 피처 사용 - 위치 유실 및 소형 맵 복구용)
   fitness_threshold: 0.35       # 매칭 유효 판정 임계값
   max_iterations: 50            # ICP 반복 횟수

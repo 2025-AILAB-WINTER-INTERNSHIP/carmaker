@@ -257,6 +257,9 @@ void LocalizationNodelet::setupRosIo() {
         if (!map_file.empty()) {
             if (map_loader_->load(map_file)) {
                 NODELET_INFO("Map loaded successfully: %s", map_file.c_str());
+                if (visualizer_) {
+                    visualizer_->publishMapFeatures(map_loader_->queryNear(0.0, 0.0, -1.0));
+                }
             } else {
                 NODELET_ERROR("Failed to load map: %s", map_file.c_str());
             }
@@ -731,7 +734,11 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
     ref_features = map_loader_->queryNear(query_x, query_y, search_radius_);
 
     if (ref_features.empty()) {
-        ROS_WARN_THROTTLE(2.0, "performCorrection: No reference features found in OSM map within search_radius (%.1f m) of pose (%.2f, %.2f)!", search_radius_, query_x, query_y);
+        if (search_radius_ < 0.0) {
+            ROS_WARN_THROTTLE(2.0, "performCorrection: No reference features found in the entire OSM map!");
+        } else {
+            ROS_WARN_THROTTLE(2.0, "performCorrection: No reference features found in OSM map within search_radius (%.1f m) of pose (%.2f, %.2f)!", search_radius_, query_x, query_y);
+        }
         return;
     }
 
@@ -834,6 +841,18 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     tf_msg.transform.translation.z = 0.0;
     tf_msg.transform.rotation = pose_msg.pose.pose.orientation;
     tf_broadcaster_->sendTransform(tf_msg);
+
+    // If search_radius is dynamic/local (positive), republish map features based on current EKF estimation
+    if (visualizer_ && search_radius_ >= 0.0) {
+        double dx = x(X) - last_map_pub_x_;
+        double dy = x(Y) - last_map_pub_y_;
+        if (dx*dx + dy*dy > 1.0 * 1.0) {
+            auto current_ref_features = map_loader_->queryNear(x(X), x(Y), search_radius_);
+            visualizer_->publishMapFeatures(current_ref_features);
+            last_map_pub_x_ = x(X);
+            last_map_pub_y_ = x(Y);
+        }
+    }
 }
 
 void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
@@ -888,6 +907,9 @@ void LocalizationNodelet::resetLocalization() {
         visualizer_->reset();
     }
 
+    last_map_pub_x_ = -9999.0;
+    last_map_pub_y_ = -9999.0;
+
     {
         std::lock_guard<std::mutex> lock(dyn_mutex_);
         dynamics_received_ = false;
@@ -927,6 +949,12 @@ void LocalizationNodelet::initLocalization(double current_time, const carmaker_m
 
     ekf_core_->initialize(init_x, init_y, init_yaw, current_time, init_vx, init_vy);
     NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vel [%.2f, %.2f]", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx, init_vy);
+
+    if (visualizer_) {
+        visualizer_->publishMapFeatures(map_loader_->queryNear(init_x, init_y, search_radius_));
+        last_map_pub_x_ = init_x;
+        last_map_pub_y_ = init_y;
+    }
 }
 
 } // namespace carmaker_localization

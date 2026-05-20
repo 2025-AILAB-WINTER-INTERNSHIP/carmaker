@@ -187,6 +187,8 @@ private:
     std::vector<Channel> channels_;
     bool fusion_ = false;
     double last_prediction_time_ = 0.0;
+    double last_map_pub_x_ = -9999.0;
+    double last_map_pub_y_ = -9999.0;
 
     // EKF & Dynamics synchronization
     std::mutex estimation_mutex_;

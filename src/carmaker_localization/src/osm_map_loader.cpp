@@ -215,6 +215,10 @@ bool OsmMapLoader::load(const std::string& path) {
 }
 
 std::vector<MapFeature> OsmMapLoader::queryNear(double x, double y, double radius) const {
+    if (radius < 0.0) {
+        return features_;
+    }
+
     std::vector<MapFeature> result;
     double r_sq = radius * radius;
     for (const auto& feat : features_) {

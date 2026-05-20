@@ -3,7 +3,6 @@
 
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
-#include <carmaker_msgs/LocalFeatures.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <visualization_msgs/Marker.h>
@@ -13,6 +12,9 @@
 #include <map>
 #include <string>
 #include <vector>
+
+#include <carmaker_msgs/LocalFeatures.h>
+#include "carmaker_localization/map_loader_base.h"
 
 namespace carmaker_localization {
 
@@ -25,8 +27,10 @@ public:
     void publishCorrection(const geometry_msgs::PoseWithCovarianceStamped& pose);
     void publishObservation(const std::string& channel_name, const carmaker_msgs::LocalFeatures& features);
     void publishSvmImage(const cv::Mat& svm_image);
+    void publishMapFeatures(const std::vector<MapFeature>& map_features);
     void clearCorrection();
     void clearEstimation();
+    void clearMapFeatures();
     void clearObservation(const std::string& channel_name);
     void reset();
 
@@ -36,6 +40,7 @@ private:
     ros::Publisher estimation_marker_pub_;
     ros::Publisher correction_marker_pub_;
     ros::Publisher estimation_trajectory_pub_;
+    ros::Publisher map_features_pub_;
     std::map<std::string, ros::Publisher> observation_pub_map_;
 
     nav_msgs::Path estimation_trajectory_;
