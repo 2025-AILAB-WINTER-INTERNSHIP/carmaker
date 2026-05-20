@@ -361,31 +361,27 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
         current_dynamics = latest_dynamics_;
     }
 
-    {
-        std::lock_guard<std::mutex> estimation_lock(estimation_mutex_);
-
     // Use simulated time directly from ROS master clock if use_sim_time is true
     double current_time = ros::Time::now().toSec();
     if (current_time == 0.0) current_time = event.current_real.toSec();
 
-    if (last_prediction_time_ <= 0.0) {
-        last_prediction_time_ = current_time;
-        double init_x = use_manual_initial_state_ ? init_x_ : current_dynamics.Car_x;
-        double init_y = use_manual_initial_state_ ? init_y_ : current_dynamics.Car_y;
-        double init_yaw = use_manual_initial_state_ ? init_yaw_ : current_dynamics.Car_Yaw;
-        double init_vx = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vx;
-        double init_vy = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vy;
-
-        ekf_core_->initialize(init_x, init_y, init_yaw, current_time, init_vx, init_vy);
-        NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vel [%.2f, %.2f]", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx, init_vy);
-        return;
-    }
+    std::unique_lock<std::mutex> lock(estimation_mutex_);
 
     // 1. Check for real major time jumps (e.g. bag loop or simulation restart)
-    double raw_dt = current_time - last_prediction_time_;
-    if (raw_dt < -1.0 || raw_dt > 5.0) {
-        NODELET_WARN_THROTTLE(2.0, "EKF Time jump detected (dt: %.3f). Resetting EKF...", raw_dt);
-        last_prediction_time_ = 0.0;
+    if (last_prediction_time_ > 0.0) {
+        double raw_dt = current_time - last_prediction_time_;
+        if (raw_dt < -1.0 || raw_dt > 5.0) {
+            NODELET_WARN_THROTTLE(2.0, "EKF Time jump detected (dt: %.3f). Triggering localization reset...", raw_dt);
+            lock.unlock(); // Release lock before calling helper to prevent deadlock
+            resetLocalization();
+            return;
+        }
+    }
+
+    // 2. Check if we need initialization
+    if (last_prediction_time_ <= 0.0) {
+        lock.unlock(); // Release lock before calling helper to prevent deadlock
+        initLocalization(current_time, current_dynamics);
         return;
     }
 
@@ -435,9 +431,8 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     ekf_core_->correctImu(0.0, 0.0, yaw_rate_wheel, R_wheel_imu, current_time);
 
     // 4. Publish Final Estimation
-        publishEstimation(ros::Time(current_time));
-        last_prediction_time_ = current_time;
-    }
+    publishEstimation(ros::Time(current_time));
+    last_prediction_time_ = current_time;
 }
 
 void LocalizationNodelet::imagesCallback(
@@ -883,6 +878,45 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
     stat.add("Estimated Vx (m/s)", x(VX));
     stat.add("Estimated Vy (m/s)", x(VY));
     stat.add("Estimated Yaw Rate (deg/s)", x(YAW_RATE) * 180.0 / M_PI);
+}
+
+void LocalizationNodelet::resetLocalization() {
+    NODELET_INFO("Resetting Localization pipeline ...");
+
+    {
+        std::lock_guard<std::mutex> lock(estimation_mutex_);
+        last_prediction_time_ = 0.0;
+    }
+
+    if (tf_buffer_) {
+        tf_buffer_->clear();
+    }
+
+    if (!use_bundle_ && sync_all_) {
+        sync_all_.reset(new message_filters::Synchronizer<SyncPolicy4>(
+            SyncPolicy4(10),
+            *seg_subs_[0], *seg_subs_[1], *seg_subs_[2], *seg_subs_[3]));
+        sync_all_->registerCallback(boost::bind(&LocalizationNodelet::imagesCallback, this, _1, _2, _3, _4));
+    }
+}
+
+void LocalizationNodelet::initLocalization(double current_time, const carmaker_msgs::DynamicsInfo& current_dynamics) {
+    std::lock_guard<std::mutex> lock(estimation_mutex_);
+
+    // Double check to prevent race conditions in multi-threaded environment
+    if (last_prediction_time_ > 0.0) {
+        return;
+    }
+
+    last_prediction_time_ = current_time;
+    double init_x = use_manual_initial_state_ ? init_x_ : current_dynamics.Car_x;
+    double init_y = use_manual_initial_state_ ? init_y_ : current_dynamics.Car_y;
+    double init_yaw = use_manual_initial_state_ ? init_yaw_ : current_dynamics.Car_Yaw;
+    double init_vx = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vx;
+    double init_vy = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vy;
+
+    ekf_core_->initialize(init_x, init_y, init_yaw, current_time, init_vx, init_vy);
+    NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vel [%.2f, %.2f]", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx, init_vy);
 }
 
 } // namespace carmaker_localization

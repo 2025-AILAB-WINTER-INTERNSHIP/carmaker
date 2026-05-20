@@ -92,6 +92,8 @@ private:
     void performCorrection(const carmaker_msgs::LocalFeatures& features);
     void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
+    void resetLocalization();
+    void initLocalization(double current_time, const carmaker_msgs::DynamicsInfo& current_dynamics);
 
     // =========================================================================
     // 1. Hardware Constants
