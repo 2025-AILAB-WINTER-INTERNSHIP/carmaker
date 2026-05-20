@@ -25,6 +25,10 @@ public:
     void publishCorrection(const geometry_msgs::PoseWithCovarianceStamped& pose);
     void publishObservation(const std::string& channel_name, const carmaker_msgs::LocalFeatures& features);
     void publishSvmImage(const cv::Mat& svm_image);
+    void clearCorrection();
+    void clearEstimation();
+    void clearObservation(const std::string& channel_name);
+    void reset();
 
 private:
     ros::NodeHandle nh_;
@@ -42,7 +46,7 @@ private:
     std::string global_frame_;
     std::string prediction_frame_;
 
-    void addVehicleMarker(visualization_msgs::MarkerArray& marker_array,
+    void _addVehicleMarker(visualization_msgs::MarkerArray& marker_array,
                            const geometry_msgs::Pose& pose,
                            const std::string& ns,
                            const std::string& label,

@@ -56,6 +56,20 @@ void Visualizer::publishObservation(const std::string& channel_name, const carma
     if (pub.getNumSubscribers() == 0) return;
 
     visualization_msgs::MarkerArray marker_array;
+
+    // Clear previous markers by publishing a DELETEALL marker for each namespace
+    visualization_msgs::Marker clear_points;
+    clear_points.header = features.header;
+    clear_points.ns = "observation_points";
+    clear_points.action = visualization_msgs::Marker::DELETEALL;
+    marker_array.markers.push_back(clear_points);
+
+    visualization_msgs::Marker clear_cov;
+    clear_cov.header = features.header;
+    clear_cov.ns = "observation_covariance";
+    clear_cov.action = visualization_msgs::Marker::DELETEALL;
+    marker_array.markers.push_back(clear_cov);
+
     int id = 0;
 
     for (const auto& feat : features.features) {
@@ -183,7 +197,7 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
 
     // 3. Vehicle Body & Label
     std::vector<double> color = {0.0, 1.0, 0.0, 0.7};
-    addVehicleMarker(marker_array, pose.pose.pose, "estimation", "Estimation", color);
+    _addVehicleMarker(marker_array, pose.pose.pose, "estimation", "Estimation", color);
 
     estimation_marker_pub_.publish(marker_array);
 
@@ -243,12 +257,79 @@ void Visualizer::publishCorrection(const geometry_msgs::PoseWithCovarianceStampe
 
     // 2. Vehicle Body & Label
     std::vector<double> color = {1.0, 0.0, 0.0, 0.7};
-    addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color);
+    _addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color);
 
     correction_marker_pub_.publish(marker_array);
 }
 
-void Visualizer::addVehicleMarker(visualization_msgs::MarkerArray& marker_array,
+void Visualizer::clearCorrection() {
+    if (correction_marker_pub_.getNumSubscribers() == 0) return;
+
+    visualization_msgs::MarkerArray marker_array;
+    std::vector<std::string> namespaces = {"correction_covariance", "correction_body", "correction_label"};
+
+    for (const auto& ns : namespaces) {
+        visualization_msgs::Marker m;
+        m.header.frame_id = global_frame_;
+        m.header.stamp = ros::Time::now();
+        m.ns = ns;
+        m.action = visualization_msgs::Marker::DELETEALL;
+        marker_array.markers.push_back(m);
+    }
+
+    correction_marker_pub_.publish(marker_array);
+}
+
+void Visualizer::clearEstimation() {
+    // 1. Clear estimation trajectory
+    estimation_trajectory_.poses.clear();
+    if (estimation_trajectory_pub_.getNumSubscribers() > 0) {
+        estimation_trajectory_pub_.publish(estimation_trajectory_);
+    }
+
+    // 2. Clear estimation markers
+    if (estimation_marker_pub_.getNumSubscribers() > 0) {
+        visualization_msgs::MarkerArray marker_array;
+        std::vector<std::string> namespaces = {"estimation_pose", "estimation_covariance", "estimation_body", "estimation_label"};
+        for (const auto& ns : namespaces) {
+            visualization_msgs::Marker m;
+            m.header.frame_id = global_frame_;
+            m.header.stamp = ros::Time::now();
+            m.ns = ns;
+            m.action = visualization_msgs::Marker::DELETEALL;
+            marker_array.markers.push_back(m);
+        }
+        estimation_marker_pub_.publish(marker_array);
+    }
+}
+
+void Visualizer::clearObservation(const std::string& channel_name) {
+    if (observation_pub_map_.find(channel_name) == observation_pub_map_.end()) return;
+    auto& pub = observation_pub_map_[channel_name];
+    if (pub.getNumSubscribers() == 0) return;
+
+    visualization_msgs::MarkerArray marker_array;
+    std::vector<std::string> namespaces = {"observation_points", "observation_covariance"};
+    for (const auto& ns : namespaces) {
+        visualization_msgs::Marker m;
+        m.header.frame_id = global_frame_;
+        m.header.stamp = ros::Time::now();
+        m.ns = ns;
+        m.action = visualization_msgs::Marker::DELETEALL;
+        marker_array.markers.push_back(m);
+    }
+    pub.publish(marker_array);
+}
+
+void Visualizer::reset() {
+    clearEstimation();
+    clearCorrection();
+    for (const auto& pair : observation_pub_map_) {
+        clearObservation(pair.first);
+    }
+}
+
+void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array,
                                     const geometry_msgs::Pose& pose,
                                     const std::string& ns,
                                     const std::string& label,
