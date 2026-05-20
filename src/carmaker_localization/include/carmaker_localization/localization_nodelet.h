@@ -196,6 +196,11 @@ private:
     carmaker_msgs::DynamicsInfo latest_dynamics_;
     bool dynamics_received_ = false;
 
+    // Correction Hz tracking
+    uint64_t correction_count_          = 0;
+    double   correction_start_sim_time_ = -1.0;
+    std::mutex correction_hz_mutex_;
+
     // CameraInfo buffer protected by mutex to prevent Data Race
     std::mutex info_array_mutex_;
     sensor_msgs::CameraInfoConstPtr latest_infos_[NUM_CAMERAS];

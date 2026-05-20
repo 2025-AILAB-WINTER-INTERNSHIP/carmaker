@@ -771,6 +771,14 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             ekf_core_->correctPose(z(0), z(1), z(2), R_map, features.header.stamp.toSec());
         }
 
+        // Correction Hz 추적: 첫 correction 시각을 기록하고 횟수 누적
+        {
+            std::lock_guard<std::mutex> hz_lock(correction_hz_mutex_);
+            if (correction_count_ == 0)
+                correction_start_sim_time_ = features.header.stamp.toSec();
+            correction_count_++;
+        }
+
         // Final Logging and Debug Visualization (Lock free)
         geometry_msgs::PoseWithCovarianceStamped correction_msg;
         correction_msg.header.stamp = features.header.stamp;
@@ -898,6 +906,18 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
     stat.add("Estimated Vx (m/s)", x(VX));
     stat.add("Estimated Vy (m/s)", x(VY));
     stat.add("Estimated Yaw Rate (deg/s)", x(YAW_RATE) * 180.0 / M_PI);
+
+    // Correction Hz = 성공 횟수 / (현재 시뮬 시각 - 첫 correction 시뮬 시각)
+    {
+        std::lock_guard<std::mutex> hz_lock(correction_hz_mutex_);
+        double correction_hz = 0.0;
+        if (correction_count_ > 0) {
+            double elapsed = ros::Time::now().toSec() - correction_start_sim_time_;
+            if (elapsed > 1e-6)
+                correction_hz = static_cast<double>(correction_count_) / elapsed;
+        }
+        stat.add("Correction Hz (Hz)", correction_hz);
+    }
 }
 
 void LocalizationNodelet::resetLocalization() {
@@ -918,6 +938,13 @@ void LocalizationNodelet::resetLocalization() {
     {
         std::lock_guard<std::mutex> lock(estimation_mutex_);
         last_prediction_time_ = 0.0;
+    }
+
+    // Correction Hz 추적 초기화 (리셋 전 데이터가 Hz 추정에 섞이는 것 방지)
+    {
+        std::lock_guard<std::mutex> hz_lock(correction_hz_mutex_);
+        correction_count_ = 0;
+        correction_start_sim_time_ = -1.0;
     }
 
     if (tf_buffer_) {
