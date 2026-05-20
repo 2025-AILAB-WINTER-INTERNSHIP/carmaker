@@ -9,15 +9,13 @@ void ImageSynchronizerNodelet::onInit() {
     pnh_ = getPrivateNodeHandle();
 
     // 1. Load Settings
-    int queue_size;
-    double slop;
     std::string master_name;
 
-    pnh_.param<int>("settings/queue_size", queue_size, 10);
-    pnh_.param<double>("settings/sync_slop_sec", slop, 0.05);
-    pnh_.param<double>("settings/info_timeout_sec", info_timeout_, 2.0);
-    pnh_.param<std::string>("settings/master_channel", master_name, "front");
     pnh_.param<bool>("settings/use_bundle", use_bundle_, false);
+    pnh_.param<std::string>("settings/master_channel", master_name, "front");
+    pnh_.param<int>("settings/queue_size", queue_size_, 10);
+    pnh_.param<double>("settings/sync_slop_sec", slop_, 0.05);
+    pnh_.param<double>("settings/info_timeout_sec", info_timeout_, 2.0);
 
     if (use_bundle_) {
         std::string bundle_topic = pnh_.param<std::string>("settings/bundle_topic", "/synced/bundle");
@@ -59,7 +57,7 @@ void ImageSynchronizerNodelet::onInit() {
         std::string out_info = static_cast<std::string>(entry["out_info"]);
 
         // Setup message_filters Subscriber & Diagnostic Counter
-        ch.sub = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh_, in_img, queue_size);
+        ch.sub = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh_, in_img, queue_size_);
         ch.sub->registerCallback(boost::bind(&ImageSynchronizerNodelet::imageRawCallback, this, _1, i));
 
         ch.info_sub = nh_.subscribe<sensor_msgs::CameraInfo>(in_info, 1,
@@ -81,16 +79,84 @@ void ImageSynchronizerNodelet::onInit() {
 
     // 4. Setup Synchronizer
     sync_ = std::make_unique<message_filters::Synchronizer<SyncPolicy>>(
-        SyncPolicy(queue_size),
+        SyncPolicy(queue_size_),
         *channels_[0].sub, *channels_[1].sub, *channels_[2].sub, *channels_[3].sub
     );
-    sync_->setInterMessageLowerBound(ros::Duration(slop));
+    sync_->setInterMessageLowerBound(ros::Duration(slop_));
     sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
 
     // 5. Setup Diagnostics Timer (1Hz) to ensure diagnostics are sent even if sync stalls
     diag_timer_ = nh_.createTimer(ros::Duration(1.0), &ImageSynchronizerNodelet::timerCallback, this);
 
     NODELET_INFO("Image Synchronizer with Diagnostics Started. Master: [%s]", channels_[master_index_].name.c_str());
+}
+
+void ImageSynchronizerNodelet::imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index) {
+    checkTimeJump(msg->header.stamp);
+    channels_[index].received_count++;
+}
+
+void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& front,
+                                            const sensor_msgs::ImageConstPtr& rear,
+                                            const sensor_msgs::ImageConstPtr& left,
+                                            const sensor_msgs::ImageConstPtr& right) {
+    const std::array<sensor_msgs::ImageConstPtr, 4> images = {front, rear, left, right};
+    processSyncedImages(images);
+}
+
+void ImageSynchronizerNodelet::timerCallback(const ros::TimerEvent& event) {
+    diagnostic_updater_.update();
+}
+
+void ImageSynchronizerNodelet::resetSynchronizer() {
+    NODELET_INFO("Resetting message_filters Synchronizer queue...");
+
+    // 1. Re-instantiate message_filters::Synchronizer
+    sync_.reset(new message_filters::Synchronizer<SyncPolicy>(
+        SyncPolicy(queue_size_),
+        *channels_[0].sub, *channels_[1].sub, *channels_[2].sub, *channels_[3].sub
+    ));
+    sync_->setInterMessageLowerBound(ros::Duration(slop_));
+    sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
+
+    // 2. CameraInfo cache time re-anchoring to avoid false stale detection
+    {
+        std::lock_guard<std::mutex> lock(info_mutex_);
+        ros::Time now = ros::Time::now();
+        for (auto& ch : channels_) {
+            if (ch.has_info) {
+                ch.last_info_time = now;
+            }
+        }
+    }
+
+    // 3. Clear stats/counts
+    total_synced_count_ = 0;
+    for (auto& ch : channels_) {
+        ch.received_count = 0;
+    }
+
+    // 4. Force diagnostic update immediately
+    diagnostic_updater_.force_update();
+}
+
+void ImageSynchronizerNodelet::checkTimeJump(const ros::Time& current_time) {
+    std::lock_guard<std::mutex> lock(time_mutex_);
+
+    if (last_image_time_.isZero()) {
+        last_image_time_ = current_time;
+        return;
+    }
+
+    double diff = (current_time - last_image_time_).toSec();
+
+    // Detect time jump (backward or significant forward jump)
+    if (diff < -1.0 || diff > 5.0) {
+        NODELET_WARN("[Time Jump Detected] Diff: %.2f sec. Resetting pipeline...", diff);
+        resetSynchronizer();
+    }
+
+    last_image_time_ = current_time;
 }
 
 bool ImageSynchronizerNodelet::getValidCameraInfo(size_t index, const ros::Time& sync_time, sensor_msgs::CameraInfo& out_info) {
@@ -109,16 +175,7 @@ bool ImageSynchronizerNodelet::getValidCameraInfo(size_t index, const ros::Time&
     return false;
 }
 
-void ImageSynchronizerNodelet::imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index) {
-    // Lock-free increment using std::atomic
-    channels_[index].received_count++;
-}
-
-void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& front,
-                                            const sensor_msgs::ImageConstPtr& rear,
-                                            const sensor_msgs::ImageConstPtr& left,
-                                            const sensor_msgs::ImageConstPtr& right) {
-    const std::array<sensor_msgs::ImageConstPtr, 4> images = {front, rear, left, right};
+void ImageSynchronizerNodelet::processSyncedImages(const std::array<sensor_msgs::ImageConstPtr, 4>& images) {
     const ros::Time& sync_time = images[master_index_]->header.stamp;
 
     // Atomic increment
@@ -164,10 +221,6 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
             publishWithSync(i, images[i], sync_time);
         }
     }
-}
-
-void ImageSynchronizerNodelet::timerCallback(const ros::TimerEvent& event) {
-    diagnostic_updater_.update();
 }
 
 void ImageSynchronizerNodelet::publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time) {

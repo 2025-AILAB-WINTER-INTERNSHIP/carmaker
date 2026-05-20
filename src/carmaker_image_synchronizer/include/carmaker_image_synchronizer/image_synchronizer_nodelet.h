@@ -63,9 +63,6 @@ private:
         CameraChannel& operator=(const CameraChannel&) = delete;
     };
 
-    // Helper
-    bool getValidCameraInfo(size_t index, const ros::Time& sync_time, sensor_msgs::CameraInfo& out_info);
-
     // Callbacks
     void imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index);
     void syncCallback(const sensor_msgs::ImageConstPtr& front,
@@ -73,6 +70,12 @@ private:
                         const sensor_msgs::ImageConstPtr& left,
                         const sensor_msgs::ImageConstPtr& right);
     void timerCallback(const ros::TimerEvent& event);
+
+    // Helpers
+    void resetSynchronizer();
+    void checkTimeJump(const ros::Time& current_time);
+    bool getValidCameraInfo(size_t index, const ros::Time& sync_time, sensor_msgs::CameraInfo& out_info);
+    void processSyncedImages(const std::array<sensor_msgs::ImageConstPtr, 4>& images);
     void publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
 
@@ -91,9 +94,15 @@ private:
     std::mutex status_mutex_;
 
     // Advanced Settings
-    size_t master_index_ = 0;
-    double info_timeout_ = 2.0;
     bool use_bundle_ = false;
+    size_t master_index_ = 0;
+    int queue_size_ = 10;
+    double slop_ = 0.05;
+    double info_timeout_ = 2.0;
+
+    // Time Jump Tracking
+    ros::Time last_image_time_;
+    std::mutex time_mutex_;
 
     // Diagnostics
     diagnostic_updater::Updater diagnostic_updater_;
