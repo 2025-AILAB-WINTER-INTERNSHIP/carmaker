@@ -91,19 +91,23 @@ protected:
                               std::set<std::pair<double,double>>& out) {
         if (polygon.size() < 3) return;
 
-        // 1. 다각형의 Bounding Box 계산
-        double min_x = polygon[0].x, max_x = polygon[0].x;
-        double min_y = polygon[0].y, max_y = polygon[0].y;
+        // 1. 다각형의 Bounding Box 계산 (앱실론 마진)
+        const double eps = 1e-6;
+        double min_x = polygon[0].x - eps;
+        double max_x = polygon[0].x + eps;
+        double min_y = polygon[0].y - eps;
+        double max_y = polygon[0].y + eps;
+
         for (const auto& p : polygon) {
             min_x = std::min(min_x, p.x);  max_x = std::max(max_x, p.x);
             min_y = std::min(min_y, p.y);  max_y = std::max(max_y, p.y);
         }
 
-        // 2. 경계선 처리를 위해 상하좌우 1칸(res)씩 여유를 두고 정수 인덱스 변환
-        int min_ix = static_cast<int>(std::floor(min_x / res)) - 1;
-        int max_ix = static_cast<int>(std::floor(max_x / res)) + 1;
-        int min_iy = static_cast<int>(std::floor(min_y / res)) - 1;
-        int max_iy = static_cast<int>(std::floor(max_y / res)) + 1;
+        // 2. 부동소수점 공간을 정수형(Integer) 격자 인덱스로 변환
+        int min_ix = static_cast<int>(std::floor(min_x / res));
+        int max_ix = static_cast<int>(std::floor(max_x / res));
+        int min_iy = static_cast<int>(std::floor(min_y / res));
+        int max_iy = static_cast<int>(std::floor(max_y / res));
 
         // 3. 정수 루프로 다각형 내부 및 경계 판별
         for (int ix = min_ix; ix <= max_ix; ++ix) {
@@ -113,7 +117,7 @@ protected:
                 double gy = (iy + 0.5) * res;
 
                 if (isInsidePolygon(gx, gy, polygon) ||
-                    distToPolygonBoundary(gx, gy, polygon) <= res * 0.5) {
+                    distToPolygonBoundary(gx, gy, polygon) <= eps) {
                     out.insert({gx, gy});
                 }
             }
