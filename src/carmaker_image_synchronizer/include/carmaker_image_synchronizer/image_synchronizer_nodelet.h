@@ -12,7 +12,7 @@
 #include <carmaker_msgs/CameraBundle.h>
 
 #include <mutex>
-#include <vector>
+#include <array>
 #include <memory>
 #include <atomic>
 
@@ -30,6 +30,13 @@ public:
     virtual void onInit();
 
 private:
+    // Channel indexes
+    static constexpr size_t FRONT = 0;
+    static constexpr size_t REAR = 1;
+    static constexpr size_t LEFT = 2;
+    static constexpr size_t RIGHT = 3;
+    static constexpr size_t NUM_CHANNELS = 4;
+
     struct CameraChannel {
         std::string name;
         std::unique_ptr<message_filters::Subscriber<sensor_msgs::Image>> sub;
@@ -54,29 +61,20 @@ private:
         CameraChannel() = default;
         CameraChannel(const CameraChannel&) = delete;
         CameraChannel& operator=(const CameraChannel&) = delete;
-        CameraChannel(CameraChannel&& other) noexcept :
-            name(std::move(other.name)),
-            sub(std::move(other.sub)),
-            info_sub(std::move(other.info_sub)),
-            img_pub(std::move(other.img_pub)),
-            info_pub(std::move(other.info_pub)),
-            last_info(std::move(other.last_info)),
-            has_info(other.has_info),
-            last_info_time(other.last_info_time),
-            received_count(other.received_count.load()),
-            last_slop(other.last_slop) {}
     };
 
+    // Helper
+    bool getValidCameraInfo(size_t index, const ros::Time& sync_time, sensor_msgs::CameraInfo& out_info);
+
     // Callbacks
+    void imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index);
     void syncCallback(const sensor_msgs::ImageConstPtr& front,
                         const sensor_msgs::ImageConstPtr& rear,
                         const sensor_msgs::ImageConstPtr& left,
                         const sensor_msgs::ImageConstPtr& right);
-
-    void imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index);
+    void timerCallback(const ros::TimerEvent& event);
     void publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
-    void timerCallback(const ros::TimerEvent& event);
 
     // ROS Infrastructure
     ros::NodeHandle nh_, pnh_;
@@ -84,7 +82,7 @@ private:
     ros::Publisher bundle_pub_;
 
     // Channels, Data
-    std::vector<CameraChannel> channels_;
+    std::array<CameraChannel, NUM_CHANNELS> channels_;
 
     // Mutex splitting to reduce contention:
     // 1. info_mutex_: Protects CameraInfo caching and its validity state.

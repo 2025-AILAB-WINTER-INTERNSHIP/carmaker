@@ -1,10 +1,9 @@
 # ==============================================================================
-# Image Synchronizer Configuration
+# 4-Channel Image Synchronizer Configuration
 # ==============================================================================
 
 # Core Settings
 settings:
-  channel_num: 4            # Explicitly manage the number of channels
   master_channel: "front"   # Channel used as the master clock
   info_timeout_sec: 2.0     # Max age for cached CameraInfo
   sync_slop_sec: 0.05       # Max time difference between images
