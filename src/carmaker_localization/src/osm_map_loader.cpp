@@ -41,6 +41,18 @@ bool OsmMapLoader::load(const std::string& path) {
         return l.substr(pos, end - pos);
     };
 
+    auto is_point_in_polygon = [](double x, double y, const std::vector<TempNode>& polygon) -> bool {
+        bool inside = false;
+        size_t n = polygon.size();
+        for (size_t i = 0, j = n - 1; i < n; j = i++) {
+            if (((polygon[i].y > y) != (polygon[j].y > y)) &&
+                (x < (polygon[j].x - polygon[i].x) * (y - polygon[i].y) / (polygon[j].y - polygon[i].y) + polygon[i].x)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    };
+
     std::vector<Way> ways;
     Way current_way;
     bool in_way = false;
@@ -204,6 +216,40 @@ bool OsmMapLoader::load(const std::string& path) {
                 feat_last.y = node_map[last_id].y;
                 feat_last.class_id = class_id;
                 features_.push_back(feat_last);
+            }
+        }
+
+        // If it's a landmark (Class 2), fill the inner polygon with grid points at resolution
+        if (class_id == 2 && way.nodes.size() >= 3) {
+            std::vector<TempNode> poly_nodes;
+            poly_nodes.reserve(way.nodes.size());
+            for (int node_id : way.nodes) {
+                if (node_map.find(node_id) != node_map.end()) {
+                    poly_nodes.push_back(node_map[node_id]);
+                }
+            }
+            if (poly_nodes.size() >= 3) {
+                double min_x = poly_nodes[0].x;
+                double max_x = poly_nodes[0].x;
+                double min_y = poly_nodes[0].y;
+                double max_y = poly_nodes[0].y;
+                for (const auto& node : poly_nodes) {
+                    if (node.x < min_x) min_x = node.x;
+                    if (node.x > max_x) max_x = node.x;
+                    if (node.y < min_y) min_y = node.y;
+                    if (node.y > max_y) max_y = node.y;
+                }
+                for (double gx = min_x + resolution_/2.0; gx < max_x; gx += resolution_) {
+                    for (double gy = min_y + resolution_/2.0; gy < max_y; gy += resolution_) {
+                        if (is_point_in_polygon(gx, gy, poly_nodes)) {
+                            MapFeature feat;
+                            feat.x = gx;
+                            feat.y = gy;
+                            feat.class_id = class_id;
+                            features_.push_back(feat);
+                        }
+                    }
+                }
             }
         }
     }
