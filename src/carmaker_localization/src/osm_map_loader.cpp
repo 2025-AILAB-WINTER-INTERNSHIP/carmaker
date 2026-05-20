@@ -3,7 +3,9 @@
 #include <sstream>
 #include <cmath>
 #include <map>
+#include <set>
 #include <iostream>
+#include <limits>
 
 namespace carmaker_localization {
 
@@ -18,12 +20,14 @@ bool OsmMapLoader::load(const std::string& path) {
         return false;
     }
 
+    // ----------------------------------------------------------------
+    // OSM Parsing Structures
+    // ----------------------------------------------------------------
     struct TempNode {
         double x;
         double y;
         int id;
     };
-    std::map<int, TempNode> node_map;
 
     struct Way {
         int id;
@@ -31,7 +35,9 @@ bool OsmMapLoader::load(const std::string& path) {
         std::map<std::string, std::string> tags;
     };
 
-    std::string line;
+    // ----------------------------------------------------------------
+    // XML attribute extraction helper
+    // ----------------------------------------------------------------
     auto extract_attr = [](const std::string& l, const std::string& attr) -> std::string {
         size_t pos = l.find(attr + "=\"");
         if (pos == std::string::npos) return "";
@@ -41,307 +47,148 @@ bool OsmMapLoader::load(const std::string& path) {
         return l.substr(pos, end - pos);
     };
 
-    auto is_point_in_polygon = [](double x, double y, const std::vector<TempNode>& polygon) -> bool {
-        bool inside = false;
-        size_t n = polygon.size();
-        for (size_t i = 0, j = n - 1; i < n; j = i++) {
-            if (((polygon[i].y > y) != (polygon[j].y > y)) &&
-                (x < (polygon[j].x - polygon[i].x) * (y - polygon[i].y) / (polygon[j].y - polygon[i].y) + polygon[i].x)) {
-                inside = !inside;
-            }
-        }
-        return inside;
-    };
-
-    auto distance_to_segment = [](double px, double py, double x1, double y1, double x2, double y2) -> double {
-        double dx = x2 - x1;
-        double dy = y2 - y1;
-        double l2 = dx*dx + dy*dy;
-        if (l2 < 1e-9) return std::sqrt((px-x1)*(px-x1) + (py-y1)*(py-y1));
-        double t = ((px - x1) * dx + (py - y1) * dy) / l2;
-        t = std::max(0.0, std::min(1.0, t));
-        double tx = x1 + t * dx;
-        double ty = y1 + t * dy;
-        return std::sqrt((px-tx)*(px-tx) + (py-ty)*(py-ty));
-    };
-
+    // ----------------------------------------------------------------
+    // Parse nodes and ways from OSM XML
+    // ----------------------------------------------------------------
+    std::map<int, TempNode> node_map;
     std::vector<Way> ways;
     Way current_way;
     bool in_way = false;
+    std::string line;
 
     while (std::getline(file, line)) {
         if (line.find("<node") != std::string::npos) {
-            std::string id_str = extract_attr(line, "id");
+            std::string id_str  = extract_attr(line, "id");
             std::string lat_str = extract_attr(line, "lat");
             std::string lon_str = extract_attr(line, "lon");
-            if (!id_str.empty() && !lat_str.empty() && !lon_str.empty()) {
-                int id = std::stoi(id_str);
-                double lat = std::stod(lat_str);
-                double lon = std::stod(lon_str);
+            if (id_str.empty() || lat_str.empty() || lon_str.empty()) continue;
 
-                TempNode n;
-                n.id = id;
-                n.x = 0.0;
-                n.y = 0.0;
+            int id       = std::stoi(id_str);
+            double lat   = std::stod(lat_str);
+            double lon   = std::stod(lon_str);
 
-                // local_x, local_y tags present in nodes
+            TempNode n{0.0, 0.0, id};
+            double local_x = 0.0, local_y = 0.0;
+            bool has_local = false;
+
+            if (line.find("/>") == std::string::npos) {
                 std::string node_line;
-                double local_x = 0.0;
-                double local_y = 0.0;
-                bool has_local = false;
-
-                // Read tags inside the node if it's not a self-closing node
-                if (line.find("/>") == std::string::npos) {
-                    while (std::getline(file, node_line)) {
-                        if (node_line.find("</node>") != std::string::npos) {
-                            break;
-                        }
-                        if (node_line.find("<tag") != std::string::npos) {
-                            std::string k = extract_attr(node_line, "k");
-                            std::string v = extract_attr(node_line, "v");
-                            if (k == "local_x") {
-                                local_x = std::stod(v);
-                                has_local = true;
-                            } else if (k == "local_y") {
-                                local_y = std::stod(v);
-                                has_local = true;
-                            }
-                        }
+                while (std::getline(file, node_line)) {
+                    if (node_line.find("</node>") != std::string::npos) break;
+                    if (node_line.find("<tag") != std::string::npos) {
+                        std::string k = extract_attr(node_line, "k");
+                        std::string v = extract_attr(node_line, "v");
+                        if (k == "local_x") { local_x = std::stod(v); has_local = true; }
+                        else if (k == "local_y") { local_y = std::stod(v); has_local = true; }
                     }
                 }
-
-                if (has_local) {
-                    n.x = local_x;
-                    n.y = local_y;
-                    if (!origin_set_) {
-                        origin_lat_ = lat;
-                        origin_lon_ = lon;
-                        origin_set_ = true;
-                    }
-                } else {
-                    // Geodetic (Lat, Lon) to ENU Cartesian Coordinate Conversion
-                    if (!origin_set_) {
-                        origin_lat_ = lat;
-                        origin_lon_ = lon;
-                        origin_set_ = true;
-                    }
-                    double lat_rad = lat * M_PI / 180.0;
-                    double lon_rad = lon * M_PI / 180.0;
-                    double lat0_rad = origin_lat_ * M_PI / 180.0;
-                    double lon0_rad = origin_lon_ * M_PI / 180.0;
-
-                    double R_earth = 6378137.0; // WGS-84 Semimajor axis
-                    n.x = R_earth * (lon_rad - lon0_rad) * std::cos(lat0_rad);
-                    n.y = R_earth * (lat_rad - lat0_rad);
-                }
-
-                node_map[id] = n;
             }
+
+            if (has_local) {
+                n.x = local_x;
+                n.y = local_y;
+                if (!origin_set_) { origin_lat_ = lat; origin_lon_ = lon; origin_set_ = true; }
+            } else {
+                if (!origin_set_) { origin_lat_ = lat; origin_lon_ = lon; origin_set_ = true; }
+                double lat_rad  = lat * M_PI / 180.0;
+                double lon_rad  = lon * M_PI / 180.0;
+                double lat0_rad = origin_lat_ * M_PI / 180.0;
+                double lon0_rad = origin_lon_ * M_PI / 180.0;
+                double R = 6378137.0; // WGS-84 Semimajor axis
+                n.x = R * (lon_rad - lon0_rad) * std::cos(lat0_rad);
+                n.y = R * (lat_rad - lat0_rad);
+            }
+            node_map[id] = n;
+
         } else if (line.find("<way") != std::string::npos) {
             current_way = Way();
             std::string id_str = extract_attr(line, "id");
-            if (!id_str.empty()) {
-                current_way.id = std::stoi(id_str);
-            }
+            if (!id_str.empty()) current_way.id = std::stoi(id_str);
             in_way = true;
+
         } else if (in_way && line.find("<nd") != std::string::npos) {
-            std::string ref_str = extract_attr(line, "ref");
-            if (!ref_str.empty()) {
-                current_way.nodes.push_back(std::stoi(ref_str));
-            }
+            std::string ref = extract_attr(line, "ref");
+            if (!ref.empty()) current_way.nodes.push_back(std::stoi(ref));
+
         } else if (in_way && line.find("<tag") != std::string::npos) {
             std::string k = extract_attr(line, "k");
             std::string v = extract_attr(line, "v");
-            if (!k.empty() && !v.empty()) {
-                current_way.tags[k] = v;
-            }
+            if (!k.empty() && !v.empty()) current_way.tags[k] = v;
+
         } else if (in_way && line.find("</way>") != std::string::npos) {
             in_way = false;
-            // Validate way: Lanes, parking spots, or ev charging points (boundary is ignored)
             bool is_valid = false;
-            if (current_way.tags.count("amenity") && current_way.tags["amenity"] == "ev_charging") {
+            if (current_way.tags.count("amenity") && current_way.tags["amenity"] == "ev_charging")
                 is_valid = true;
-            } else if (current_way.tags.count("type") &&
-                       (current_way.tags["type"] == "parking_spot" ||
-                        current_way.tags["type"] == "ev_charging" ||
-                        current_way.tags["type"] == "lane" ||
-                        current_way.tags["type"] == "line")) {
-                is_valid = true;
+            else if (current_way.tags.count("type")) {
+                const auto& t = current_way.tags["type"];
+                is_valid = (t == "parking_spot" || t == "ev_charging" || t == "lane" || t == "line");
             }
-
-            if (is_valid) {
-                ways.push_back(current_way);
-            }
+            if (is_valid) ways.push_back(current_way);
         }
     }
 
+    // ----------------------------------------------------------------
+    // Voxel Grid Sampling
+    // Each way is rasterised onto the resolution_ grid.
+    //   Class 1 (lane / parking_spot): polyline with 0.1m physical width
+    //   Class 2 (ev_charging):         filled polygon
+    // ----------------------------------------------------------------
     features_.clear();
 
-    auto add_lane_features_with_width = [&](double cx, double cy, double nx, double ny, int cid) {
-        // Dynamic lane clearance: Subtract the particle radius (resolution / 2.0) from the physical half-width (0.05m)
-        // to prevent the features from bleeding outside the lane boundary.
-        double max_offset = 0.05 - (resolution_ / 2.0);
-        if (max_offset <= 0.0) {
-            // Particle is larger than or equal to the lane half-width; place a single point at the centerline.
-            MapFeature f;
-            f.x = cx;
-            f.y = cy;
-            f.class_id = cid;
-            features_.push_back(f);
-        } else {
-            // Place centerline point
-            MapFeature f_center;
-            f_center.x = cx;
-            f_center.y = cy;
-            f_center.class_id = cid;
-            features_.push_back(f_center);
+    std::set<std::pair<double,double>> lane_voxels;
+    std::set<std::pair<double,double>> landmark_voxels;
 
-            // Place boundary points shifted inward by the particle radius
-            MapFeature f_left, f_right;
-            f_left.x = cx - max_offset * nx;
-            f_left.y = cy - max_offset * ny;
-            f_left.class_id = cid;
-            features_.push_back(f_left);
-
-            f_right.x = cx + max_offset * nx;
-            f_right.y = cy + max_offset * ny;
-            f_right.class_id = cid;
-            features_.push_back(f_right);
-
-            // If resolution is fine enough, fill the gap uniformly
-            double step = resolution_;
-            if (step < max_offset) {
-                for (double d = -max_offset + step; d < max_offset - 1e-9; d += step) {
-                    MapFeature f;
-                    f.x = cx + d * nx;
-                    f.y = cy + d * ny;
-                    f.class_id = cid;
-                    features_.push_back(f);
-                }
-            }
-        }
-    };
-
-    // Iterate over valid ways, inserting nodes and interpolating segments at resolution
     for (const auto& way : ways) {
-        int class_id = 1; // Default to 1 (Lane markings, parking spots)
-        if (way.tags.count("amenity") && way.tags.at("amenity") == "ev_charging") {
-            class_id = 2; // EV charging
-        } else if (way.tags.count("type") && way.tags.at("type") == "ev_charging") {
-            class_id = 2; // EV charging
-        }
+        // Determine class
+        int class_id = 1;
+        if ((way.tags.count("amenity") && way.tags.at("amenity") == "ev_charging") ||
+            (way.tags.count("type")   && way.tags.at("type")   == "ev_charging"))
+            class_id = 2;
 
         if (class_id == 1) {
-            double last_nx = 0.0;
-            double last_ny = 0.0;
+            // Lane/parking_spot: sample each segment with 0.05m half-width (total 0.1m)
             for (size_t i = 0; i + 1 < way.nodes.size(); ++i) {
-                int id_a = way.nodes[i];
-                int id_b = way.nodes[i+1];
-                if (node_map.find(id_a) == node_map.end() || node_map.find(id_b) == node_map.end()) {
-                    continue;
-                }
+                auto it_a = node_map.find(way.nodes[i]);
+                auto it_b = node_map.find(way.nodes[i+1]);
+                if (it_a == node_map.end() || it_b == node_map.end()) continue;
 
-                const auto& node_a = node_map[id_a];
-                const auto& node_b = node_map[id_b];
-
-                double dx = node_b.x - node_a.x;
-                double dy = node_b.y - node_a.y;
-                double len = std::sqrt(dx*dx + dy*dy);
-                if (len < 1e-9) continue;
-
-                double nx = -dy / len;
-                double ny = dx / len;
-                last_nx = nx;
-                last_ny = ny;
-
-                // Add the segment start node (expanded to lane width)
-                add_lane_features_with_width(node_a.x, node_a.y, nx, ny, class_id);
-
-                // Interpolate points between node_a and node_b using exact resolution step!
-                int steps = std::ceil(len / resolution_);
-                for (int s = 1; s < steps; ++s) {
-                    double t = (double)s / steps;
-                    add_lane_features_with_width(node_a.x + t * dx, node_a.y + t * dy, nx, ny, class_id);
-                }
+                Point2d a{it_a->second.x, it_a->second.y};
+                Point2d b{it_b->second.x, it_b->second.y};
+                sampleSegment(a, b, 0.05, resolution_, lane_voxels);
             }
-
-            // Add the closing node of the way to ensure a complete outline
-            if (!way.nodes.empty()) {
-                int last_id = way.nodes.back();
-                if (node_map.find(last_id) != node_map.end()) {
-                    add_lane_features_with_width(node_map[last_id].x, node_map[last_id].y, last_nx, last_ny, class_id);
-                }
+        } else if (class_id == 2 && way.nodes.size() >= 3) {
+            // Landmark: sample the entire filled polygon
+            std::vector<Point2d> poly;
+            poly.reserve(way.nodes.size());
+            for (int nid : way.nodes) {
+                auto it = node_map.find(nid);
+                if (it != node_map.end())
+                    poly.push_back({it->second.x, it->second.y});
             }
-        }
-
-        // If it's a landmark (Class 2), fill the inner polygon with grid points at resolution
-        if (class_id == 2 && way.nodes.size() >= 3) {
-            std::vector<TempNode> poly_nodes;
-            poly_nodes.reserve(way.nodes.size());
-            for (int node_id : way.nodes) {
-                if (node_map.find(node_id) != node_map.end()) {
-                    poly_nodes.push_back(node_map[node_id]);
-                }
-            }
-            if (poly_nodes.size() >= 3) {
-                double min_x = poly_nodes[0].x;
-                double max_x = poly_nodes[0].x;
-                double min_y = poly_nodes[0].y;
-                double max_y = poly_nodes[0].y;
-                for (const auto& node : poly_nodes) {
-                    if (node.x < min_x) min_x = node.x;
-                    if (node.x > max_x) max_x = node.x;
-                    if (node.y < min_y) min_y = node.y;
-                    if (node.y > max_y) max_y = node.y;
-                }
-                for (double gx = min_x + resolution_/2.0; gx < max_x; gx += resolution_) {
-                    for (double gy = min_y + resolution_/2.0; gy < max_y; gy += resolution_) {
-                        if (is_point_in_polygon(gx, gy, poly_nodes)) {
-                            // Use a minimal clearance (e.g. 1mm) to allow grid points to fill tightly up to the boundary,
-                            // preventing any hollow or unfilled corners in the landmark polygon.
-                            bool inside_with_clearance = true;
-                            double clearance = 1e-3;
-                            for (size_t i = 0; i < poly_nodes.size(); ++i) {
-                                size_t next_i = (i + 1) % poly_nodes.size();
-                                double dist = distance_to_segment(gx, gy, poly_nodes[i].x, poly_nodes[i].y, poly_nodes[next_i].x, poly_nodes[next_i].y);
-                                if (dist < clearance) {
-                                    inside_with_clearance = false;
-                                    break;
-                                }
-                            }
-                            if (inside_with_clearance) {
-                                MapFeature feat;
-                                feat.x = gx;
-                                feat.y = gy;
-                                feat.class_id = class_id;
-                                features_.push_back(feat);
-                            }
-                        }
-                    }
-                }
-            }
+            samplePolygon(poly, resolution_, landmark_voxels);
         }
     }
 
+    features_.reserve(lane_voxels.size() + landmark_voxels.size());
+    voxelsToFeatures(lane_voxels,     1, features_);
+    voxelsToFeatures(landmark_voxels, 2, features_);
+
     std::cout << "[OsmMapLoader] Loaded " << features_.size()
-              << " features selectively (interpolated at dynamic BEV resolution " << resolution_
-              << " m) from OSM map." << std::endl;
+              << " features (voxel resolution: " << resolution_ << " m) from OSM map." << std::endl;
     return true;
 }
 
 std::vector<MapFeature> OsmMapLoader::queryNear(double x, double y, double radius) const {
-    if (radius < 0.0) {
-        return features_;
-    }
+    if (radius < 0.0) return features_;
 
     std::vector<MapFeature> result;
+    result.reserve(features_.size() / 10);
+
     double r_sq = radius * radius;
-    for (const auto& feat : features_) {
-        double dx = feat.x - x;
-        double dy = feat.y - y;
-        if (dx*dx + dy*dy <= r_sq) {
-            result.push_back(feat);
-        }
+    for (const auto& f : features_) {
+        double dx = f.x - x, dy = f.y - y;
+        if (dx*dx + dy*dy <= r_sq) result.push_back(f);
     }
     return result;
 }

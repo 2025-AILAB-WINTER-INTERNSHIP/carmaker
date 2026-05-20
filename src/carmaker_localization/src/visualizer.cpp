@@ -424,7 +424,7 @@ void Visualizer::publishMapFeatures(const std::vector<MapFeature>& map_features)
         geometry_msgs::Point p;
         p.x = feat.x;
         p.y = feat.y;
-        p.z = 0.01;
+        p.z = 0;
         if (feat.class_id == 1) {
             lane_marker.points.push_back(p);
         } else if (feat.class_id == 2) {
