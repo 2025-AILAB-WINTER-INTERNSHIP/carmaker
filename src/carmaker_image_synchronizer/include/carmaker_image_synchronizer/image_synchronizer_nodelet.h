@@ -99,13 +99,14 @@ private:
     int queue_size_ = 10;
     double slop_ = 0.05;
     double info_timeout_ = 2.0;
+    double diag_period_ = 1.0;
 
     // Time Jump Tracking
     ros::Time last_image_time_;
     std::mutex time_mutex_;
 
     // Diagnostics
-    diagnostic_updater::Updater diagnostic_updater_;
+    std::unique_ptr<diagnostic_updater::Updater> diagnostic_updater_;
     std::atomic<uint64_t> total_synced_count_{0};
 
     // Message Filters

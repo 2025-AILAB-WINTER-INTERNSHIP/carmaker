@@ -16,6 +16,7 @@ void ImageSynchronizerNodelet::onInit() {
     pnh_.param<int>("settings/queue_size", queue_size_, 10);
     pnh_.param<double>("settings/sync_slop_sec", slop_, 0.05);
     pnh_.param<double>("settings/info_timeout_sec", info_timeout_, 2.0);
+    pnh_.param<double>("diagnostic_period", diag_period_, 1.0);
 
     if (use_bundle_) {
         std::string bundle_topic = pnh_.param<std::string>("settings/bundle_topic", "/synced/bundle");
@@ -24,8 +25,9 @@ void ImageSynchronizerNodelet::onInit() {
     }
 
     // 2. Setup Diagnostics
-    diagnostic_updater_.setHardwareID("carmaker_image_sync");
-    diagnostic_updater_.add("Synchronization Status", this, &ImageSynchronizerNodelet::produceDiagnostics);
+    diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh_, pnh_);
+    diagnostic_updater_->setHardwareID("carmaker_image_sync");
+    diagnostic_updater_->add("Synchronization Status", this, &ImageSynchronizerNodelet::produceDiagnostics);
 
     // 3. Load Channels from YAML
     XmlRpc::XmlRpcValue channel_list;
@@ -85,8 +87,8 @@ void ImageSynchronizerNodelet::onInit() {
     sync_->setInterMessageLowerBound(ros::Duration(slop_));
     sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
 
-    // 5. Setup Diagnostics Timer (1Hz) to ensure diagnostics are sent even if sync stalls
-    diag_timer_ = nh_.createTimer(ros::Duration(1.0), &ImageSynchronizerNodelet::timerCallback, this);
+    // 5. Setup Diagnostics Timer (diag_period_) to ensure diagnostics are sent even if sync stalls
+    diag_timer_ = nh_.createTimer(ros::Duration(diag_period_), &ImageSynchronizerNodelet::timerCallback, this);
 
     NODELET_INFO("Image Synchronizer with Diagnostics Started. Master: [%s]", channels_[master_index_].name.c_str());
 }
@@ -105,7 +107,7 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
 }
 
 void ImageSynchronizerNodelet::timerCallback(const ros::TimerEvent& event) {
-    diagnostic_updater_.update();
+    diagnostic_updater_->update();
 }
 
 void ImageSynchronizerNodelet::resetSynchronizer() {
@@ -137,7 +139,10 @@ void ImageSynchronizerNodelet::resetSynchronizer() {
     }
 
     // 4. Force diagnostic update immediately
-    diagnostic_updater_.force_update();
+    diagnostic_updater_->force_update();
+
+    // 5. Re-create the diagnostic timer to prevent it from getting stuck on time jump
+    diag_timer_ = nh_.createTimer(ros::Duration(diag_period_), &ImageSynchronizerNodelet::timerCallback, this);
 }
 
 void ImageSynchronizerNodelet::checkTimeJump(const ros::Time& current_time) {
