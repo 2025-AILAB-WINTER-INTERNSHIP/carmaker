@@ -67,6 +67,41 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
                                     const std::string& distortion_model, const cv::Mat& R_base_cam, const cv::Mat& t_base_cam) {
     if (!is_initialized_) return;
 
+    std::cout << "\n\033[1;33m========== [ DEBUG: " << camera_name_ << " ] ==========\033[0m\n";
+
+    // 1. Intrinsic (초점거리) 검증
+    std::cout << "[1. Intrinsic Check]\n";
+    std::cout << "  - fx: " << K_vec[0] << " (기대값: 약 236.09)\n";
+    std::cout << "  - fy: " << K_vec[4] << " (기대값: 약 236.09)\n";
+
+    // 역행렬 사전 계산 (Base 기준 카메라 위치 및 방향 도출용)
+    cv::Mat R_cam_base_test = R_base_cam.t();
+    cv::Mat t_cam_base_test = -R_cam_base_test * t_base_cam;
+
+    // 2. Extrinsic Translation (Z축 높이) 검증
+    std::cout << "[2. Translation Check (카메라의 Base 기준 물리적 위치)]\n";
+    std::cout << "  - X: " << t_cam_base_test.at<double>(0, 0) << " m\n";
+    std::cout << "  - Y: " << t_cam_base_test.at<double>(1, 0) << " m\n";
+    std::cout << "  - Z: " << t_cam_base_test.at<double>(2, 0) << " m\n";
+
+    // 3. Optical Frame 및 Rotation 검증 (광학 축 방향 테스트)
+    cv::Mat z_axis_optical = (cv::Mat_<double>(3, 1) << 0.0, 0.0, 1.0);
+    cv::Mat z_axis_in_base = R_cam_base_test * z_axis_optical;
+    std::cout << "[3. Optical Axis Check (카메라 렌즈가 바라보는 방향 벡터)]\n";
+    std::cout << "  - Base X방향 (전/후): " << z_axis_in_base.at<double>(0, 0) << "\n";
+    std::cout << "  - Base Y방향 (좌/우): " << z_axis_in_base.at<double>(1, 0) << "\n";
+    std::cout << "  - Base Z방향 (상/하): " << z_axis_in_base.at<double>(2, 0) << "\n";
+
+    // 4. Raycasting Unit Test (특정 지면 포인트를 카메라로 투영)
+    cv::Mat test_point_base = (cv::Mat_<double>(3, 1) << 0.0, -3.0, 0.0); // 우측 3m 바닥
+    cv::Mat test_point_cam = R_base_cam * test_point_base + t_base_cam;
+    std::cout << "[4. Raycasting Unit Test (우측 3m 지면 좌표 -> 카메라 좌표)]\n";
+    std::cout << "  - Camera Opt X (Right): " << test_point_cam.at<double>(0, 0) << "\n";
+    std::cout << "  - Camera Opt Y (Down) : " << test_point_cam.at<double>(1, 0) << "\n";
+    std::cout << "  - Camera Opt Z (Depth): " << test_point_cam.at<double>(2, 0) << "\n";
+
+    std::cout << "========================================================\n\n";
+
     std::vector<cv::Point3f> object_points;
     cartesian_lut_x_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32F);
     cartesian_lut_y_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32F);

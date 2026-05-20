@@ -545,8 +545,8 @@ void LocalizationNodelet::processImages(
             }
 
             try {
-                // Lock 외부에서 TF Lookup 수행 (Base "Fr1A" -> Camera 광학 좌표계 변환 조회)
-                tfs[i] = tf_buffer_->lookupTransform(infos[i]->header.frame_id, "Fr1A", ros::Time(0));
+                // Lock 외부에서 TF Lookup 수행 (Base "base_footprint" -> Camera 광학 좌표계 변환 조회)
+                tfs[i] = tf_buffer_->lookupTransform(infos[i]->header.frame_id, "base_footprint", ros::Time(0));
                 tf_success[i] = true;
             } catch (tf2::TransformException& ex) {
                 ROS_WARN_THROTTLE(2.0, "TF lookup failed for %s: %s", infos[i]->header.frame_id.c_str(), ex.what());
