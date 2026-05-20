@@ -59,7 +59,8 @@ protected:
                               double half_width, double res,
                               std::set<std::pair<double,double>>& out) {
         // 1. 물리적 마진을 포함한 Bounding Box 계산
-        double margin = half_width + res * 0.5;
+        const double eps = 1e-6;
+        double margin = half_width + eps;
         double min_x = std::min(a.x, b.x) - margin;
         double max_x = std::max(a.x, b.x) + margin;
         double min_y = std::min(a.y, b.y) - margin;
@@ -78,7 +79,7 @@ protected:
             for (int iy = min_iy; iy <= max_iy; ++iy) {
                 double gy = (iy + 0.5) * res;
 
-                if (distToSegment(gx, gy, a, b) <= half_width + res * 0.5) {
+                if (distToSegment(gx, gy, a, b) <= half_width + eps) {
                     out.insert({gx, gy});
                 }
             }
