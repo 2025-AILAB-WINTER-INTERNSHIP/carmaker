@@ -268,7 +268,7 @@ input.images[i]  -> output.images[i]
 input.names[i]   -> output.names[i]
 ```
 
-`bundle_batch_inference`를 `false`로 두면 각 이미지를 batch size 1로 순차 처리한다. 출력 topic과 메시지 구조는 바뀌지 않는다.
+이제 bundle 모드에서는 `CameraBundle.images` 전체를 한 번에 `predict_batch()`로 넘긴다. 기본 4채널 bundle이면 4개 이미지가 그대로 batch size 4로 한 번 forward된다.
 
 ## 9. 입력과 출력
 
@@ -387,8 +387,6 @@ class_map_topic: "/segmentation/class_map"
 
 input_encoding: "bgr8"
 queue_size: 1
-bundle_batch_inference: true
-bundle_batch_size: 4
 
 log_timing: true
 timing_log_interval: 1.0

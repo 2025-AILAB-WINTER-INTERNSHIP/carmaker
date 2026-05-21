@@ -63,10 +63,6 @@ class SegmentationInferenceNode:
         self.timing_log_interval = float(rospy.get_param("~timing_log_interval", 1.0))
         self.drop_while_busy = parse_bool(rospy.get_param("~drop_while_busy", True))
         self.inference_lock = threading.Lock()
-        # bundle 모드에서 synchronized camera images를 한 번의 PyTorch batch로 묶을지 정한다.
-        # false로 두면 기존처럼 각 이미지를 batch size 1로 순차 처리한다.
-        self.bundle_batch_inference = parse_bool(rospy.get_param("~bundle_batch_inference", True))
-        self.bundle_batch_size = max(1, int(rospy.get_param("~bundle_batch_size", 4)))
 
         # 실제 모델 로딩과 PyTorch inference는 ROS와 분리된 SegmentationPredictor가 담당한다.
         # 이 노드는 topic 입출력만 얇게 연결하는 adapter 역할을 한다.
@@ -118,15 +114,13 @@ class SegmentationInferenceNode:
                 queue_size=queue_size,
             )
             rospy.loginfo(
-                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s batch_inference=%s batch_size=%d warmup=%d drop_while_busy=%s classes=%s",
+                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s warmup=%d drop_while_busy=%s classes=%s",
                 bundle_topic,
                 class_map_bundle_topic,
                 self.predictor.device,
                 self.predictor.inference_precision,
                 self.predictor.image_size[0],
                 self.predictor.image_size[1],
-                self.bundle_batch_inference,
-                self.bundle_batch_size,
                 cuda_warmup_iterations,
                 self.drop_while_busy,
                 ",".join(self.predictor.class_names),
@@ -179,27 +173,9 @@ class SegmentationInferenceNode:
         try:
             callback_start = time.perf_counter()
 
-            # 정상적인 CameraBundle은 names/images/infos가 같은 순서를 공유한다.
-            # 예를 들어 names[0] == "front"라면 images[0], infos[0]도 front 카메라 기준이다.
-            # 아래 mismatch 체크는 메시지를 버리기보다 경고만 남긴다. 실험 중 CameraInfo가
-            # 비거나 일부만 들어오는 상황에서도 segmentation 결과 자체는 낼 수 있기 때문이다.
             if not msg.images:
                 rospy.logwarn_throttle(1.0, "segmentation inference skipped empty CameraBundle")
                 return
-            if msg.names and len(msg.names) != len(msg.images):
-                rospy.logwarn_throttle(
-                    1.0,
-                    "CameraBundle names/images length mismatch: names=%d images=%d",
-                    len(msg.names),
-                    len(msg.images),
-                )
-            if msg.infos and len(msg.infos) != len(msg.images):
-                rospy.logwarn_throttle(
-                    1.0,
-                    "CameraBundle infos/images length mismatch: infos=%d images=%d",
-                    len(msg.infos),
-                    len(msg.images),
-                )
 
             # 출력 bundle의 의미:
             # - header: 동기화 기준 timestamp/frame_id를 그대로 유지한다.
@@ -214,31 +190,21 @@ class SegmentationInferenceNode:
             class_bundle.names = list(msg.names)
             class_bundle.infos = list(msg.infos)
 
-            # bundle batch inference를 켜면 여러 카메라 이미지를 한 번의 model forward로 처리한다.
-            # 끄면 기존처럼 이미지 한 장씩 순차 처리한다.
-            total_inference_ms = 0.0
-            if self.bundle_batch_inference:
-                for start in range(0, len(msg.images), self.bundle_batch_size):
-                    image_msgs = msg.images[start : start + self.bundle_batch_size]
-                    class_msgs, inference_ms = self.predict_class_map_msgs(image_msgs)
-                    class_bundle.images.extend(class_msgs)
-                    total_inference_ms += inference_ms
-            else:
-                for image_msg in msg.images:
-                    class_msg, inference_ms = self.predict_class_map_msg(image_msg)
-                    class_bundle.images.append(class_msg)
-                    total_inference_ms += inference_ms
+            # CameraBundle 안의 이미지들을 한 번의 model forward로 처리한다.
+            # 기본 4채널 bundle이면 4개 이미지가 그대로 PyTorch batch로 들어간다.
+            class_msgs, inference_ms = self.predict_class_map_msgs(msg.images)
+            class_bundle.images.extend(class_msgs)
 
             self.class_map_bundle_pub.publish(class_bundle)
 
             if self.log_timing:
                 callback_ms = (time.perf_counter() - callback_start) * 1000.0
-                fps = 1000.0 / total_inference_ms if total_inference_ms > 0.0 else 0.0
+                fps = 1000.0 / inference_ms if inference_ms > 0.0 else 0.0
                 rospy.loginfo_throttle(
                     self.timing_log_interval,
                     "segmentation bundle timing: images=%d inference=%.2f ms callback=%.2f ms approx_bundle_fps=%.2f",
                     len(msg.images),
-                    total_inference_ms,
+                    inference_ms,
                     callback_ms,
                     fps,
                 )
@@ -264,7 +230,6 @@ class SegmentationInferenceNode:
         image_bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.input_encoding)
 
         # 실제 PyTorch forward 시간만 따로 재서 로그에 남긴다.
-        # bundle 모드에서는 각 카메라 inference 시간을 합산해 전체 bundle 처리량을 계산한다.
         inference_start = time.perf_counter()
         result = self.predictor.predict(image_bgr, color_order="bgr")
         inference_ms = (time.perf_counter() - inference_start) * 1000.0
