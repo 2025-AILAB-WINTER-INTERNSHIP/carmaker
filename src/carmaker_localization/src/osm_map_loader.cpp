@@ -122,7 +122,7 @@ bool OsmMapLoader::load(const std::string& path) {
                 is_valid = true;
             else if (current_way.tags.count("type")) {
                 const auto& t = current_way.tags["type"];
-                is_valid = (t == "parking_spot" || t == "ev_charging" || t == "lane" || t == "line");
+                is_valid = (t == "parking_spot" || t == "ev_charging" || t == "lane" || t == "line" || t == "boundary");
             }
             if (is_valid) ways.push_back(current_way);
         }
@@ -133,11 +133,13 @@ bool OsmMapLoader::load(const std::string& path) {
     // Each way is rasterised onto the resolution_ grid.
     //   Class 1 (lane / parking_spot): polyline with 0.1m physical width
     //   Class 2 (ev_charging):         filled polygon
+    //   Class 3 (boundary):            filled polygon (inside is free space)
     // ----------------------------------------------------------------
     features_.clear();
 
     std::set<std::pair<double,double>> lane_voxels;
     std::set<std::pair<double,double>> landmark_voxels;
+    std::set<std::pair<double,double>> boundary_voxels;
 
     for (const auto& way : ways) {
         // Determine class
@@ -145,6 +147,8 @@ bool OsmMapLoader::load(const std::string& path) {
         if ((way.tags.count("amenity") && way.tags.at("amenity") == "ev_charging") ||
             (way.tags.count("type")   && way.tags.at("type")   == "ev_charging"))
             class_id = 2;
+        else if (way.tags.count("type") && way.tags.at("type") == "boundary")
+            class_id = 3;
 
         if (class_id == 1) {
             // Lane/parking_spot: sample each segment with 0.05m half-width (total 0.1m)
@@ -167,6 +171,16 @@ bool OsmMapLoader::load(const std::string& path) {
                     poly.push_back({it->second.x, it->second.y});
             }
             samplePolygon(poly, resolution_, landmark_voxels);
+        } else if (class_id == 3 && way.nodes.size() >= 3) {
+            // Boundary: sample the entire filled polygon (inside)
+            std::vector<Point2d> poly;
+            poly.reserve(way.nodes.size());
+            for (int nid : way.nodes) {
+                auto it = node_map.find(nid);
+                if (it != node_map.end())
+                    poly.push_back({it->second.x, it->second.y});
+            }
+            samplePolygon(poly, resolution_, boundary_voxels);
         }
     }
 
@@ -174,8 +188,56 @@ bool OsmMapLoader::load(const std::string& path) {
     voxelsToFeatures(lane_voxels,     1, features_);
     voxelsToFeatures(landmark_voxels, 2, features_);
 
+    // ----------------------------------------------------------------
+    // Build Occupancy Grid from Boundary Voxels (class 3)
+    // ----------------------------------------------------------------
+    occupancy_grid_ = nav_msgs::OccupancyGrid();
+    if (!boundary_voxels.empty()) {
+        double min_x = std::numeric_limits<double>::max();
+        double max_x = std::numeric_limits<double>::lowest();
+        double min_y = std::numeric_limits<double>::max();
+        double max_y = std::numeric_limits<double>::lowest();
+
+        for (const auto& v : boundary_voxels) {
+            min_x = std::min(min_x, v.first);  max_x = std::max(max_x, v.first);
+            min_y = std::min(min_y, v.second); max_y = std::max(max_y, v.second);
+        }
+
+        const double res = resolution_;
+        const double margin = 1.0;
+        double origin_x = min_x - margin;
+        double origin_y = min_y - margin;
+
+        // Snap to resolution
+        origin_x = std::floor(origin_x / res) * res;
+        origin_y = std::floor(origin_y / res) * res;
+
+        int w = static_cast<int>(std::ceil((max_x - origin_x + margin) / res));
+        int h = static_cast<int>(std::ceil((max_y - origin_y + margin) / res));
+
+        std::vector<int8_t> grid_data(static_cast<size_t>(w) * h, 100);
+        for (const auto& v : boundary_voxels) {
+            int ix = static_cast<int>(std::round((v.first - origin_x - 0.5 * res) / res));
+            int iy = static_cast<int>(std::round((v.second - origin_y - 0.5 * res) / res));
+            if (ix >= 0 && ix < w && iy >= 0 && iy < h) {
+                grid_data[static_cast<size_t>(iy) * w + ix] = 0;
+            }
+        }
+
+        occupancy_grid_.header.frame_id = "map";
+        occupancy_grid_.info.resolution = res;
+        occupancy_grid_.info.width = w;
+        occupancy_grid_.info.height = h;
+        occupancy_grid_.info.origin.position.x = origin_x;
+        occupancy_grid_.info.origin.position.y = origin_y;
+        occupancy_grid_.info.origin.position.z = 0.0;
+        occupancy_grid_.info.origin.orientation.w = 1.0;
+        occupancy_grid_.data = std::move(grid_data);
+    }
+
     std::cout << "[OsmMapLoader] Loaded " << features_.size()
-              << " features (voxel resolution: " << resolution_ << " m) from OSM map." << std::endl;
+              << " features, boundary map: " << occupancy_grid_.info.width << "x" << occupancy_grid_.info.height
+              << " (voxel resolution: " << resolution_ << " m) from OSM map." << std::endl;
     return true;
 }
 
@@ -191,6 +253,10 @@ std::vector<MapFeature> OsmMapLoader::queryNear(double x, double y, double radiu
         if (dx*dx + dy*dy <= r_sq) result.push_back(f);
     }
     return result;
+}
+
+nav_msgs::OccupancyGrid OsmMapLoader::getOccupancyGrid() const {
+    return occupancy_grid_;
 }
 
 } // namespace carmaker_localization

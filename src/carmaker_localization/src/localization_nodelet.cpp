@@ -342,6 +342,11 @@ void LocalizationNodelet::setupRosIo() {
         bundle_sub_ = nh.subscribe(topic_bundle, 10, &LocalizationNodelet::bundleCallback, this);
         NODELET_INFO("Subscribed to CameraBundle topic: %s", topic_bundle.c_str());
     }
+
+    // ROS Service Server Setup
+    std::string service_get_map = pnh.param("services/get_map", std::string("/localization/get_map"));
+    map_srv_ = nh.advertiseService(service_get_map, &LocalizationNodelet::getMapCallback, this);
+    NODELET_INFO("Map service advertised: %s", service_get_map.c_str());
 }
 
 void LocalizationNodelet::infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx) {
@@ -982,6 +987,19 @@ void LocalizationNodelet::initLocalization(double current_time, const carmaker_m
         last_map_pub_x_ = init_x;
         last_map_pub_y_ = init_y;
     }
+}
+
+bool LocalizationNodelet::getMapCallback(nav_msgs::GetMap::Request&, nav_msgs::GetMap::Response& res) {
+    if (!map_loader_) {
+        NODELET_WARN("Map loader is not initialized, cannot provide map.");
+        return false;
+    }
+    res.map = map_loader_->getOccupancyGrid();
+    if (res.map.data.empty()) {
+        NODELET_WARN("OccupancyGrid map data is empty.");
+        return false;
+    }
+    return true;
 }
 
 } // namespace carmaker_localization

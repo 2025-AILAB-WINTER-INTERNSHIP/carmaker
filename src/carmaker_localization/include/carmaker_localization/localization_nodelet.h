@@ -26,6 +26,7 @@
 #include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/CameraBundle.h>
 #include <nav_msgs/Odometry.h>
+#include <nav_msgs/GetMap.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <diagnostic_updater/diagnostic_updater.h>
 
@@ -84,6 +85,7 @@ private:
         const sensor_msgs::ImageConstPtr& img3);
     void bundleCallback(const carmaker_msgs::CameraBundleConstPtr& msg);
     void diagTimerCallback(const ros::WallTimerEvent& event);
+    bool getMapCallback(nav_msgs::GetMap::Request& req, nav_msgs::GetMap::Response& res);
 
     // Helpers
     void processImages(
@@ -151,6 +153,7 @@ private:
     ros::Publisher correction_data_pub_;
     std::map<std::string, ros::Publisher> feature_data_pubs_;
     ros::Timer prediction_timer_;
+    ros::ServiceServer map_srv_;
 
     // Diagnostics
     std::unique_ptr<diagnostic_updater::Updater> diagnostic_updater_;

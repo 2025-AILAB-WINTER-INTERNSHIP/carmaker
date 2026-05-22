@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <utility>
+#include <nav_msgs/OccupancyGrid.h>
 
 namespace carmaker_localization {
 
@@ -49,6 +50,12 @@ public:
      * @return Vector of features within radius
      */
     virtual std::vector<MapFeature> queryNear(double x, double y, double radius) const = 0;
+
+    /**
+     * @brief Get compiled OccupancyGrid map
+     * @return OccupancyGrid message
+     */
+    virtual nav_msgs::OccupancyGrid getOccupancyGrid() const = 0;
 
 protected:
     static double snapToVoxel(double val, double res) {

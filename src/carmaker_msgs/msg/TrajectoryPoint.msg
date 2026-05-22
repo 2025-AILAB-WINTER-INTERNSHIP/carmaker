@@ -1,0 +1,8 @@
+geometry_msgs/Pose pose
+
+float64 longitudinal_velocity
+float64 longitudinal_acceleration
+
+float64 curvature
+
+duration time_from_start
