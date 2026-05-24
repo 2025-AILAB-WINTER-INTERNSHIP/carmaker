@@ -14,25 +14,25 @@ settings:
 # Channel Definition & Mapping
 channels:
   - name: "front"
-    in_img:  "/mono/fisheye/front/image_raw"
+    in_img:  "/mono/fisheye/front/image_gt"
     in_info: "/mono/fisheye/front/camera_info"
     out_img: "/synced/front/image"
     out_info: "/synced/front/camera_info"
 
   - name: "rear"
-    in_img:  "/mono/fisheye/rear/image_raw"
+    in_img:  "/mono/fisheye/rear/image_gt"
     in_info: "/mono/fisheye/rear/camera_info"
     out_img: "/synced/rear/image"
     out_info: "/synced/rear/camera_info"
 
   - name: "left"
-    in_img:  "/mono/fisheye/left/image_raw"
+    in_img:  "/mono/fisheye/left/image_gt"
     in_info: "/mono/fisheye/left/camera_info"
     out_img: "/synced/left/image"
     out_info: "/synced/left/camera_info"
 
   - name: "right"
-    in_img:  "/mono/fisheye/right/image_raw"
+    in_img:  "/mono/fisheye/right/image_gt"
     in_info: "/mono/fisheye/right/camera_info"
     out_img: "/synced/right/image"
     out_info: "/synced/right/camera_info"

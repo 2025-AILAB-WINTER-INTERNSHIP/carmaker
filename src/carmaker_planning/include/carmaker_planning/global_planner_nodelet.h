@@ -10,6 +10,7 @@
 #include <nav_msgs/OccupancyGrid.h>
 #include <nav_msgs/GetMap.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 #include <diagnostic_updater/diagnostic_updater.h>
@@ -36,7 +37,7 @@ private:
   void goalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
   void diagTimerCallback(const ros::WallTimerEvent& event);
   void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
-  void manualPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
+  void manualPoseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg);
   void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
 
   // Dedicated Processing / Computation Methods

@@ -45,7 +45,7 @@ void GlobalPlannerNodelet::onInit() {
   std::string trajectory_topic = pnh_.param("topics/publish/trajectory", std::string("/planning/trajectory"));
   trajectory_pub_ = nh_.advertise<carmaker_msgs::TrajectoryPath>(trajectory_topic, 1, true);
 
-  // ROS 서비스를 통해 정적 격자 지도(OccupancyGrid) 가져오기
+  // Retrieve static grid map (OccupancyGrid) via ROS service
   if (!loadMapFromService()) {
     NODELET_FATAL("Failed to load map from service!");
     return;
@@ -56,13 +56,13 @@ void GlobalPlannerNodelet::onInit() {
 
   if (use_gt_pose_) {
     dynamics_sub_ = nh_.subscribe(dynamics_topic, 10, &GlobalPlannerNodelet::dynamicsCallback, this);
-    NODELET_INFO("Ego Pose Source: Ground Truth (%s) 사용", dynamics_topic.c_str());
+    NODELET_INFO("Ego Pose Source: Ground Truth (%s) active", dynamics_topic.c_str());
   } else if (use_manual_pose_) {
     std::string manual_topic = pnh_.param("setting/use_manual_pose/topic", std::string("/planning/start"));
     manual_pose_sub_ = nh_.subscribe(manual_topic, 1, &GlobalPlannerNodelet::manualPoseCallback, this);
-    NODELET_INFO("Ego Pose Source: Manual Pose Topic (%s) 사용 — 시뮬레이터 없는 테스트 모드", manual_topic.c_str());
+    NODELET_INFO("Ego Pose Source: Manual Pose Topic (%s) active - simulation-free test mode", manual_topic.c_str());
   } else {
-    NODELET_INFO("Ego Pose Source: TF Lookup (global: %s -> ego: %s) 사용", global_frame_.c_str(), ego_frame_.c_str());
+    NODELET_INFO("Ego Pose Source: TF Lookup (global: %s -> ego: %s) active", global_frame_.c_str(), ego_frame_.c_str());
   }
   goal_sub_ = nh_.subscribe(goal_topic, 1, &GlobalPlannerNodelet::goalCallback, this);
 
@@ -366,18 +366,19 @@ void GlobalPlannerNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoCon
   dynamics_received_ = true;
 }
 
-void GlobalPlannerNodelet::manualPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
+void GlobalPlannerNodelet::manualPoseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
   if (!msg) {
     NODELET_WARN_THROTTLE(1.0, "Received null manual pose message pointer.");
     return;
   }
   std::lock_guard<std::mutex> lock(manual_pose_mutex_);
-  latest_manual_pose_ = *msg;
+  latest_manual_pose_.header = msg->header;
+  latest_manual_pose_.pose = msg->pose.pose;
   manual_pose_received_ = true;
   NODELET_INFO_ONCE("Manual start pose received. Ready to plan.");
 }
 
-// ── ROS 서비스 기반 정적 맵 수신 ────────────────────────────────────────────────
+// ── Receive static map via ROS service ────────────────────────────────────────
 
 bool GlobalPlannerNodelet::loadMapFromService() {
   ros::NodeHandle& pnh = getPrivateNodeHandle();
@@ -421,7 +422,7 @@ bool GlobalPlannerNodelet::loadMapFromService() {
   grid.header.stamp = ros::Time::now();
   debug_map_pub_.publish(grid);
 
-  NODELET_INFO("[GlobalPlannerNodelet] ROS 서비스를 통해 OccupancyGrid 수신 및 설정 완료: %d×%d 셀, 해상도=%.3fm, origin=(%.2f, %.2f)",
+  NODELET_INFO("[GlobalPlannerNodelet] OccupancyGrid received and configured via ROS service: %dx%d cells, resolution=%.3fm, origin=(%.2f, %.2f)",
                w, h, res, origin_x, origin_y);
   return true;
 }

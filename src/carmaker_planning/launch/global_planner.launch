@@ -1,6 +1,7 @@
 <launch>
   <!-- Arguments -->
   <arg name="use_sim_time" default="false" />
+  <arg name="rviz" default="true" />
 
   <!-- Global parameter -->
   <param name="use_sim_time" value="$(arg use_sim_time)" />
@@ -13,4 +14,7 @@
     <!-- Load Parameters -->
     <rosparam command="load" file="$(find carmaker_planning)/config/global_planner_params.yaml" />
   </node>
+
+  <!-- RViz Visualizer -->
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find carmaker_planning)/config/global_planner.rviz" required="false" if="$(arg rviz)" />
 </launch>

@@ -95,7 +95,7 @@ ekf:
   divergence_threshold: 100.0   # divergence_threshold : 필터 발산 판정 임계값 (Trace(P))
 
 map_matcher:
-  enable: true                 # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
+  enable: false                 # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
   type: "icp"                   # "icp" | 추후 "ndt", "point_to_line" 추가
   map_format: "osm"             # "osm" | 추후 "lanelet2", "pcd" 추가
   map_file: ""                  # launch argument로 지정

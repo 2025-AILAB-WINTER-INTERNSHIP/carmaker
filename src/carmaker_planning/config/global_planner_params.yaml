@@ -14,14 +14,14 @@ topics:
     dynamics: "/carmaker/dynamic_info"
 
 setting:
-  # use_gt_pose: true        → /carmaker/dynamic_info 토픽 (시뮬레이터 GT)
-  # use_manual_pose: true    → /planning/start 토픽 (테스트용 수동 입력)
-  # (둘 다 false)            → TF 조회 (Fr0 → Fr1A_pred, 실제 배포용 EKF)
+  # use_gt_pose: true        → /carmaker/dynamic_info topic (Simulator GT)
+  # use_manual_pose: true    → /planning/start topic (manual input for testing)
+  # (both false)             → TF lookup (Fr0 → Fr1A_pred, actual deployment EKF)
 
   use_gt_pose: false # Set to true to use GT pose, false to use EKF pose from TF
   use_manual_pose:
-    enabled: false    # Set to true for offline testing (no simulator). Overrides TF lookup.
-    topic: "/planning/start"  # geometry_msgs/PoseStamped — publish via RViz "2D Pose Estimate" tool
+    enabled: true    # Set to true for offline testing (no simulator). Overrides TF lookup.
+    topic: "/planning/start"  # geometry_msgs/PoseWithCovarianceStamped — publish via RViz "2D Pose Estimate" tool
 
 # Frame configurations matching carmaker_localization
 frames:
@@ -34,8 +34,8 @@ vehicle:
   length: 4.635      # meters
   wheelbase: 3.0   # meters
   rear_axle_offset: 0.79 # meters (Rear Bumper to Rear Axle)
-  min_turning_radius: 5.2 # meters
-  max_steer_angle_deg: 30.0 # degrees
+  min_turning_radius: 5.5 # meters
+  max_steer_angle_deg: 40.0 # degrees
 
   limits:
     max_vel: 1.2      # m/s
