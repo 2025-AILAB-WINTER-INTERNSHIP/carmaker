@@ -63,6 +63,32 @@ private:
   long long last_map_version_ = -1;
 };
 
+class VersionedHashMap {
+public:
+  struct Bucket {
+    size_t key = 0;
+    GlobalNode3D* node = nullptr;
+    uint32_t version = 0;
+  };
+
+  void resize(size_t capacity);
+  void clear();
+  GlobalNode3D* find(size_t key) const;
+  void insert(size_t key, GlobalNode3D* node);
+
+private:
+  inline size_t hash(size_t x) const {
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    x = x ^ (x >> 31);
+    return x;
+  }
+
+  std::vector<Bucket> buckets_;
+  size_t mask_ = 0;
+  uint32_t version_ = 1;
+};
+
 class HybridAStar {
 public:
   explicit HybridAStar(const GlobalMainConfig& config,
@@ -94,7 +120,7 @@ private:
   HeuristicPlanner heuristic_planner_;
   std::string logger_name_;
 
-  std::unordered_map<size_t, GlobalNode3D*> nodes_grid_;
+  VersionedHashMap nodes_grid_;
   std::deque<GlobalNode3D> node_pool_;
   std::priority_queue<GlobalNode3D*, std::vector<GlobalNode3D*>, GlobalNode3D::Greater> open_set_;
 

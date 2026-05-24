@@ -83,12 +83,52 @@ bool GlobalMap::checkCollision(double x, double y, double theta) const {
   return false;
 }
 
+double GlobalMap::getCollisionSafetyMargin(double x, double y, double theta) const {
+  if (grid_data_.empty() || distance_map_.empty()) return -1.0;
+  if (!has_vehicle_spec_ || vehicle_spec_.collision_circles.empty()) {
+    int gx=-1, gy=-1;
+    if (!worldToGrid(x, y, gx, gy)) return -1.0;
+    return isObstacleInternal(gx, gy) ? -1.0 : resolution_;
+  }
+  const double c = std::cos(theta), s = std::sin(theta);
+  double min_margin = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < vehicle_spec_.collision_circles.size(); ++i) {
+    const auto& circle = vehicle_spec_.collision_circles[i];
+    double cx = x + circle.offset * c, cy = y + circle.offset * s;
+    int gx=-1, gy=-1;
+    if (!worldToGrid(cx, cy, gx, gy)) return -1.0;
+    double dist_to_obs = distance_map_[getIndex(gx, gy)];
+    double margin = dist_to_obs - circle.radius;
+    if (margin < min_margin) {
+      min_margin = margin;
+    }
+  }
+  return min_margin;
+}
+
 void GlobalMap::setCell(int gx, int gy, uint8_t value) {
   std::lock_guard<std::recursive_mutex> lock(map_mutex_);
   if (!isInsideInternal(gx, gy)) return;
   grid_data_[getIndex(gx, gy)] = value;
   computeEDT();
   bumpVersion();
+}
+
+void GlobalMap::setCells(const std::vector<std::pair<int, int>>& indices, const std::vector<uint8_t>& values) {
+  std::lock_guard<std::recursive_mutex> lock(map_mutex_);
+  bool changed = false;
+  for (size_t i = 0; i < indices.size(); ++i) {
+    int gx = indices[i].first;
+    int gy = indices[i].second;
+    if (isInsideInternal(gx, gy)) {
+      grid_data_[getIndex(gx, gy)] = values[i];
+      changed = true;
+    }
+  }
+  if (changed) {
+    computeEDT();
+    bumpVersion();
+  }
 }
 
 void GlobalMap::updateMap(

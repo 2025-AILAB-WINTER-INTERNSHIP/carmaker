@@ -7,6 +7,9 @@
 #include <chrono>
 #include <algorithm>
 #include <ros/ros.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace carmaker_planning
 {
@@ -164,6 +167,73 @@ double HeuristicPlanner::calcH(const GlobalNode3D & node, const State & goal)
   return std::max(h_obs, h_kin);
 }
 
+// VersionedHashMap Implementation
+
+void VersionedHashMap::resize(size_t capacity)
+{
+  size_t pow2 = 1;
+  while (pow2 < capacity) {
+    pow2 <<= 1;
+  }
+  buckets_.assign(pow2, Bucket());
+  mask_ = pow2 - 1;
+  version_ = 1;
+}
+
+void VersionedHashMap::clear()
+{
+  version_++;
+  if (version_ == 0) {
+    version_ = 1;
+    for (auto & bucket : buckets_) {
+      bucket.version = 0;
+    }
+  }
+}
+
+GlobalNode3D* VersionedHashMap::find(size_t key) const
+{
+  if (buckets_.empty()) {
+    return nullptr;
+  }
+  size_t idx = hash(key) & mask_;
+  size_t count = 0;
+  const size_t sz = buckets_.size();
+  while (count < sz) {
+    const auto & bucket = buckets_[idx];
+    if (bucket.version != version_) {
+      return nullptr;
+    }
+    if (bucket.key == key) {
+      return bucket.node;
+    }
+    idx = (idx + 1) & mask_;
+    count++;
+  }
+  return nullptr;
+}
+
+void VersionedHashMap::insert(size_t key, GlobalNode3D* node)
+{
+  if (buckets_.empty()) {
+    return;
+  }
+  size_t idx = hash(key) & mask_;
+  size_t count = 0;
+  const size_t sz = buckets_.size();
+  while (count < sz) {
+    auto & bucket = buckets_[idx];
+    if (bucket.version != version_ || bucket.key == key) {
+      bucket.key = key;
+      bucket.node = node;
+      bucket.version = version_;
+      return;
+    }
+    idx = (idx + 1) & mask_;
+    count++;
+  }
+}
+
 // HybridAStar Implementation
 
 HybridAStar::HybridAStar(const GlobalMainConfig & config, const std::string& logger_name)
@@ -172,6 +242,7 @@ HybridAStar::HybridAStar(const GlobalMainConfig & config, const std::string& log
 {
   theta_res_ = config.planner.theta_resolution;
   angle_size_ = static_cast<int>(std::ceil(2.0 * PI / theta_res_));
+  nodes_grid_.resize(1048576);
 }
 
 PlanningStatus HybridAStar::plan(const State & start, const State & goal, GlobalMap & map)
@@ -280,7 +351,7 @@ GlobalNode3D * HybridAStar::initializeStartNode(
     return nullptr;
   }
 
-  nodes_grid_[start_g_idx] = start_node;
+  nodes_grid_.insert(start_g_idx, start_node);
 
   return start_node;
 }
@@ -292,70 +363,104 @@ void HybridAStar::expandNode(GlobalNode3D * current, const State & goal, GlobalM
   double d_steer = (num_steer > 1) ? (2.0 * max_steer / (num_steer - 1)) : 0.0;
   const std::vector<int> directions = {1, -1};
 
+  // 1. Gather all candidates
+  struct Candidate {
+    int dir;
+    double steer;
+  };
+  std::vector<Candidate> candidates;
+  candidates.reserve(2 * num_steer);
   for (int dir : directions) {
     for (int i = 0; i < num_steer; ++i) {
-      double steer = -max_steer + i * d_steer;
-      double step_dist = config_.step_size * dir;
+      candidates.push_back({dir, -max_steer + i * d_steer});
+    }
+  }
 
-      double next_x = 0.0;
-      double next_y = 0.0;
-      double next_theta = 0.0;
+  // 2. Evaluate candidates in parallel
+  struct ValidNode {
+    double x, y, theta;
+    double g, h;
+    double steer;
+    int dir;
+    size_t g_idx;
+  };
+  std::vector<ValidNode> valid_nodes(candidates.size());
+  std::vector<bool> is_valid(candidates.size(), false);
 
-      if (std::abs(steer) < 1e-3) {
-        next_x = current->x + step_dist * std::cos(current->theta);
-        next_y = current->y + step_dist * std::sin(current->theta);
-        next_theta = current->theta;
-      } else {
-        const double kappa = std::tan(steer) / vehicle_spec_.wheelbase;
-        const double d_theta = step_dist * kappa;
-        next_theta = wrap_to_pi(current->theta + d_theta);
+  #pragma omp parallel for schedule(static, 1)
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    int dir = candidates[i].dir;
+    double steer = candidates[i].steer;
+    double step_dist = config_.step_size * dir;
 
-        const double radius = 1.0 / kappa;
-        next_x = current->x + radius * (std::sin(next_theta) - std::sin(current->theta));
-        next_y = current->y - radius * (std::cos(next_theta) - std::cos(current->theta));
-      }
+    double next_x = 0.0;
+    double next_y = 0.0;
+    double next_theta = 0.0;
 
-      if (map.checkCollision(next_x, next_y, next_theta)) {continue;}
+    if (std::abs(steer) < 1e-3) {
+      next_x = current->x + step_dist * std::cos(current->theta);
+      next_y = current->y + step_dist * std::sin(current->theta);
+      next_theta = current->theta;
+    } else {
+      const double kappa = std::tan(steer) / vehicle_spec_.wheelbase;
+      const double d_theta = step_dist * kappa;
+      next_theta = wrap_to_pi(current->theta + d_theta);
 
-      size_t t_idx = getThetaIndex(next_theta);
-      size_t g_idx = getGridIndex(
-        static_cast<int>(std::floor((next_x - map.getOriginX()) / map.getResolution())),
-        static_cast<int>(std::floor((next_y - map.getOriginY()) / map.getResolution())),
-        static_cast<int>(t_idx));
+      const double radius = 1.0 / kappa;
+      next_x = current->x + radius * (std::sin(next_theta) - std::sin(current->theta));
+      next_y = current->y - radius * (std::cos(next_theta) - std::cos(current->theta));
+    }
 
-      if (g_idx == std::numeric_limits<size_t>::max()) {
-        continue;
-      }
+    if (map.checkCollision(next_x, next_y, next_theta)) {continue;}
 
-      double step_cost = std::abs(step_dist);
-      if (dir == -1) {
-        step_cost *= config_.weights.reverse;
-      }
-      if (dir != current->direction) {
-        step_cost += config_.weights.change_dir;
-      }
-      if (std::abs(steer) > 0.01) {
-        const double turn_factor = config_.weights.turn * (std::abs(steer) / max_steer);
-        step_cost *= (1.0 + turn_factor);
-      }
+    size_t t_idx = getThetaIndex(next_theta);
+    size_t g_idx = getGridIndex(
+      static_cast<int>(std::floor((next_x - map.getOriginX()) / map.getResolution())),
+      static_cast<int>(std::floor((next_y - map.getOriginY()) / map.getResolution())),
+      static_cast<int>(t_idx));
 
-      double next_g = current->g_cost + step_cost;
+    if (g_idx == std::numeric_limits<size_t>::max()) {
+      continue;
+    }
 
-      auto it = nodes_grid_.find(g_idx);
-      if (it == nodes_grid_.end() || it->second->g_cost > next_g) {
-        GlobalNode3D temp_next;
-        temp_next.x = next_x; temp_next.y = next_y; temp_next.theta = next_theta;
+    double step_cost = std::abs(step_dist);
+    if (dir == -1) {
+      step_cost *= config_.weights.reverse;
+    }
+    if (dir != current->direction) {
+      step_cost += config_.weights.change_dir;
+    }
+    if (std::abs(steer) > 0.01) {
+      const double turn_factor = config_.weights.turn * (std::abs(steer) / max_steer);
+      step_cost *= (1.0 + turn_factor);
+    }
 
-        double next_h = heuristic_planner_.calcH(temp_next, goal);
-        if (std::isinf(next_h)) {continue;}
+    double next_g = current->g_cost + step_cost;
 
-        GlobalNode3D * next_node = createNode(
-          next_x, next_y, next_theta, next_g, next_h, current, steer,
-          dir);
+    GlobalNode3D temp_next;
+    temp_next.x = next_x; temp_next.y = next_y; temp_next.theta = next_theta;
 
-        nodes_grid_[g_idx] = next_node;
-        open_set_.push(next_node);
-      }
+    double next_h = heuristic_planner_.calcH(temp_next, goal);
+    if (std::isinf(next_h)) {continue;}
+
+    valid_nodes[i] = {next_x, next_y, next_theta, next_g, next_h, steer, dir, g_idx};
+    is_valid[i] = true;
+  }
+
+  // 3. Sequentially insert valid nodes into A* open set and nodes grid (thread-safe)
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (!is_valid[i]) {
+      continue;
+    }
+    const auto & vn = valid_nodes[i];
+    GlobalNode3D* existing = nodes_grid_.find(vn.g_idx);
+    if (existing == nullptr || existing->g_cost > vn.g) {
+      GlobalNode3D * next_node = createNode(
+        vn.x, vn.y, vn.theta, vn.g, vn.h, current, vn.steer,
+        vn.dir);
+
+      nodes_grid_.insert(vn.g_idx, next_node);
+      open_set_.push(next_node);
     }
   }
 }
@@ -396,14 +501,53 @@ bool HybridAStar::tryAnalyticExpansion(
     return false;
   }
 
-  double check_step = map.getResolution() * 0.5;
-  ReedsSheppCurve::sample(rs_path, start_st, check_step);
+  // 1. Dynamic step size collision check along Reeds-Shepp segments
+  auto check_collision_dynamic = [&](const RSPath& path) {
+    const double inv_rho = 1.0 / path.rho;
+    State current_state = start_st;
 
-  for (const auto & p : rs_path.points) {
-    if (map.checkCollision(p.x, p.y, p.theta)) {
-      return false;
+    for (size_t i = 0; i < path.seg_lengths.size(); ++i) {
+      double seg_len_m = path.seg_lengths[i] * path.rho;
+      int dir = path.seg_dir[i];
+      int steer = path.seg_steer[i];
+
+      double seg_s = 0.0;
+      while (seg_s < seg_len_m) {
+        double margin = map.getCollisionSafetyMargin(current_state.x, current_state.y, current_state.theta);
+        if (margin < 0.0) {
+          return true; // Collision
+        }
+
+        // Stepping dynamically: safely skip up to margin distance.
+        // Cap step size between 0.05m and 0.5m.
+        double step = std::clamp(margin, 0.05, 0.5);
+        if (seg_s + step > seg_len_m) {
+          step = seg_len_m - seg_s;
+        }
+
+        seg_s += step;
+        if (steer == 0) { // Straight
+          current_state.x += dir * step * std::cos(current_state.theta);
+          current_state.y += dir * step * std::sin(current_state.theta);
+        } else { // Turn
+          const double d_theta = (dir * steer * step) * inv_rho;
+          const double theta_new = wrap_to_pi(current_state.theta + d_theta);
+          current_state.x += path.rho * steer * (std::sin(theta_new) - std::sin(current_state.theta));
+          current_state.y -= path.rho * steer * (std::cos(theta_new) - std::cos(current_state.theta));
+          current_state.theta = theta_new;
+        }
+      }
     }
+    return map.checkCollision(current_state.x, current_state.y, current_state.theta);
+  };
+
+  if (check_collision_dynamic(rs_path)) {
+    return false;
   }
+
+  // 2. Only sample path at a moderate step size if it is collision-free
+  double sample_step = std::max(map.getResolution() * 2.0, 0.15);
+  ReedsSheppCurve::sample(rs_path, start_st, sample_step);
 
   tracePath(current);
 

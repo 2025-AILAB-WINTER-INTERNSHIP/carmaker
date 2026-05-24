@@ -47,7 +47,9 @@ public:
   bool isObstacle(int gx, int gy) const;
   bool checkCollisionPoint(double x, double y) const;
   bool checkCollision(double x, double y, double theta) const;
+  double getCollisionSafetyMargin(double x, double y, double theta) const;
   void setCell(int gx, int gy, uint8_t value);
+  void setCells(const std::vector<std::pair<int, int>>& indices, const std::vector<uint8_t>& values);
 
   void updateMap(int width, int height, double res, double ox, double oy,
                  const std::vector<int8_t>& data);
