@@ -38,9 +38,9 @@ vehicle:
   max_steer_angle_deg: 40.0 # degrees
 
   limits:
-    max_vel: 1.2      # m/s
-    max_acc: 1.0      # m/s^2
-    max_decel: 1.0    # m/s^2
+    max_vel: 10.0     # m/s
+    max_acc: 3.0      # m/s^2
+    max_decel: 3.0    # m/s^2
     max_jerk: 2.0     # m/s^3
     max_lat_acc: 1.5  # m/s^2
 
@@ -95,9 +95,9 @@ global_post_processing:
   resampler:
     resolution: 0.1
   profiler:
-    max_vel: 1.2
-    max_acc: 0.5
-    max_dec: 0.5
-    max_jerk: 2.0
-    max_lat_acc: 1.5
+    max_vel: 2.0      # m/s 7.2 km/h
+    max_acc: 0.8      # m/s^2
+    max_dec: 0.8      # m/s^2
+    max_jerk: 1.5     # m/s^3
+    max_lat_acc: 0.8  # m/s^2
     goal_vel: 0.0

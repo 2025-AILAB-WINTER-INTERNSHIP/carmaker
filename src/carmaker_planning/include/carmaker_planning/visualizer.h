@@ -22,7 +22,7 @@ public:
   Visualizer(const Visualizer&) = delete;
   Visualizer& operator=(const Visualizer&) = delete;
 
-  void publishPath(const Path& path, const std::string& frame_id, double rear_axle_offset, double max_vel);
+  void publishPath(const Path& path, const std::string& frame_id, double rear_axle_offset);
   void publishTree(const std::vector<State>& tree,
                    const std::vector<std::pair<State, State>>& branches,
                    const std::string& frame_id);

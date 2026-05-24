@@ -23,7 +23,7 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
   velocity_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(velocity_topic_, 1, true);
 }
 
-void Visualizer::publishPath(const Path& path, const std::string& frame_id, double rear_axle_offset, double max_vel) {
+void Visualizer::publishPath(const Path& path, const std::string& frame_id, double rear_axle_offset) {
   if (path.empty()) return;
 
   ros::Time now = ros::Time::now();
@@ -91,10 +91,17 @@ void Visualizer::publishPath(const Path& path, const std::string& frame_id, doub
     m.scale.y = 0.1;
     m.scale.z = std::max(height, 0.001); // avoid 0 height warning in RViz
 
-    // Solid Cyan
-    m.color.r = 0.0;
-    m.color.g = 0.9;
-    m.color.b = 0.9;
+    if (pt.direction == -1) {
+      // Solid Red for Reverse
+      m.color.r = 0.9;
+      m.color.g = 0.0;
+      m.color.b = 0.0;
+    } else {
+      // Solid Cyan for Forward
+      m.color.r = 0.0;
+      m.color.g = 0.9;
+      m.color.b = 0.9;
+    }
     m.color.a = 0.7;
 
     velocity_markers.markers.push_back(m);

@@ -159,7 +159,7 @@ State GlobalPlannerNodelet::getGoalState(const geometry_msgs::PoseStamped& msg) 
 }
 
 void GlobalPlannerNodelet::publishVisualization(const Path& path) {
-  visualizer_->publishPath(path, global_frame_, config_.vehicle.rear_axle_offset, config_.vehicle.max_vel);
+  visualizer_->publishPath(path, global_frame_, config_.vehicle.rear_axle_offset);
   visualizer_->publishTree(planner_->getSearchTree(), planner_->getTreeBranches(), global_frame_);
 }
 
