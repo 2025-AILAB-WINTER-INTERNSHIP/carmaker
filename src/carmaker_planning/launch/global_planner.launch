@@ -6,6 +6,9 @@
   <!-- Global parameter -->
   <param name="use_sim_time" value="$(arg use_sim_time)" />
 
+  <!-- Static TF Publisher: map -> Fr0 -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_fr0" args="0 0 0 0 0 0 map Fr0" />
+
   <!-- Nodelet Manager -->
   <node pkg="nodelet" type="nodelet" name="planning_manager" args="manager" output="screen" />
 

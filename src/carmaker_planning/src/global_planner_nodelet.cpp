@@ -202,6 +202,10 @@ void GlobalPlannerNodelet::goalCallback(const geometry_msgs::PoseStamped::ConstP
     NODELET_WARN_THROTTLE(1.0, "Received null goal message pointer.");
     return;
   }
+
+  NODELET_INFO("Goal pose received: (%.2f, %.2f, %.2f deg)",
+               msg->pose.position.x, msg->pose.position.y,
+               quaternionToYaw(msg->pose.orientation) * 180.0 / M_PI);
   
   // 2. Verify that map data is loaded and ready
   if (!has_map_) {
@@ -375,7 +379,9 @@ void GlobalPlannerNodelet::manualPoseCallback(const geometry_msgs::PoseWithCovar
   latest_manual_pose_.header = msg->header;
   latest_manual_pose_.pose = msg->pose.pose;
   manual_pose_received_ = true;
-  NODELET_INFO_ONCE("Manual start pose received. Ready to plan.");
+  NODELET_INFO("Manual start pose received: (%.2f, %.2f, %.2f deg)",
+               msg->pose.pose.position.x, msg->pose.pose.position.y,
+               quaternionToYaw(msg->pose.pose.orientation) * 180.0 / M_PI);
 }
 
 // ── Receive static map via ROS service ────────────────────────────────────────
