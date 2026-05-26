@@ -3,22 +3,21 @@
 
 vehicle:
   # Vehicle Dimensions (Relative to Fr1A)
-  width: 1.9                    # [m] - Width of the vehicle
+  width: 1.89                    # [m] - Width of the vehicle
   length: 4.635                 # [m] - Length of the vehicle
   height: 1.605                 # [m] - Height of the vehicle
 
   # Vehicle Kinematics
-  rear_axle_offset_x: 0.79      # [m] - Rear axle X offset from Fr1A
+  rear_axle_offset_x: 0.82      # [m] - Rear axle X offset from Fr1A
   center_offset_x: 2.3175       # [m] - Geometric center for visualization from Fr1A (length/2)
-  cg_offset_x: 2.29             # [m] - Center of Gravity from Fr1A
+  cg_offset_x: 2.635            # [m] - Center of Gravity from Fr1A
   front_axle_offset_x: 3.79     # [m] - Front axle X offset from Fr1A
 
   # 축간거리: 앞바퀴 축과 뒷바퀴 축 사이의 거리
-  wheelbase: 3.0                # [m] - Distance between front and rear axles
+  wheelbase: 2.97               # [m] - Distance between front and rear axles
 
-  # 윤거(타이어 중심 간 거리): 차량 너비 - 타이어 폭
-  # - 1.9m (너비) - 0.245m (타이어 폭) = 1.655m
-  track_width: 1.655            # [m] - Distance between left and right wheels
+  # 윤거(타이어 중심 간 거리)
+  track_width: 1.634            # [m] - Distance between left and right wheels
 
   # 타이어 계산 (RT 245/35R19)
   # - 단면폭 (Width): 245 mm = 0.245 m
@@ -27,7 +26,9 @@ vehicle:
   # - 휠 직경 (Rim Diameter): 19 inch = 19 * 25.4 mm = 482.6 mm = 0.4826 m
   # - 전체 직경 (Total Diameter): (사이드월 * 2) + 휠 직경 = 654.1 mm (0.6541 m)
   # - 타이어 반지름 (Radius): 654.1 / 2 = 327.05 mm (약 0.327 m)
-  tire_radius: 0.327            # [m] - Effective rolling radius
+  # - 이론적 타이어 반지름 (Unloaded Radius): 약 0.327 m
+  # - 정적 하중 시 타이어 반지름 (Loaded Radius / CarMaker Wheel Z-pos): 0.298 m
+  tire_radius: 0.298            # [m] - Effective rolling radius
 
   # Sensor Extrinsics (Relative to Fr1A / rear bumper center at z=0)
   imu_0:

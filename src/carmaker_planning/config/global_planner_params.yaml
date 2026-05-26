@@ -30,12 +30,12 @@ frames:
 
 # Vehicle geometry and kinematic parameters
 vehicle:
-  width: 1.9       # meters
-  length: 4.635      # meters
-  wheelbase: 3.0   # meters
-  rear_axle_offset: 0.79 # meters (Rear Bumper to Rear Axle)
+  width: 1.89       # meters
+  length: 4.635     # meters
+  wheelbase: 2.97   # meters
+  rear_axle_offset: 0.82 # meters (Rear Bumper to Rear Axle)
   min_turning_radius: 5.5 # meters
-  max_steer_angle_deg: 40.0 # degrees
+  max_steer_angle_deg: 35.0 # degrees
 
   limits:
     max_vel: 10.0     # m/s
