@@ -163,6 +163,10 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     std::vector<cv::Point2f> image_points;
 
     // [Step 3: Forward Projection] 렌즈 왜곡을 반영하여 3D Camera 좌표 -> 2D Image 픽셀 좌표로 투영 (수학적 정방향 연산)
+    // projectPoints:
+    //  1. 정규화 및 theta 도출: cam_points의 X_c, Y_c, Z_c 값을 이용해 입사각을 계산
+    //  2. 왜곡 다항식 대입: 파라미터로 넘겨준 D 행렬(왜곡 계수)을 다항식에 단순 대입하여 왜곡을 적용
+    //  3. Intrinsic 매핑: 파라미터로 넘겨받은 카메라 내부 파라미터 행렬 K(f_x, f_y, c_x, c_y)를 곱해 최종 픽셀 위치를 계산
     if (distortion_model == "equidistant" || distortion_model == "fisheye") {
         cv::fisheye::projectPoints(cam_points, image_points, rvec, tvec, K, D);
     } else {
@@ -222,9 +226,11 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
             double cos_fov_max = std::cos((max_fov_ / 2.0) * M_PI / 180.0); // 설정된 최대 화각 한계선 적용
 
             if (is_blocked || cos_theta < cos_fov_max) {
+                // 시야각을 벗어나거나 차체에 가린 곳은 -1로 맵핑하여 렌더링에서 제외
                 map1_.at<float>(v, u) = -1.0f;
                 map2_.at<float>(v, u) = -1.0f;
             } else {
+                // 정상적인 곳은 역투영된 원본 픽셀 좌표(x, y)를 LUT에 기록
                 map1_.at<float>(v, u) = image_points[idx].x;
                 map2_.at<float>(v, u) = image_points[idx].y;
             }
