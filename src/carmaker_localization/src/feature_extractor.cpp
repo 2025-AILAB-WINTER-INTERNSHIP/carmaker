@@ -10,7 +10,7 @@ FeatureExtractor::FeatureExtractor(const std::string& camera_name)
         veh_x_min_(0.0), veh_x_max_(0.0), veh_y_half_(0.0),
         phys_x_min_(0.0), phys_x_max_(0.0), phys_y_half_(0.0),
         veh_height_(1.605), cam_origin_x_(0.0), cam_origin_y_(0.0),
-        camera_name_(camera_name) {
+        camera_name_(camera_name), vis_initialized_(false) {
 }
 
 void FeatureExtractor::initialize(const std::vector<double>& x_range, const std::vector<double>& y_range,
@@ -36,6 +36,28 @@ void FeatureExtractor::initialize(const std::vector<double>& x_range, const std:
     bev_cfg_.height = std::ceil((bev_cfg_.y_max - bev_cfg_.y_min) / bev_cfg_.resolution);
 
     is_initialized_ = true;
+}
+
+void FeatureExtractor::initializeVisualization(const std::vector<double>& x_range, const std::vector<double>& y_range, double resolution) {
+    if (x_range.size() >= 2) {
+        bev_cfg_vis_.x_min = x_range[0];
+        bev_cfg_vis_.x_max = x_range[1];
+    } else {
+        bev_cfg_vis_.x_min = -20.0; bev_cfg_vis_.x_max = 20.0;
+    }
+
+    if (y_range.size() >= 2) {
+        bev_cfg_vis_.y_min = y_range[0];
+        bev_cfg_vis_.y_max = y_range[1];
+    } else {
+        bev_cfg_vis_.y_min = -20.0; bev_cfg_vis_.y_max = 20.0;
+    }
+
+    bev_cfg_vis_.resolution = resolution;
+    bev_cfg_vis_.width = std::ceil((bev_cfg_vis_.x_max - bev_cfg_vis_.x_min) / bev_cfg_vis_.resolution);
+    bev_cfg_vis_.height = std::ceil((bev_cfg_vis_.y_max - bev_cfg_vis_.y_min) / bev_cfg_vis_.resolution);
+
+    vis_initialized_ = true;
 }
 
 void FeatureExtractor::setExtractionParameters(double r_max, double cov_k, double max_fov) {
@@ -269,6 +291,61 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
         }
     }
 
+    // [Visualization LUT Construction]
+    if (vis_initialized_) {
+        std::vector<cv::Point3f> object_points_vis;
+        cartesian_lut_x_vis_ = cv::Mat(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_32F);
+        cartesian_lut_y_vis_ = cv::Mat(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_32F);
+
+        for (int v = 0; v < bev_cfg_vis_.height; ++v) {
+            for (int u = 0; u < bev_cfg_vis_.width; ++u) {
+                double x = bev_cfg_vis_.x_min + (u + 0.5) * bev_cfg_vis_.resolution;
+                double y = bev_cfg_vis_.y_max - (v + 0.5) * bev_cfg_vis_.resolution;
+                object_points_vis.emplace_back(x, y, 0.0);
+
+                cartesian_lut_x_vis_.at<float>(v, u) = static_cast<float>(x);
+                cartesian_lut_y_vis_.at<float>(v, u) = static_cast<float>(y);
+            }
+        }
+
+        std::vector<cv::Point3f> cam_points_vis;
+        cam_points_vis.reserve(object_points_vis.size());
+        for (const auto& pt : object_points_vis) {
+            double cam_x = R_base_cam.at<double>(0,0)*pt.x + R_base_cam.at<double>(0,1)*pt.y + t_base_cam.at<double>(0,0);
+            double cam_y = R_base_cam.at<double>(1,0)*pt.x + R_base_cam.at<double>(1,1)*pt.y + t_base_cam.at<double>(1,0);
+            double cam_z = R_base_cam.at<double>(2,0)*pt.x + R_base_cam.at<double>(2,1)*pt.y + t_base_cam.at<double>(2,0);
+            cam_points_vis.emplace_back(cam_x, cam_y, cam_z);
+        }
+
+        std::vector<cv::Point2f> image_points_vis;
+        if (distortion_model == "equidistant" || distortion_model == "fisheye") {
+            cv::fisheye::projectPoints(cam_points_vis, image_points_vis, rvec, tvec, K, D);
+        } else {
+            cv::projectPoints(cam_points_vis, rvec, tvec, K, D, image_points_vis);
+        }
+
+        map1_vis_ = cv::Mat(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_32FC1);
+        map2_vis_ = cv::Mat(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_32FC1);
+
+        for (int v = 0; v < bev_cfg_vis_.height; ++v) {
+            for (int u = 0; u < bev_cfg_vis_.width; ++u) {
+                int idx = v * bev_cfg_vis_.width + u;
+
+                double r = cv::norm(cam_points_vis[idx]);
+                double cos_theta = cam_points_vis[idx].z / (r + 1e-6);
+                double cos_fov_max = std::cos((max_fov_ / 2.0) * M_PI / 180.0);
+
+                if (cos_theta < cos_fov_max) {
+                    map1_vis_.at<float>(v, u) = -1.0f;
+                    map2_vis_.at<float>(v, u) = -1.0f;
+                } else {
+                    map1_vis_.at<float>(v, u) = image_points_vis[idx].x;
+                    map2_vis_.at<float>(v, u) = image_points_vis[idx].y;
+                }
+            }
+        }
+    }
+
     lut_initialized_ = true;
 }
 
@@ -452,6 +529,69 @@ std::vector<LocalFeature> FeatureExtractor::process(
     }
 
     return features;
+}
+
+cv::Mat FeatureExtractor::processVisualization(const cv::Mat& seg_img) {
+    cv::Mat out_vis_image;
+    if (!vis_initialized_ || !lut_initialized_) {
+        return out_vis_image;
+    }
+
+    if (image_type_ == "gt") {
+        if (seg_img.channels() == 3) {
+            cv::Mat raw_vis;
+            cv::remap(seg_img, raw_vis, map1_vis_, map2_vis_, cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(255, 255, 255));
+
+            std::vector<cv::Mat> img_channels;
+            cv::split(raw_vis, img_channels);
+
+            cv::Mat is_black_mask = (img_channels[0] == 0) & (img_channels[1] == 0) & (img_channels[2] == 0);
+            cv::Mat is_yellow_mask = (img_channels[0] == 255) & (img_channels[1] == 150) & (img_channels[2] == 0);
+
+            cv::Mat invalid_mask = (map1_vis_ < 0.0f) | (map1_vis_ >= (float)seg_img.cols) |
+                                   (map2_vis_ < 0.0f) | (map2_vis_ >= (float)seg_img.rows);
+
+            is_black_mask.setTo(0, invalid_mask);
+            is_yellow_mask.setTo(0, invalid_mask);
+
+            out_vis_image = cv::Mat::zeros(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_8UC3);
+            out_vis_image.setTo(cv::Scalar(255, 255, 255), is_black_mask); // Lane: White
+            out_vis_image.setTo(cv::Scalar(255, 150, 0), is_yellow_mask);  // Landmark: Yellow
+        }
+    } else if (image_type_ == "raw") {
+        if (seg_img.channels() == 3) {
+            cv::remap(seg_img, out_vis_image, map1_vis_, map2_vis_, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+        } else if (seg_img.channels() == 1) {
+            cv::Mat bev_class;
+            cv::remap(seg_img, bev_class, map1_vis_, map2_vis_, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
+            cv::cvtColor(bev_class, out_vis_image, cv::COLOR_GRAY2RGB);
+        }
+    } else { // segmentation
+        if (seg_img.channels() == 1) {
+            cv::Mat bev_class;
+            cv::remap(seg_img, bev_class, map1_vis_, map2_vis_, cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
+
+            cv::Mat mask = bev_class > 0;
+            cv::Mat class_map = bev_class.clone();
+
+            cv::Mat invalid_mask = (map1_vis_ < 0.0f) | (map1_vis_ >= (float)seg_img.cols) |
+                                   (map2_vis_ < 0.0f) | (map2_vis_ >= (float)seg_img.rows);
+
+            mask.setTo(0, invalid_mask);
+            class_map.setTo(0, invalid_mask);
+
+            cv::Mat val_1_mask = (class_map == 1);
+            cv::Mat val_2_mask = (class_map == 2);
+            cv::Mat val_other_mask = (class_map > 0) & (class_map != 1) & (class_map != 2);
+
+            out_vis_image = cv::Mat::zeros(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_8UC3);
+            out_vis_image.setTo(cv::Scalar(255, 255, 255), val_1_mask);   // Lane: White
+            out_vis_image.setTo(cv::Scalar(255, 76, 76), val_2_mask);     // Landmark: Coral
+            out_vis_image.setTo(cv::Scalar(100, 255, 100), val_other_mask); // Other: Green
+        }
+    }
+
+    return out_vis_image;
 }
 
 } // namespace carmaker_localization

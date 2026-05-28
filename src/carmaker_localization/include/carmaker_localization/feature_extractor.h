@@ -35,6 +35,11 @@ public:
                     const std::string& image_type, double resolution);
 
     /**
+     * @brief Initialize visualization-specific BEV grid configuration
+     */
+    void initializeVisualization(const std::vector<double>& x_range, const std::vector<double>& y_range, double resolution);
+
+    /**
      * @brief Set tuning parameters for feature extraction
      * @param r_max  Maximum valid observation range [m]
      * @param cov_k  Covariance scaling factor
@@ -63,6 +68,11 @@ public:
     std::vector<LocalFeature> process(
         const cv::Mat& seg_img,
         cv::Mat& out_bev_image);
+
+    /**
+     * @brief Process raw/segmentation image for visualization using the visualizer LUT
+     */
+    cv::Mat processVisualization(const cv::Mat& seg_img);
 
     /**
      * @brief Update projection look-up table using intrinsic and extrinsic data
@@ -96,6 +106,12 @@ private:
     double veh_height_;
     double cam_origin_x_, cam_origin_y_;
     cv::Mat footprint_mask_;
+
+    // Visualization member variables
+    BevConfig bev_cfg_vis_;
+    cv::Mat map1_vis_, map2_vis_;
+    cv::Mat cartesian_lut_x_vis_, cartesian_lut_y_vis_;
+    bool vis_initialized_;
 };
 
 } // namespace carmaker_localization

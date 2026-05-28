@@ -27,6 +27,7 @@ public:
     void publishCorrection(const geometry_msgs::PoseWithCovarianceStamped& pose);
     void publishObservation(const std::string& channel_name, const carmaker_msgs::LocalFeatures& features);
     void publishSvmImage(const cv::Mat& svm_image);
+    void publishBevImage(const std::string& camera_name, const cv::Mat& bev_image, const std::string& type);
     void publishMapFeatures(const std::vector<MapFeature>& map_features);
     void clearCorrection();
     void clearEstimation();
@@ -42,6 +43,7 @@ private:
     ros::Publisher estimation_trajectory_pub_;
     ros::Publisher map_features_pub_;
     std::map<std::string, ros::Publisher> observation_pub_map_;
+    std::map<std::string, ros::Publisher> bev_image_pubs_;
 
     nav_msgs::Path estimation_trajectory_;
     geometry_msgs::Pose last_published_pose_;

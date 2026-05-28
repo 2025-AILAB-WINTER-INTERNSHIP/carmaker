@@ -85,6 +85,15 @@ bool LocalizationNodelet::loadParameters() {
             return false;
         }
 
+        std::vector<double> vis_x_range = {-20.0, 20.0};
+        if (pnh.hasParam("feature_extractor/bev_vis/x_range")) {
+            pnh.getParam("feature_extractor/bev_vis/x_range", vis_x_range);
+        }
+        std::vector<double> vis_y_range = {-20.0, 20.0};
+        if (pnh.hasParam("feature_extractor/bev_vis/y_range")) {
+            pnh.getParam("feature_extractor/bev_vis/y_range", vis_y_range);
+        }
+
         channels_.reserve(NUM_CAMERAS);
         ros::NodeHandle& nh = getNodeHandle();
 
@@ -123,6 +132,7 @@ bool LocalizationNodelet::loadParameters() {
 
             ch.extractor = std::make_shared<FeatureExtractor>(ch.name);
             ch.extractor->initialize(x_range, y_range, image_type_, resolution_);
+            ch.extractor->initializeVisualization(vis_x_range, vis_y_range, resolution_);
             ch.extractor->setExtractionParameters(r_max_, cov_k_, ch_max_fov);
 
             // 차량 풋프린트 필터: GT 이미지에서 차량 외곽선(검은 테두리)이 차선으로 오검출되는 것 방지
@@ -597,6 +607,7 @@ void LocalizationNodelet::processImages(
     // 4개 채널 처리를 동시에 병렬 수행하여 Latency 획기적 단축
     std::array<carmaker_msgs::LocalFeatures, NUM_CAMERAS> extracted_features;
     std::array<cv::Mat, NUM_CAMERAS> bev_images;
+    std::array<cv::Mat, NUM_CAMERAS> vis_images;
 
     #pragma omp parallel for schedule(static, 1)
     for (size_t i = 0; i < NUM_CAMERAS; ++i) {
@@ -615,6 +626,7 @@ void LocalizationNodelet::processImages(
         }
 
         std::vector<LocalFeature> local_feats = channels_[i].extractor->process(cv_seg->image, bev_images[i]);
+        vis_images[i] = channels_[i].extractor->processVisualization(cv_seg->image);
 
         carmaker_msgs::LocalFeatures features;
         features.header = imgs[i]->header;
@@ -660,6 +672,10 @@ void LocalizationNodelet::processImages(
             cv::Mat stitched_image;
             cv::flip(transposed, stitched_image, 0);
 
+            if (visualizer_) {
+                visualizer_->publishBevImage(ch.name, stitched_image, "cropped");
+            }
+
             int h = stitched_image.rows;
             int w = stitched_image.cols;
 
@@ -671,6 +687,11 @@ void LocalizationNodelet::processImages(
             } else {
                 ROS_WARN_THROTTLE(1.0, "[SVM DEBUG] %s out of bounds: r_off=%d, c_off=%d, w=%d, h=%d, canvas=%dx%d", ch.name.c_str(), r_off, c_off, w, h, svm_canvas_.cols, svm_canvas_.rows);
             }
+        }
+
+        const cv::Mat& vis_image = vis_images[i];
+        if (!vis_image.empty() && visualizer_) {
+            visualizer_->publishBevImage(ch.name, vis_image, "full");
         }
 
         if (!features.features.empty()) {

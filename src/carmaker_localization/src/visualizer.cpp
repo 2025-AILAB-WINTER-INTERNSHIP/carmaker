@@ -46,6 +46,33 @@ void Visualizer::publishSvmImage(const cv::Mat& svm_image) {
     }
 }
 
+void Visualizer::publishBevImage(const std::string& camera_name, const cv::Mat& bev_image, const std::string& type) {
+    if (bev_image.empty()) return;
+
+    std::string key = type + "_" + camera_name;
+    if (bev_image_pubs_.find(key) == bev_image_pubs_.end()) {
+        ros::NodeHandle pnh("~");
+        std::string prefix = pnh.param("topics/publish/debug/bev_image_prefix", std::string("/localization/debug/bev_image"));
+        std::string topic = prefix + "/" + type + "/" + camera_name;
+        bev_image_pubs_[key] = nh_.advertise<sensor_msgs::Image>(topic, 1);
+    }
+
+    auto& pub = bev_image_pubs_[key];
+    if (pub.getNumSubscribers() > 0) {
+        cv::Mat final_image = bev_image;
+        if (type == "full") {
+            cv::Mat transposed = bev_image.t();
+            cv::flip(transposed, final_image, 0);
+        }
+
+        std_msgs::Header header;
+        header.stamp = ros::Time::now();
+        header.frame_id = prediction_frame_;
+        cv_bridge::CvImage cv_img(header, "rgb8", final_image);
+        pub.publish(cv_img.toImageMsg());
+    }
+}
+
 void Visualizer::publishObservation(const std::string& channel_name, const carmaker_msgs::LocalFeatures& features) {
     if (observation_pub_map_.find(channel_name) == observation_pub_map_.end()) {
         ros::NodeHandle pnh("~");
