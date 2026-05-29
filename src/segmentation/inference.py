@@ -105,8 +105,8 @@ class SegmentationPredictor:
         # class_map은 각 픽셀에서 가장 큰 logit을 가진 class id이다.
         with self.autocast_context():
             logits = self.model(tensor)
-        class_map_t = torch.argmax(logits, dim=1)
-        class_map = class_map_t[0].detach().cpu().numpy().astype(np.uint8)
+        class_map_t = torch.argmax(logits, dim=1).to(torch.uint8)
+        class_map = class_map_t[0].detach().cpu().numpy()
 
         # 모델 입력 크기가 원본 카메라 크기와 다를 수 있으므로 class id를 nearest로 복원한다.
         # bilinear를 쓰면 class id가 섞일 수 있어서 segmentation mask에는 쓰면 안 된다.
@@ -139,13 +139,13 @@ class SegmentationPredictor:
         batch = torch.cat(tensors, dim=0).to(self.device)
         with self.autocast_context():
             logits = self.model(batch)
-        class_maps_t = torch.argmax(logits, dim=1)
+        class_maps_t = torch.argmax(logits, dim=1).to(torch.uint8)
 
         # batch output [B, H, W]를 다시 이미지별 SegmentationResult로 풀어준다.
         # 원본 크기가 모델 입력 크기와 다르면 단일 이미지 경로와 동일하게 nearest로 복원한다.
         results = []
         for class_map_t, (original_h, original_w) in zip(class_maps_t, original_shapes):
-            class_map = class_map_t.detach().cpu().numpy().astype(np.uint8)
+            class_map = class_map_t.detach().cpu().numpy()
             if self.resize_output and (class_map.shape[0] != original_h or class_map.shape[1] != original_w):
                 class_map = cv2.resize(class_map, (original_w, original_h), interpolation=cv2.INTER_NEAREST)
             results.append(
