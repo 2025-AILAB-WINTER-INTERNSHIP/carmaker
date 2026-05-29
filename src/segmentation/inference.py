@@ -194,19 +194,24 @@ def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:
 def extract_model_state(checkpoint: Dict[str, Any]) -> Dict[str, Any]:
     """Return a plain model state dict from repository or Lightning checkpoints."""
     if "model_state" in checkpoint:
-        return checkpoint["model_state"]
+        return clean_model_state(checkpoint["model_state"])
 
     state = checkpoint.get("state_dict")
     if state is None:
-        return checkpoint
+        return clean_model_state(checkpoint)
 
     model_keys = [key for key in state if key.startswith("model.")]
     if model_keys:
-        return {key[6:]: state[key] for key in model_keys}
+        return clean_model_state({key[6:]: state[key] for key in model_keys})
 
+    return clean_model_state(state)
+
+
+def clean_model_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip Lightning/training-only keys before loading the raw segmentation model."""
     return {
         (key[6:] if key.startswith("model.") else key): value
-        for key, value in state.items()
+        for key, value in dict(state).items()
         if not key.startswith("criterion.")
     }
 

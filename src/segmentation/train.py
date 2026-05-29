@@ -542,6 +542,7 @@ class SegmentationLightningModule(L.LightningModule):
             checkpoint["model_state"] = {
                 (k[6:] if k.startswith("model.") else k): v
                 for k, v in state_dict.items()
+                if not k.startswith("criterion.")
             }
         else:
             checkpoint["model_state"] = {}
