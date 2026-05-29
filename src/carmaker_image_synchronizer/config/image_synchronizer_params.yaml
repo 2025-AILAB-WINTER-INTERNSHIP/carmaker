@@ -1,39 +1,38 @@
 # ==============================================================================
-# Image Synchronizer Configuration
+# 4-Channel Image Synchronizer Configuration
 # ==============================================================================
 
 # Core Settings
 settings:
-  channel_num: 4            # Explicitly manage the number of channels
-  master_channel: "front"   # Channel used as the master clock
-  info_timeout_sec: 2.0     # Max age for cached CameraInfo
-  sync_slop_sec: 0.05       # Max time difference between images
-  queue_size: 10            # Message filter queue size
-  use_bundle: true          # Toggle for gathering all images into a single topic
+  master_channel: "front" # Channel used as the master clock
+  info_timeout_sec: 2.0 # Max age for cached CameraInfo
+  sync_slop_sec: 0.05 # Max time difference between images
+  queue_size: 10 # Message filter queue size
+  use_bundle: true # Toggle for gathering all images into a single topic
   bundle_topic: "/synced/bundle" # Topic name for the gathered bundle
 
 # Channel Definition & Mapping
 channels:
   - name: "front"
-    in_img:  "/mono/fisheye/front/image_raw"
+    in_img: "/mono/fisheye/front/image_raw"
     in_info: "/mono/fisheye/front/camera_info"
     out_img: "/synced/front/image"
     out_info: "/synced/front/camera_info"
 
   - name: "rear"
-    in_img:  "/mono/fisheye/rear/image_raw"
+    in_img: "/mono/fisheye/rear/image_raw"
     in_info: "/mono/fisheye/rear/camera_info"
     out_img: "/synced/rear/image"
     out_info: "/synced/rear/camera_info"
 
   - name: "left"
-    in_img:  "/mono/fisheye/left/image_raw"
+    in_img: "/mono/fisheye/left/image_raw"
     in_info: "/mono/fisheye/left/camera_info"
     out_img: "/synced/left/image"
     out_info: "/synced/left/camera_info"
 
   - name: "right"
-    in_img:  "/mono/fisheye/right/image_raw"
+    in_img: "/mono/fisheye/right/image_raw"
     in_info: "/mono/fisheye/right/camera_info"
     out_img: "/synced/right/image"
     out_info: "/synced/right/camera_info"

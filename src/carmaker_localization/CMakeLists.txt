@@ -42,7 +42,11 @@ include_directories(
 
 add_library(carmaker_localization_nodelet
   src/localization_nodelet.cpp
-  src/dummy_impl.cpp
+  src/feature_extractor.cpp
+  src/ekf_core.cpp
+  src/visualizer.cpp
+  src/osm_map_loader.cpp
+  src/icp_matcher.cpp
 )
 target_link_libraries(carmaker_localization_nodelet
   ${catkin_LIBRARIES}

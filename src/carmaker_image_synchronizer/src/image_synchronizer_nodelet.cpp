@@ -9,16 +9,14 @@ void ImageSynchronizerNodelet::onInit() {
     pnh_ = getPrivateNodeHandle();
 
     // 1. Load Settings
-    int expected_channel_num, queue_size;
-    double slop;
     std::string master_name;
 
-    pnh_.param<int>("settings/channel_num", expected_channel_num, 4);
-    pnh_.param<int>("settings/queue_size", queue_size, 10);
-    pnh_.param<double>("settings/sync_slop_sec", slop, 0.05);
-    pnh_.param<double>("settings/info_timeout_sec", info_timeout_, 2.0);
-    pnh_.param<std::string>("settings/master_channel", master_name, "front");
     pnh_.param<bool>("settings/use_bundle", use_bundle_, false);
+    pnh_.param<std::string>("settings/master_channel", master_name, "front");
+    pnh_.param<int>("settings/queue_size", queue_size_, 10);
+    pnh_.param<double>("settings/sync_slop_sec", slop_, 0.05);
+    pnh_.param<double>("settings/info_timeout_sec", info_timeout_, 2.0);
+    pnh_.param<double>("diagnostic_period", diag_period_, 1.0);
 
     if (use_bundle_) {
         std::string bundle_topic = pnh_.param<std::string>("settings/bundle_topic", "/synced/bundle");
@@ -27,8 +25,9 @@ void ImageSynchronizerNodelet::onInit() {
     }
 
     // 2. Setup Diagnostics
-    diagnostic_updater_.setHardwareID("carmaker_image_sync");
-    diagnostic_updater_.add("Synchronization Status", this, &ImageSynchronizerNodelet::produceDiagnostics);
+    diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh_, pnh_);
+    diagnostic_updater_->setHardwareID("carmaker_image_sync");
+    diagnostic_updater_->add("Synchronization Status", this, &ImageSynchronizerNodelet::produceDiagnostics);
 
     // 3. Load Channels from YAML
     XmlRpc::XmlRpcValue channel_list;
@@ -37,24 +36,21 @@ void ImageSynchronizerNodelet::onInit() {
         return;
     }
 
-    // Validation: Check if YAML list size matches expected_channel_num
-    if (static_cast<size_t>(channel_list.size()) != static_cast<size_t>(expected_channel_num)) {
-        NODELET_FATAL("Channel list size (%zu) does not match expected_channel_num (%d).", static_cast<size_t>(channel_list.size()), expected_channel_num);
+    // Validation: Check if YAML list size is exactly 4
+    if (channel_list.size() != 4) {
+        NODELET_FATAL("Channel list size must be exactly 4.");
         return;
     }
 
-    channels_.reserve(channel_list.size());
-    for (int i = 0; i < channel_list.size(); ++i) {
+    for (int i = 0; i < 4; ++i) {
         XmlRpc::XmlRpcValue& entry = channel_list[i];
 
         if (entry.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
-            NODELET_ERROR("Channel entry %d is not a struct. Skipping.", i);
-            continue;
+            NODELET_FATAL("Channel entry %d is not a struct.", i);
+            return;
         }
 
-        // Create the channel in the vector first to avoid unnecessary moves and ensure stable memory
-        channels_.emplace_back();
-        auto& ch = channels_.back();
+        auto& ch = channels_[i];
 
         ch.name = static_cast<std::string>(entry["name"]);
         std::string in_img  = static_cast<std::string>(entry["in_img"]);
@@ -63,7 +59,7 @@ void ImageSynchronizerNodelet::onInit() {
         std::string out_info = static_cast<std::string>(entry["out_info"]);
 
         // Setup message_filters Subscriber & Diagnostic Counter
-        ch.sub = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh_, in_img, queue_size);
+        ch.sub = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh_, in_img, queue_size_);
         ch.sub->registerCallback(boost::bind(&ImageSynchronizerNodelet::imageRawCallback, this, _1, i));
 
         ch.info_sub = nh_.subscribe<sensor_msgs::CameraInfo>(in_info, 1,
@@ -83,30 +79,21 @@ void ImageSynchronizerNodelet::onInit() {
         NODELET_INFO("Configured Channel [%s]: %s -> %s", ch.name.c_str(), in_img.c_str(), out_img.c_str());
     }
 
-    // 4. Setup Synchronizer (Currently fixed to 4 inputs for SyncPolicy compatibility)
-    if (channels_.size() != 4) {
-        NODELET_ERROR("Current SyncPolicy only supports 4 channels. Detected %zu. Synchronization might fail.", channels_.size());
-    }
-
+    // 4. Setup Synchronizer
     sync_ = std::make_unique<message_filters::Synchronizer<SyncPolicy>>(
-        SyncPolicy(queue_size),
+        SyncPolicy(queue_size_),
         *channels_[0].sub, *channels_[1].sub, *channels_[2].sub, *channels_[3].sub
     );
-    sync_->setInterMessageLowerBound(ros::Duration(slop));
+    sync_->setInterMessageLowerBound(ros::Duration(slop_));
     sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
 
-    // 5. Setup Diagnostics Timer (1Hz) to ensure diagnostics are sent even if sync stalls
-    diag_timer_ = nh_.createTimer(ros::Duration(1.0), &ImageSynchronizerNodelet::timerCallback, this);
+    // 5. Setup Diagnostics Timer (diag_period_) using WallTimer to ensure diagnostics are sent even if sync/ROS time stalls
+    diag_timer_ = nh_.createWallTimer(ros::WallDuration(diag_period_), &ImageSynchronizerNodelet::timerCallback, this);
 
     NODELET_INFO("Image Synchronizer with Diagnostics Started. Master: [%s]", channels_[master_index_].name.c_str());
 }
 
-void ImageSynchronizerNodelet::timerCallback(const ros::TimerEvent& event) {
-    diagnostic_updater_.update();
-}
-
 void ImageSynchronizerNodelet::imageRawCallback(const sensor_msgs::ImageConstPtr& msg, size_t index) {
-    // Lock-free increment using std::atomic
     channels_[index].received_count++;
 }
 
@@ -115,6 +102,75 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
                                             const sensor_msgs::ImageConstPtr& left,
                                             const sensor_msgs::ImageConstPtr& right) {
     const std::array<sensor_msgs::ImageConstPtr, 4> images = {front, rear, left, right};
+    processSyncedImages(images);
+}
+
+void ImageSynchronizerNodelet::timerCallback(const ros::WallTimerEvent& event) {
+    // Detect time jump from the timer path (extremely useful if time jumps but no messages are published yet)
+    ros::Time now = ros::Time::now();
+    if (!now.isZero() && !last_timer_time_.isZero()) {
+        double diff = (now - last_timer_time_).toSec();
+        if (diff < -1.0 || diff > 5.0) {
+            NODELET_WARN("[Time Jump Detected in Timer] Diff: %.2f sec. Resetting pipeline...", diff);
+            resetSynchronizer();
+        }
+    }
+    last_timer_time_ = now;
+
+    diagnostic_updater_->update();
+}
+
+void ImageSynchronizerNodelet::resetSynchronizer() {
+    NODELET_INFO("Resetting message_filters Synchronizer queue...");
+
+    // 1. Re-instantiate message_filters::Synchronizer
+    sync_.reset(new message_filters::Synchronizer<SyncPolicy>(
+        SyncPolicy(queue_size_),
+        *channels_[0].sub, *channels_[1].sub, *channels_[2].sub, *channels_[3].sub
+    ));
+    sync_->setInterMessageLowerBound(ros::Duration(slop_));
+    sync_->registerCallback(boost::bind(&ImageSynchronizerNodelet::syncCallback, this, _1, _2, _3, _4));
+
+    // 2. CameraInfo cache time re-anchoring to avoid false stale detection
+    {
+        std::lock_guard<std::mutex> lock(info_mutex_);
+        ros::Time now = ros::Time::now();
+        for (auto& ch : channels_) {
+            if (ch.has_info) {
+                ch.last_info_time = now;
+            }
+        }
+    }
+
+    // 3. Clear stats/counts
+    total_synced_count_ = 0;
+    for (auto& ch : channels_) {
+        ch.received_count = 0;
+    }
+
+    // 4. Force diagnostic update immediately
+    diagnostic_updater_->force_update();
+}
+
+
+
+bool ImageSynchronizerNodelet::getValidCameraInfo(size_t index, const ros::Time& sync_time, sensor_msgs::CameraInfo& out_info) {
+    std::lock_guard<std::mutex> lock(info_mutex_);
+    auto& ch = channels_[index];
+
+    if (ch.has_info) {
+        if ((ros::Time::now() - ch.last_info_time).toSec() < info_timeout_) {
+            out_info = ch.last_info;
+            out_info.header.stamp = sync_time;
+            return true;
+        } else {
+            NODELET_WARN_THROTTLE(10.0, "[%s] CameraInfo stale (>%.1fs).", ch.name.c_str(), info_timeout_);
+        }
+    }
+    return false;
+}
+
+void ImageSynchronizerNodelet::processSyncedImages(const std::array<sensor_msgs::ImageConstPtr, 4>& images) {
     const ros::Time& sync_time = images[master_index_]->header.stamp;
 
     // Atomic increment
@@ -122,7 +178,7 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
 
     {
         std::lock_guard<std::mutex> lock(status_mutex_);
-        for (size_t i = 0; i < images.size(); ++i) {
+        for (size_t i = 0; i < 4; ++i) {
             channels_[i].last_slop = (images[i]->header.stamp - sync_time).toSec();
         }
     }
@@ -132,38 +188,47 @@ void ImageSynchronizerNodelet::syncCallback(const sensor_msgs::ImageConstPtr& fr
         carmaker_msgs::CameraBundle bundle;
         bundle.header.stamp = sync_time;
         bundle.header.frame_id = images[master_index_]->header.frame_id;
-        bundle.names.reserve(images.size());
-        bundle.images.reserve(images.size());
-        bundle.infos.reserve(images.size());
+        bundle.names.reserve(4);
+        bundle.images.reserve(4);
+        bundle.infos.reserve(4);
 
-        for (size_t i = 0; i < images.size(); ++i) {
+        for (size_t i = 0; i < 4; ++i) {
             // Add Name
             bundle.names.push_back(channels_[i].name);
 
             // Add Image
-            auto synced_img = boost::make_shared<sensor_msgs::Image>(*images[i]);
-            synced_img->header.stamp = sync_time;
-            bundle.images.push_back(*synced_img);
+            sensor_msgs::Image synced_img = *images[i];
+            synced_img.header.stamp = sync_time;
+            bundle.images.push_back(std::move(synced_img));
 
             // Add CameraInfo
-            std::lock_guard<std::mutex> lock(info_mutex_);
-            if (channels_[i].has_info && (ros::Time::now() - channels_[i].last_info_time).toSec() < info_timeout_) {
-                auto info = channels_[i].last_info;
-                info.header.stamp = sync_time;
-                bundle.infos.push_back(info);
+            sensor_msgs::CameraInfo info;
+            if (getValidCameraInfo(i, sync_time, info)) {
+                bundle.infos.push_back(std::move(info));
             } else {
-                bundle.infos.emplace_back(); // Empty if missing or stale
-                if (channels_[i].has_info) {
-                    NODELET_WARN_THROTTLE(10.0, "[%s] CameraInfo stale (>%.1fs), bundling empty info.", channels_[i].name.c_str(), info_timeout_);
-                }
+                bundle.infos.emplace_back();
             }
         }
         bundle_pub_.publish(bundle);
     } else {
         // Publish individual topics as before
-        for (size_t i = 0; i < images.size(); ++i) {
+        for (size_t i = 0; i < 4; ++i) {
             publishWithSync(i, images[i], sync_time);
         }
+    }
+}
+
+void ImageSynchronizerNodelet::publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time) {
+    auto& ch = channels_[index];
+
+    // Deep copy for timestamp modification
+    auto synced_img = boost::make_shared<sensor_msgs::Image>(*img);
+    synced_img->header.stamp = sync_time;
+    ch.img_pub.publish(synced_img);
+
+    sensor_msgs::CameraInfo info;
+    if (getValidCameraInfo(index, sync_time, info)) {
+        ch.info_pub.publish(info);
     }
 }
 
@@ -198,28 +263,6 @@ void ImageSynchronizerNodelet::produceDiagnostics(diagnostic_updater::Diagnostic
                 stat.mergeSummary(diagnostic_updater::DiagnosticStatusWrapper::WARN, "Missing CameraInfo on " + ch.name);
             } else if ((ros::Time::now() - ch.last_info_time).toSec() > info_timeout_) {
                 stat.mergeSummary(diagnostic_updater::DiagnosticStatusWrapper::ERROR, "Stale CameraInfo on " + ch.name);
-            }
-        }
-    }
-}
-
-void ImageSynchronizerNodelet::publishWithSync(size_t index, const sensor_msgs::ImageConstPtr& img, const ros::Time& sync_time) {
-    auto& ch = channels_[index];
-
-    // Deep copy for timestamp modification
-    auto synced_img = boost::make_shared<sensor_msgs::Image>(*img);
-    synced_img->header.stamp = sync_time;
-    ch.img_pub.publish(synced_img);
-
-    {
-        std::lock_guard<std::mutex> lock(info_mutex_);
-        if (ch.has_info) {
-            if ((ros::Time::now() - ch.last_info_time).toSec() < info_timeout_) {
-                auto info = ch.last_info;
-                info.header.stamp = sync_time;
-                ch.info_pub.publish(info);
-            } else {
-                NODELET_WARN_THROTTLE(10.0, "[%s] CameraInfo stale (>%.1fs).", ch.name.c_str(), info_timeout_);
             }
         }
     }

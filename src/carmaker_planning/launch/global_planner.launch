@@ -1,0 +1,23 @@
+<launch>
+  <!-- Arguments -->
+  <arg name="use_sim_time" default="false" />
+  <arg name="rviz" default="true" />
+
+  <!-- Global parameter -->
+  <param name="use_sim_time" value="$(arg use_sim_time)" />
+
+  <!-- Static TF Publisher: map -> Fr0 -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="map_to_fr0" args="0 0 0 0 0 0 map Fr0" />
+
+  <!-- Nodelet Manager -->
+  <node pkg="nodelet" type="nodelet" name="planning_manager" args="manager" output="screen" />
+
+  <!-- carmaker_planning Nodelet -->
+  <node pkg="nodelet" type="nodelet" name="GlobalPlannerNodelet" args="load carmaker_planning/GlobalPlannerNodelet planning_manager" output="screen">
+    <!-- Load Parameters -->
+    <rosparam command="load" file="$(find carmaker_planning)/config/global_planner_params.yaml" />
+  </node>
+
+  <!-- RViz Visualizer -->
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find carmaker_planning)/config/global_planner.rviz" required="false" if="$(arg rviz)" />
+</launch>

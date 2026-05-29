@@ -1,0 +1,103 @@
+services:
+  get_map: "/localization/get_map"
+
+topics:
+  publish:
+    trajectory: "/planning/trajectory"
+    debug:
+      map: "/planning/debug/occupancy_grid"
+      path: "/planning/debug/global_path"
+      tree: "/planning/debug/search_tree"
+      velocity: "/planning/debug/velocity_profile"
+  subscribe:
+    goal: "/planning/goal"
+    dynamics: "/carmaker/dynamic_info"
+
+setting:
+  # use_gt_pose: true        → /carmaker/dynamic_info topic (Simulator GT)
+  # use_manual_pose: true    → /planning/start topic (manual input for testing)
+  # (both false)             → TF lookup (Fr0 → Fr1A_pred, actual deployment EKF)
+
+  use_gt_pose: false # Set to true to use GT pose, false to use EKF pose from TF
+  use_manual_pose:
+    enabled: true    # Set to true for offline testing (no simulator). Overrides TF lookup.
+    topic: "/planning/start"  # geometry_msgs/PoseWithCovarianceStamped — publish via RViz "2D Pose Estimate" tool
+
+# Frame configurations matching carmaker_localization
+frames:
+  global: "Fr0"
+  ego: "Fr1A_pred"   # Use "base_footprint" for GT frame, "Fr1A_pred" for EKF prediction frame
+
+# Vehicle geometry and kinematic parameters
+vehicle:
+  width: 1.89       # meters
+  length: 4.635     # meters
+  wheelbase: 2.97   # meters
+  rear_axle_offset: 0.82 # meters (Rear Bumper to Rear Axle)
+  min_turning_radius: 5.5 # meters
+  max_steer_angle_deg: 35.0 # degrees
+
+  limits:
+    max_vel: 10.0     # m/s
+    max_acc: 3.0      # m/s^2
+    max_decel: 3.0    # m/s^2
+    max_jerk: 2.0     # m/s^3
+    max_lat_acc: 1.5  # m/s^2
+
+  collision_circles:
+    offsets: [0.0, 1.5, 3.0]
+    radii:   [1.1, 1.1, 1.1]
+
+# Costmap representation parameters
+global_costmap:
+  grid_map:
+    lethal_threshold: 50
+    occupancy_value: 100
+    unknown_cost_free: true
+    unknown_value: -1
+
+# Hybrid A* planner search parameters
+global_planner:
+  max_iterations: 500000
+  max_planning_time: 5.0
+  xy_resolution: 0.05
+  theta_resolution_deg: 5.0
+  goal_tolerance_xy: 0.5
+  goal_tolerance_theta_deg: 5.0
+  heuristic_scale: 2
+  step_size: 0.5
+  next_node_num: 7
+  analytic_expansion_ratio: 10 # Check Reeds-Shepp shot every 10 iterations
+  weights:
+    turn: 2.0
+    reverse: 5.0      # Enable reverse paths by lowering penalty
+    change_dir: 15.0   # Direction transition penalty
+    heuristic: 1.0
+
+# Post processing pipeline parameters
+global_post_processing:
+  smoother:
+    # [수식적 배경]
+    # Gradient Descent 기반의 경로 평활화(Smoothing) 업데이트 식은 다음과 같습니다:
+    #   x_i <- x_i + w_data * (x_orig_i - x_i) + w_smooth * (x_{i+1} + x_{i-1} - 2*x_i)
+    #   x_i <- (1 - w_data - 2*w_smooth)*x_i + w_data*x_orig_i + w_smooth*(x_{i+1} + x_{i-1})
+    # 이 이산선형 시스템이 안정적으로 수렴(Convergence)하기 위해서는 Von Neumann stability analysis 및
+    # 대각 지배(Diagonal Dominance) 조건에 의해 다음 제약 조건을 만족해야 합니다:
+    #   1. 감쇠 진동이 없는 양의 감쇠 조건 (대각 성분 양수): 1 - w_data - 2*w_smooth > 0  =>  w_data + 2*w_smooth < 1.0
+    #   2. 최악 주파수(Nyquist limit) 성분의 발산 방지: w_data + 4*w_smooth < 2.0
+    # 기존 설정값(w_data = 0.5, w_smooth = 0.6)은 w_data + 2*w_smooth = 1.7 >= 1.0 이 되어 수치적으로 발산하고,
+    # 최적화 반복 과정에서 경로가 심하게 흔들리는(Oscillation) 현상을 유발했습니다.
+    # 따라서 수렴 조건을 안전하게 만족하는 weight_data: 0.2, weight_smooth: 0.35 (합: 0.9 < 1.0)를 적용합니다.
+    weight_data: 0.2
+    weight_smooth: 0.35
+    tolerance: 0.001
+    max_iterations: 500
+  resampler:
+    resolution: 0.1
+  profiler:
+    max_vel: 2.0      # m/s 7.2 km/h
+    max_acc: 0.8      # m/s^2
+    max_dec: 0.8      # m/s^2
+    max_jerk: 1.5     # m/s^3
+    max_lat_acc: 0.8  # m/s^2
+    goal_vel: 0.0

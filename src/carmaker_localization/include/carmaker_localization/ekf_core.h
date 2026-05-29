@@ -1,23 +1,30 @@
 #ifndef CARMAKER_LOCALIZATION_EKF_CORE_H
 #define CARMAKER_LOCALIZATION_EKF_CORE_H
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
-#include <ros/ros.h>
-#include "carmaker_localization/state_buffer.h"
+#include <Eigen/Dense>
+#include <vector>
+#include <mutex>
 
 namespace carmaker_localization {
 
 /**
- * @brief State Index for 11-state 2D EKF
- * x = [x, y, psi, vx, vy, psidot, bax, bay, bgz, delta, sw]^T
+ * @brief 11-Dimensional Full State EKF for Vehicle Localization
+ * State Vector [11x1]: [x, y, vx, vy, ax, ay, yaw, yaw_rate, b_ax, b_ay, b_yaw_rate]
  */
 enum StateIdx {
-    X = 0, Y = 1, PSI = 2,
-    VX = 3, VY = 4, PSIDOT = 5,
-    BAX = 6, BAY = 7, BGZ = 8,
-    DELTA = 9, SW = 10,
-    STATE_DIM = 11
+    X = 0, Y,          // Position (Global Frame)
+    VX, VY,            // Velocity (Vehicle Frame)
+    AX, AY,            // Acceleration (Vehicle Frame)
+    YAW, YAW_RATE,     // Heading & Turn Rate (Global/Vehicle Frame)
+    B_AX, B_AY,        // IMU Acceleration Bias
+    B_YAW_RATE,        // IMU Gyro Bias
+    STATE_DIM
+};
+
+struct StateFrame {
+    double timestamp;
+    Eigen::VectorXd x;
+    Eigen::MatrixXd P;
 };
 
 class EkfCore {
@@ -25,40 +32,36 @@ public:
     EkfCore();
     ~EkfCore() = default;
 
-    void init(const Eigen::Matrix<double, STATE_DIM, 1>& x0,
-              const Eigen::Matrix<double, STATE_DIM, STATE_DIM>& P0);
-
-    /**
-     * @brief Prediction step using IMU and Wheel Odometry
-     * @param dt Time step
-     * @param u Input [ax, ay, wz, v_rl, v_rr, steer]
-     */
-    void predict(double dt, const Eigen::Matrix<double, 6, 1>& u);
-
-    /**
-     * @brief Update step using Absolute Pose from MapMatcher
-     */
-    void updateVision(double timestamp,
-                      const Eigen::Vector3d& z,
-                      const Eigen::Matrix3d& R);
-
-    // Getters
-    Eigen::Matrix<double, STATE_DIM, 1> getState() const { return x_; }
-    Eigen::Matrix<double, STATE_DIM, STATE_DIM> getCovariance() const { return P_; }
-    double getTimestamp() const { return last_time_; }
-
-private:
-    Eigen::Matrix<double, STATE_DIM, 1> x_;
-    Eigen::Matrix<double, STATE_DIM, STATE_DIM> P_;
-    Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q_;
-
-    double last_time_;
-    StateBuffer buffer_;
+    // Initialization
+    void initialize(double x, double y, double yaw, double timestamp, double vx = 0.0, double vy = 0.0);
+    bool isInitialized() const { return is_initialized_; }
 
     // Parameters
-    double imu_acc_std_;
-    double imu_gyro_std_;
-    double wheel_speed_std_;
+    void setProcessNoise(const Eigen::MatrixXd& Q);
+
+    // EKF Core Cycle
+    void prediction(double timestamp);
+
+    // Multi-Sensor Corrections
+    void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp);
+    void correctVelocity(double vx, double vy, const Eigen::Matrix2d& R, double timestamp);
+    void correctImu(double ax, double ay, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
+
+    // Getters
+    StateFrame getState() const;
+
+private:
+    void handleTimeJump(double timestamp);
+
+    // State
+    Eigen::VectorXd x_; // [11x1]
+    Eigen::MatrixXd P_; // [11x11]
+    Eigen::MatrixXd Q_; // Process Noise [11x11]
+
+    // Timing & History
+    double last_time_;
+    bool is_initialized_;
+    mutable std::mutex mutex_;
 };
 
 } // namespace carmaker_localization

@@ -5,6 +5,7 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   std_msgs
   sensor_msgs
+  geometry_msgs
 )
 
 add_message_files(
@@ -18,12 +19,15 @@ add_message_files(
   Objects.msg
   UAQ_Out.msg
   CameraBundle.msg
+  TrajectoryPoint.msg
+  TrajectoryPath.msg
 )
 
 generate_messages(
   DEPENDENCIES
   std_msgs
   sensor_msgs
+  geometry_msgs
 )
 
 catkin_package(
@@ -31,4 +35,5 @@ catkin_package(
   message_runtime
   std_msgs
   sensor_msgs
+  geometry_msgs
 )
