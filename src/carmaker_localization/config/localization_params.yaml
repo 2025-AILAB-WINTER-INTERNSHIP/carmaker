@@ -20,7 +20,7 @@ topics:
   subscribe:
     dynamics: "/carmaker/dynamic_info"
     use_bundle: true
-    bundle: "/synced/bundle"
+    bundle: "/segmentation/class_map_bundle"
     channels:
       - name: front
         frame: front_optical
@@ -55,7 +55,7 @@ topics:
         max_fov: 210.0
 
 setting:
-  image_type: "gt" # "gt" or "segmentation" or "raw"
+  image_type: "segmentation" # "gt" or "segmentation" or "raw"
 
 frames:
   global: "Fr0"
@@ -65,45 +65,45 @@ feature_extractor:
   fusion: true # True : 개별 채널별 특징점 융합 후 매칭 수행, False : 개별 채널 별 매칭 수행
 
   bev:
-    resolution: 0.05  # [m/pixel]
+    resolution: 0.05 # [m/pixel]
 
   bev_vis:
     x_range: [-20.0, 20.0]
     y_range: [-20.0, 20.0]
 
   extraction:
-    r_max: 15.0         # 특징점 최대 감지 거리 [m]
-    covariance_k: 1.0   # 방사 방향 공분산 스케일 계수
+    r_max: 15.0 # 특징점 최대 감지 거리 [m]
+    covariance_k: 1.0 # 방사 방향 공분산 스케일 계수
 
 svm:
-  seam_front_offset: -2.3175    # -Length/2 = -2.3175 (Geometric Center)
-  seam_rear_offset: 2.3175      # Length/2 = 2.3175 (Geometric Center)
-  seam_slope_front: 0.409924    # Width / Length = 1.9 / 4.635 = 0.409924 (Diagonal Slope)
-  seam_slope_rear: 0.409924     # Width / Length = 1.9 / 4.635 = 0.409924 (Diagonal Slope)
+  seam_front_offset: -2.3175 # -Length/2 = -2.3175 (Geometric Center)
+  seam_rear_offset: 2.3175 # Length/2 = 2.3175 (Geometric Center)
+  seam_slope_front: 0.409924 # Width / Length = 1.9 / 4.635 = 0.409924 (Diagonal Slope)
+  seam_slope_rear: 0.409924 # Width / Length = 1.9 / 4.635 = 0.409924 (Diagonal Slope)
   footprint_margin: 0.15
 
 ekf:
-  dimension: 2                  # 2D (추후 3D 전환 시 3으로 변경)
-  frequency: 100.0              # ekf state 업데이트 주기 [Hz]
+  dimension: 2 # 2D (추후 3D 전환 시 3으로 변경)
+  frequency: 100.0 # ekf state 업데이트 주기 [Hz]
 
   # initial_state: [0.0, 0.0, 0.0]  # 초기 상태 설정: [x(m), y(m), yaw(deg)]. GT 사용 시 주석 처리
 
   imu:
-    imu_id: 0                   # 0 또는 1 선택 (0: 차량 중심, 1: 차량 앞 바퀴 축)
-    acc_std: 0.1                # acc_std : 가속도 노이즈 [m/s^2]
-    gyro_std: 0.01              # gyro_std : 자이로 노이즈 [rad/s]
+    imu_id: 0 # 0 또는 1 선택 (0: 차량 중심, 1: 차량 앞 바퀴 축)
+    acc_std: 0.1 # acc_std : 가속도 노이즈 [m/s^2]
+    gyro_std: 0.01 # gyro_std : 자이로 노이즈 [rad/s]
   wheel_noise:
-    speed_std: 0.05             # speed_std : encoder 노이즈 [m/s]
-    slip_threshold: 0.5         # slip_threshold : 휠 슬립 임계값 [%]
+    speed_std: 0.05 # speed_std : encoder 노이즈 [m/s]
+    slip_threshold: 0.5 # slip_threshold : 휠 슬립 임계값 [%]
   vision_noise:
-    base_std: 0.1               # vision_noise : vision 노이즈 [m]
-  divergence_threshold: 100.0   # divergence_threshold : 필터 발산 판정 임계값 (Trace(P))
+    base_std: 0.1 # vision_noise : vision 노이즈 [m]
+  divergence_threshold: 100.0 # divergence_threshold : 필터 발산 판정 임계값 (Trace(P))
 
 map_matcher:
-  enable: false                 # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
-  type: "icp"                   # "icp" | 추후 "ndt", "point_to_line" 추가
-  map_format: "osm"             # "osm" | 추후 "lanelet2", "pcd" 추가
-  map_file: ""                  # launch argument로 지정
-  search_radius: -1.0           # 지도 조회 반경 [m] (음수 설정 시 전체 맵 피처 사용 - 위치 유실 및 소형 맵 복구용)
-  fitness_threshold: 0.35       # 매칭 유효 판정 임계값
-  max_iterations: 50            # ICP 반복 횟수
+  enable: false # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
+  type: "icp" # "icp" | 추후 "ndt", "point_to_line" 추가
+  map_format: "osm" # "osm" | 추후 "lanelet2", "pcd" 추가
+  map_file: "" # launch argument로 지정
+  search_radius: -1.0 # 지도 조회 반경 [m] (음수 설정 시 전체 맵 피처 사용 - 위치 유실 및 소형 맵 복구용)
+  fitness_threshold: 0.35 # 매칭 유효 판정 임계값
+  max_iterations: 50 # ICP 반복 횟수
