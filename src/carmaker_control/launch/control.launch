@@ -1,0 +1,16 @@
+<launch>
+  <!-- Ubuntu ROS PC에서 실행할 때 사용할 기본 launch 파일. -->
+  <arg name="use_sim_time" default="false" />
+  <arg name="params" default="$(find carmaker_control)/config/control_params.yaml" />
+  <arg name="output" default="screen" />
+
+  <param name="use_sim_time" value="$(arg use_sim_time)" />
+
+  <!-- control_params.yaml 안의 토픽/게인/기어 설정을 private namespace로 로드한다. -->
+  <node pkg="carmaker_control"
+        type="carmaker_control_node"
+        name="carmaker_control_node"
+        output="$(arg output)">
+    <rosparam command="load" file="$(arg params)" />
+  </node>
+</launch>

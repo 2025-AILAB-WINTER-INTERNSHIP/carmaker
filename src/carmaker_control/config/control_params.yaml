@@ -1,0 +1,77 @@
+topics:
+  subscribe:
+    trajectory: "/planning/trajectory"
+    odom: "/localization/odom"
+  publish:
+    control: "/carmaker/control_signal"
+
+setting:
+  # 경로가 없거나 localization/planning 입력이 끊기면 neutral + brake 명령을 유지한다.
+  publish_stop_without_path: true
+
+control:
+  rate: 30.0
+  # localization odometry가 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
+  odom_timeout: 0.5
+  trajectory_timeout: 30.0
+
+  # /planning/trajectory의 longitudinal_velocity 부호로 전진/후진 segment를 나눈다.
+  # 이 값보다 작은 속도는 정지점으로 보고 이전 direction에 붙인다.
+  direction_velocity_epsilon: 0.02
+
+  # segment 중간에서 target velocity가 0인 점을 만나도 멈춰 서지 않게 하는 최소 추종 속도.
+  # segment 끝점 근처에서는 이 값을 적용하지 않아 정지/기어 전환이 가능하다.
+  min_tracking_speed: 0.2
+  max_target_speed: 2.0
+
+  # nearest point 기준으로 일정 거리 앞의 point에서 target speed를 읽는다.
+  # 실제 lookahead = lookahead_distance + lookahead_time * current_speed 이며 min/max로 제한된다.
+  lookahead_distance: 0.8
+  lookahead_time: 0.4
+  min_lookahead_distance: 0.4
+  max_lookahead_distance: 3.0
+
+  # nearest index가 경로 위에서 크게 튀지 않도록 이전 index 주변만 검색한다.
+  nearest_search_back: 20
+  nearest_search_ahead: 120
+
+  # segment 완료 판정. 끝 index 근처이면서 끝점 위치와도 가까워야 다음 gear segment로 넘어간다.
+  segment_finish_distance: 0.5
+  segment_finish_index_margin: 3
+
+  # 전진/후진 segment 전환 전 차량 속도가 이 값 이하가 될 때까지 brake를 유지한다.
+  gear_switch_speed: 0.08
+
+  # PID 출력 가속도 명령을 gas/brake/accel 필드로 변환할 때 쓰는 한계값.
+  max_accel: 2.0
+  max_decel: 2.5
+  max_gas: 0.7
+  max_brake: 1.0
+  stop_brake: 0.4
+
+  drive_gear: 1
+  neutral_gear: 0
+  reverse_gear: -1
+
+pid:
+  speed:
+    kp: 1.0
+    ki: 0.0
+    kd: 0.05
+
+stanley:
+  # Stanley 조향 파라미터. max_steer_angle_deg는 타이어 조향각 기준이다.
+  # 후진에서는 조향 효과가 반대로 나타나므로 내부에서 부호를 뒤집고,
+  # reverse_steering_scale로 후진 조향 민감도를 별도로 조절할 수 있다.
+  k: 1.0
+  k_soft: 0.3
+  cte_gain: 1.0
+  heading_gain: 1.0
+  max_steer_angle_deg: 35.0
+  reverse_steering_scale: 1.0
+
+vehicle:
+  # Stanley는 타이어 조향각을 계산한다.
+  # CarMaker 입력이 steering wheel angle이면 steering_ratio를 키우거나 max_steer_command를 조정한다.
+  steering_ratio: 1.0
+  max_steer_command: 0.6109
