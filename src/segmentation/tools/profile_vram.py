@@ -95,6 +95,14 @@ def profile_single_case(
             if loss_fn is not None:
                 loss_fn = loss_fn.bfloat16()
 
+        try:
+            model = torch.compile(model, options={"triton.cudagraphs": False})
+        except Exception:
+            try:
+                model = torch.compile(model)
+            except Exception as e:
+                pass
+
         torch.cuda.synchronize()
         model_weights_mb = _to_mb(torch.cuda.memory_allocated())
 
@@ -300,6 +308,9 @@ def print_case_report(
         print("-" * 50)
         return
 
+    median_latency = summary['latency_ms_median']
+    per_image_latency = median_latency / batch_size
+
     print(
         f"  - Trials (success/total): {summary['num_success']}/{summary['num_trials']}"
     )
@@ -319,10 +330,16 @@ def print_case_report(
         f"{summary['peak_reserved_mb_max']:.2f} MB"
     )
     print(
-        "  - Inference Latency (median/min/max): "
-        f"{summary['latency_ms_median']:.2f} / "
+        "  - Inference Latency (Batch median/min/max): "
+        f"{median_latency:.2f} / "
         f"{summary['latency_ms_min']:.2f} / "
         f"{summary['latency_ms_max']:.2f} ms"
+    )
+    print(
+        "  - Inference Latency (Per Image median/min/max): "
+        f"{per_image_latency:.2f} / "
+        f"{summary['latency_ms_min']/batch_size:.2f} / "
+        f"{summary['latency_ms_max']/batch_size:.2f} ms"
     )
     print(
         "  - Throughput (median/min/max): "
@@ -415,19 +432,21 @@ if __name__ == "__main__":
             summary = summarize_case(trials)
             results.append((label, b, f"{w}x{h}", summary))
 
-        print("\n" + "=" * 80)
+        print("\n" + "=" * 90)
         print(f"Concat Comparison Summary (Precision: {args.precision.upper()}, Loss: {args.loss.upper()})")
-        print("=" * 80)
-        print(f"{'Configuration':<25} | {'Batch':<5} | {'Resolution':<12} | {'Peak VRAM (MB)':<15} | {'Latency (ms)':<12} | {'Throughput (FPS)*':<17}")
-        print("-" * 80)
+        print("=" * 90)
+        print(f"{'Configuration':<25} | {'Batch':<5} | {'Resolution':<12} | {'Peak VRAM(MB)':<13} | {'Batch Lat.(ms)':<14} | {'Img Lat.(ms)':<12} | {'Throughput(FPS)':<15}")
+        print("-" * 90)
         for label, b, res, summary in results:
             if summary.get("ok"):
                 vram_str = f"{summary['peak_allocated_mb_median']:.2f}"
                 lat_str = f"{summary['latency_ms_median']:.2f}"
-                # For concat cases, batch size is 1, but it processes 4 images worth of pixels,
-                # so to compare throughput fairly, scale it by 4 (equivalent 720x480 images processed).
+                
+                effective_batch = 4 if "Concat" in label else b
+                img_lat_str = f"{(summary['latency_ms_median'] / effective_batch):.2f}"
+                
                 fps_val = summary['fps_median']
-                if b == 1:
+                if b == 1 and "Concat" in label:
                     fps_val *= 4
                 fps_str = f"{fps_val:.2f}"
             else:
@@ -435,9 +454,10 @@ if __name__ == "__main__":
                 is_oom = any("OutOfMemory" in str(e) or "OOM" in str(e) for e in errors)
                 vram_str = "OOM" if is_oom else "FAILED"
                 lat_str = "N/A"
+                img_lat_str = "N/A"
                 fps_str = "N/A"
-            print(f"{label:<25} | {b:<5} | {res:<12} | {vram_str:>15} | {lat_str:>12} | {fps_str:>17}")
-        print("=" * 80)
+            print(f"{label:<25} | {b:<5} | {res:<12} | {vram_str:>13} | {lat_str:>14} | {img_lat_str:>12} | {fps_str:>15}")
+        print("=" * 90)
         print("* Throughput (FPS) for Concat cases is calculated as equivalent 720x480 frames processed per second (i.e. Batch 1 FPS * 4).")
         
         has_failures = any(not s.get("ok") for _, _, _, s in results)

@@ -208,7 +208,8 @@ class SegmentationInferenceNode:
                 fps = 1000.0 / inference_ms if inference_ms > 0.0 else 0.0
                 rospy.loginfo_throttle(
                     self.timing_log_interval,
-                    "segmentation timing: inference=%.2f ms callback=%.2f ms approx_fps=%.2f",
+                    "segmentation timing: pure=%.2f ms inference=%.2f ms callback=%.2f ms approx_fps=%.2f",
+                    pure_ms,
                     inference_ms,
                     callback_ms,
                     fps,
@@ -248,8 +249,9 @@ class SegmentationInferenceNode:
                 fps = 1000.0 / inference_ms if inference_ms > 0.0 else 0.0
                 rospy.loginfo_throttle(
                     self.timing_log_interval,
-                    "segmentation bundle timing: images=%d inference=%.2f ms callback=%.2f ms approx_bundle_fps=%.2f",
+                    "segmentation bundle timing: images=%d pure=%.2f ms inference=%.2f ms callback=%.2f ms approx_bundle_fps=%.2f",
                     len(msg.images),
+                    pure_ms,
                     inference_ms,
                     callback_ms,
                     fps,
@@ -257,7 +259,7 @@ class SegmentationInferenceNode:
         except (CvBridgeError, ValueError, RuntimeError) as exc:
             rospy.logerr_throttle(1.0, "segmentation bundle inference failed: %s", exc)
 
-    def predict_class_map_msg(self, msg: Image) -> Tuple[Image, float]:
+    def predict_class_map_msg(self, msg: Image) -> Tuple[Image, float, float]:
         # ROS Image -> OpenCV BGR/RGB image.
         # bgr8/rgb8는 빠른 처리를 위해 cv_bridge의 메모리 카피 과정 없이 바로 numpy 뷰(frombuffer)를 생성합니다.
         # predictor는 내부에서 학습 때와 같은 RGB/resize/tensor 변환을 수행한다.
@@ -270,7 +272,7 @@ class SegmentationInferenceNode:
 
         # 실제 PyTorch forward 시간만 따로 재서 로그에 남긴다.
         inference_start = time.perf_counter()
-        result = self.predictor.predict(image_np, color_order=msg.encoding if msg.encoding in {"bgr8", "rgb8"} else "bgr")
+        result, pure_ms = self.predictor.predict(image_np, color_order=msg.encoding if msg.encoding in {"bgr8", "rgb8"} else "bgr")
         inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
         # class_map은 원본 입력 이미지 크기(또는 resize_output=False에 따른 크기)로 되돌려 publish한다.
@@ -286,9 +288,9 @@ class SegmentationInferenceNode:
         class_msg.is_bigendian = 0
         class_msg.step = class_msg.width
         class_msg.data = result.class_map.tobytes()
-        return class_msg, inference_ms
+        return class_msg, inference_ms, pure_ms
 
-    def predict_class_map_msgs(self, msgs: list[Image]) -> Tuple[list[Image], float]:
+    def predict_class_map_msgs(self, msgs: list[Image]) -> Tuple[list[Image], float, float]:
         # ROS Image 배열을 OpenCV 배열 리스트로 바꾼 뒤 predictor의 batch API에 넘긴다.
         # 결과 순서는 입력 순서와 같으므로 CameraBundle의 names/images index 규칙이 유지된다.
         # bgr8/rgb8 인코딩은 복사 없는 고속 처리를 위해 numpy 뷰(frombuffer) 형태로 리스트를 구성합니다.
@@ -303,7 +305,7 @@ class SegmentationInferenceNode:
         color_order = msgs[0].encoding if msgs[0].encoding in {"bgr8", "rgb8"} else "bgr"
 
         inference_start = time.perf_counter()
-        results = self.predictor.predict_batch(images_np, color_order=color_order)
+        results, pure_ms = self.predictor.predict_batch(images_np, color_order=color_order)
         inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
         class_msgs = []
@@ -318,7 +320,7 @@ class SegmentationInferenceNode:
             class_msg.step = class_msg.width
             class_msg.data = result.class_map.tobytes()
             class_msgs.append(class_msg)
-        return class_msgs, inference_ms
+        return class_msgs, inference_ms, pure_ms
 
 
 def main() -> None:

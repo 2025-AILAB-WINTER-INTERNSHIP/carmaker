@@ -99,20 +99,21 @@ class SegmentationPredictor:
                 except Exception:
                     pass
 
-        self.warmup(max(0, int(warmup_iterations)))
+        self.warmup(max(0, int(warmup_iterations)), batch_sizes=(1, 4))
 
     @torch.inference_mode()
-    def predict(self, image: np.ndarray, color_order: str = "bgr") -> SegmentationResult:
+    def predict(self, image: np.ndarray, color_order: str = "bgr") -> tuple[SegmentationResult, float]:
         """Run segmentation on a uint8 HWC image.
 
         Args:
             image: Input image as HWC uint8. ROS OpenCV images are usually BGR.
             color_order: Either ``"bgr"`` or ``"rgb"``.
         """
-        return self.predict_batch([image], color_order=color_order)[0]
+        results, pure_ms = self.predict_batch([image], color_order=color_order)
+        return results[0], pure_ms
 
     @torch.inference_mode()
-    def predict_batch(self, images: Sequence[np.ndarray], color_order: str = "bgr") -> list[SegmentationResult]:
+    def predict_batch(self, images: Sequence[np.ndarray], color_order: str = "bgr") -> tuple[list[SegmentationResult], float]:
         """Run segmentation on multiple uint8 HWC images in one model forward."""
         if not images:
             return []
@@ -148,7 +149,7 @@ class SegmentationPredictor:
 
         # 3. 모델 추론 및 Interpolate 전 단 한 번 메모리를 정렬하여 contiguous하게 만듦
         batch = batch.contiguous()
-        
+
         # Resize on GPU in parallel
         width, height = self.image_size
         if batch.shape[-1] != width or batch.shape[-2] != height:
@@ -156,13 +157,29 @@ class SegmentationPredictor:
                 batch, size=(height, width), mode="bilinear", align_corners=False
             )
 
-        with self.autocast_context():
-            logits = self.model(batch)
+        pure_inference_ms = 0.0
+        if self.device.type == "cuda":
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+
+            torch.cuda.synchronize(self.device) # GPU 준비 대기
+            start_event.record()
+
+            with self.autocast_context():
+                logits = self.model(batch)
+
+            end_event.record()
+            torch.cuda.synchronize(self.device) # GPU 연산 완료 대기
+            pure_inference_ms = start_event.elapsed_time(end_event)
+        else:
+            with self.autocast_context():
+                logits = self.model(batch)
+
         class_maps_t = torch.argmax(logits, dim=1).to(torch.uint8)
 
         # Check if all images share the same original resolution
         all_same_shape = all(shape == original_shapes[0] for shape in original_shapes)
-        
+
         results = []
         if self.resize_output:
             if all_same_shape:
@@ -205,7 +222,7 @@ class SegmentationPredictor:
                         class_names=self.class_names,
                     )
                 )
-        return results
+        return results, pure_inference_ms
 
     def autocast_context(self):
         if self.autocast_dtype is None:
@@ -213,18 +230,26 @@ class SegmentationPredictor:
         return torch.autocast(device_type=self.device.type, dtype=self.autocast_dtype)
 
     @torch.inference_mode()
-    def warmup(self, iterations: int) -> None:
-        """Run a few dummy forwards to initialize CUDA kernels and allocators."""
+    def warmup(self, iterations: int, batch_sizes: Sequence[int] = (1, 4)) -> None:
+        """Run a few dummy forwards to initialize CUDA kernels and compile graphs for expected batch sizes."""
         if iterations <= 0 or self.device.type != "cuda":
             return
 
         width, height = self.image_size
-        dummy = torch.zeros((1, 3, height, width), device=self.device)
-        with self.autocast_context():
-            for _ in range(iterations):
-                _ = self.model(dummy)
-        torch.cuda.synchronize(self.device)
 
+        # 1. 실제 predict_batch 내부에서 변환되는 정확한 dtype 사용
+        dtype = self.autocast_dtype if self.autocast_dtype else torch.float32
+
+        with self.autocast_context():
+            # 2. 예상되는 모든 배치 사이즈에 대해 순차적으로 컴파일 그래프를 생성
+            for b in batch_sizes:
+                # predict_batch의 batch.contiguous() 결과와 100% 동일한 NCHW 메모리 구조 생성
+                dummy = torch.zeros((b, 3, height, width), device=self.device, dtype=dtype)
+                
+                for _ in range(iterations):
+                    _ = self.model(dummy)
+                    
+        torch.cuda.synchronize(self.device)
 
 def load_checkpoint(path: str | Path, device: torch.device) -> Dict[str, Any]:
     """Load a PyTorch/Lightning checkpoint saved by ``train.py``.
