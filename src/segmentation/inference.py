@@ -81,6 +81,9 @@ class SegmentationPredictor:
             # 파라미터와 floating buffer까지 선택 precision으로 내려 VRAM을 줄인다.
             self.model.to(device=self.device, dtype=self.autocast_dtype)
         self.model.eval()
+        # cuDNN Autotuning 활성화 (입력 이미지 해상도가 고정되어 있을 때 합성곱 최적화)
+        if self.device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
         self.warmup(max(0, int(warmup_iterations)))
 
     @torch.inference_mode()
@@ -106,15 +109,19 @@ class SegmentationPredictor:
                 raise ValueError("each image must be an HWC uint8 3-channel array")
 
             original_shapes.append(image.shape[:2])
-            # Fast HWC uint8 -> CHW uint8 tensor on CPU (no copy, extremely fast)
-            tensors.append(torch.from_numpy(image.transpose(2, 0, 1)))
+            # CPU에서의 transpose(2, 0, 1)는 메모리 비연속성(non-contiguous)을 유발하므로
+            # transpose 없이 raw HWC 형태 그대로 CPU 텐서 뷰를 생성하여 메모리 연속성을 보존합니다.
+            tensors.append(torch.from_numpy(image))
 
-        # Stack as a single uint8 batch and send to GPU
-        batch = torch.stack(tensors).to(self.device)
+        # Stack 및 GPU 전송을 복사 오버헤드 없이 고속(contiguous)으로 수행합니다.
+        # non_blocking=True를 지정하여 비동기 PCIe 전송을 유도합니다.
+        batch = torch.stack(tensors).to(self.device, non_blocking=True)
         
-        # Fast color channel swapping on GPU
+        # GPU의 강력한 병렬 처리 능력을 사용하여 HWC -> CHW 차원 변경 및 BGR -> RGB 채널 뒤집기를 한 번에 수행합니다.
         if color_order.lower() == "bgr":
-            batch = batch[:, [2, 1, 0], :, :]
+            batch = batch.permute(0, 3, 1, 2)[:, [2, 1, 0], :, :]
+        else:
+            batch = batch.permute(0, 3, 1, 2)
             
         # Float conversion and normalization on GPU (선택된 precision에 맞춰 캐스팅)
         if self.autocast_dtype is not None:
