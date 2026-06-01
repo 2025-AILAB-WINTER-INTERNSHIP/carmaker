@@ -61,17 +61,20 @@ pid:
 
 stanley:
   # Stanley 조향 파라미터. max_steer_angle_deg는 타이어 조향각 기준이다.
+  # Ioniq 5 설정값(wheelbase 2.97m, min_turning_radius 5.5m)으로 계산하면 약 28.4deg다.
   # 후진에서는 조향 효과가 반대로 나타나므로 내부에서 부호를 뒤집고,
   # reverse_steering_scale로 후진 조향 민감도를 별도로 조절할 수 있다.
   k: 1.0
   k_soft: 0.3
   cte_gain: 1.0
   heading_gain: 1.0
-  max_steer_angle_deg: 35.0
+  max_steer_angle_deg: 28.4
   reverse_steering_scale: 1.0
 
 vehicle:
+  wheelbase: 2.97
+  min_turning_radius: 5.5
   # Stanley는 타이어 조향각을 계산한다.
   # CarMaker 입력이 steering wheel angle이면 steering_ratio를 키우거나 max_steer_command를 조정한다.
   steering_ratio: 1.0
-  max_steer_command: 0.6109
+  max_steer_command: 0.4951

@@ -29,6 +29,11 @@ double deg2rad(double degree)
   return degree * kPi / 180.0;
 }
 
+double rad2deg(double radian)
+{
+  return radian * 180.0 / kPi;
+}
+
 // 내부 direction 표현(1/-1)을 CarMaker gear 값으로 변환한다.
 // gear 숫자는 프로젝트마다 다를 수 있으므로 yaml에서 바꿀 수 있게 둔다.
 int directionToGear(int direction, int drive_gear, int reverse_gear)
@@ -184,7 +189,7 @@ private:
   int reverse_gear_{-1};
 
   double steering_ratio_{1.0};
-  double max_steer_command_{0.61};
+  double max_steer_command_{0.495};
   double reverse_steering_scale_{1.0};
 
   ros::Time last_control_time_;
@@ -257,9 +262,20 @@ void ControlNode::loadParameters()
   pnh_.param("control/neutral_gear", neutral_gear_, 0);
   pnh_.param("control/reverse_gear", reverse_gear_, -1);
 
-  // Stanley는 타이어 조향각을 계산한다. 실제 CarMaker 입력이 steering wheel angle이면
-  // vehicle/steering_ratio 또는 vehicle/max_steer_command로 변환 범위를 조정한다.
-  double max_tire_steer_deg = 35.0;
+  // Stanley는 타이어 조향각을 계산한다.
+  // 기본 조향 한계는 차량 제원의 wheelbase와 최소 회전 반경으로 계산한다.
+  //   tire_steer_limit = atan(wheelbase / min_turning_radius)
+  // 실제 CarMaker 입력이 steering wheel angle이면 vehicle/steering_ratio 또는
+  // vehicle/max_steer_command로 최종 명령 범위를 조정한다.
+  double wheelbase = 2.97;
+  double min_turning_radius = 5.5;
+  pnh_.param("vehicle/wheelbase", wheelbase, wheelbase);
+  pnh_.param("vehicle/min_turning_radius", min_turning_radius, min_turning_radius);
+
+  double max_tire_steer_deg = 28.4;
+  if (wheelbase > 1e-6 && min_turning_radius > 1e-6) {
+    max_tire_steer_deg = rad2deg(std::atan(wheelbase / min_turning_radius));
+  }
   pnh_.param("stanley/max_steer_angle_deg", max_tire_steer_deg, max_tire_steer_deg);
   const double max_tire_steer = deg2rad(max_tire_steer_deg);
 

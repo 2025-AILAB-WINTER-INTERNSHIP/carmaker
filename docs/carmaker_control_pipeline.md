@@ -395,8 +395,15 @@ stanley:
   k_soft: 0.3
   cte_gain: 1.0
   heading_gain: 1.0
-  max_steer_angle_deg: 35.0
+  max_steer_angle_deg: 28.4
   reverse_steering_scale: 1.0
+```
+
+`max_steer_angle_deg`는 Ioniq 5 설정값인 `wheelbase=2.97m`,
+`min_turning_radius=5.5m`에서 계산한 타이어 조향각 한계다.
+
+```text
+atan(2.97 / 5.5) = 28.4 deg
 ```
 
 튜닝 방향:
@@ -413,8 +420,10 @@ stanley:
 
 ```yaml
 vehicle:
+  wheelbase: 2.97
+  min_turning_radius: 5.5
   steering_ratio: 1.0
-  max_steer_command: 0.6109
+  max_steer_command: 0.4951
 ```
 
 Stanley는 타이어 조향각을 계산한다. CarMaker가 steering wheel angle을 기대한다면 `steering_ratio`를 키우거나 `max_steer_command`를 프로젝트 입력 스펙에 맞춰 조정해야 한다.
@@ -509,4 +518,3 @@ rostopic hz /planning/trajectory
 - 후진 조향 부호 반전이 차량 모델과 맞지 않음
 
 먼저 아주 낮은 속도로 전진 직선 경로를 테스트하고, 그다음 좌/우 곡선, 마지막으로 후진 곡선을 확인한다.
-
