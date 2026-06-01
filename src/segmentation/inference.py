@@ -126,6 +126,8 @@ class SegmentationPredictor:
             original_shapes.append(image.shape[:2])
             # CPU에서의 transpose(2, 0, 1)는 메모리 비연속성(non-contiguous)을 유발하므로
             # transpose 없이 raw HWC 형태 그대로 CPU 텐서 뷰를 생성하여 메모리 연속성을 보존합니다.
+            if not image.flags.writeable:
+                image = image.copy()
             tensors.append(torch.from_numpy(image))
 
         # Stack 및 GPU 전송을 복사 오버헤드 없이 고속(contiguous)으로 수행합니다.
@@ -373,6 +375,8 @@ def to_rgb(image: np.ndarray, color_order: str) -> np.ndarray:
 
 def preprocess_rgb(image_rgb: np.ndarray, image_size: tuple[int, int]) -> torch.Tensor:
     """Resize and normalize an RGB uint8 image into ``[1, 3, H, W]``."""
+    if not image_rgb.flags.writeable:
+        image_rgb = image_rgb.copy()
     width, height = image_size
     if image_rgb.shape[1] != width or image_rgb.shape[0] != height:
         # image_size는 config와 동일하게 [width, height] 순서를 따른다.
