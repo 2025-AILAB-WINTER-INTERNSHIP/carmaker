@@ -239,7 +239,7 @@ class SegmentationInferenceNode:
 
             # CameraBundle 안의 이미지들을 한 번의 model forward로 처리한다.
             # 기본 4채널 bundle이면 4개 이미지가 그대로 PyTorch batch로 들어간다.
-            class_msgs, inference_ms = self.predict_class_map_msgs(msg.images)
+            class_msgs, inference_ms, pure_ms = self.predict_class_map_msgs(msg.images)
             class_bundle.images.extend(class_msgs)
 
             self.class_map_bundle_pub.publish(class_bundle)
