@@ -37,5 +37,4 @@ log_timing: true
 timing_log_interval: 1.0
 
 # Model compilation and evaluation speed optimizations.
-use_fusion: true
 use_compile: true

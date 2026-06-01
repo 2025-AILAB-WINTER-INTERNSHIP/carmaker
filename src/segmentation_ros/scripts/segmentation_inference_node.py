@@ -59,8 +59,7 @@ class SegmentationInferenceNode:
         image_size_param = rospy.get_param("~image_size", None)
         image_size = parse_image_size(image_size_param) if image_size_param else None
         
-        # 모델 최적화 옵션 로드 (Conv-BN Fusion, torch.compile)
-        use_fusion = parse_bool(rospy.get_param("~use_fusion", True))
+        # 모델 최적화 옵션 로드 (torch.compile)
         use_compile = parse_bool(rospy.get_param("~use_compile", True))
 
         # cv_bridge가 ROS Image를 OpenCV 배열로 바꿀 때 사용할 encoding.
@@ -83,7 +82,6 @@ class SegmentationInferenceNode:
             inference_precision=inference_precision,
             warmup_iterations=cuda_warmup_iterations,
             resize_output=resize_output,
-            use_fusion=use_fusion,
             use_compile=use_compile,
         )
 

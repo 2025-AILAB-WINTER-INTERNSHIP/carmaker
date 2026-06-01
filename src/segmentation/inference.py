@@ -48,7 +48,6 @@ class SegmentationPredictor:
         resize_output: bool = True,
         inference_precision: str = "fp16",
         warmup_iterations: int = 1,
-        use_fusion: bool = True,
         use_compile: bool = True,
     ) -> None:
         self.checkpoint_path = Path(checkpoint_path).expanduser().resolve()
@@ -76,13 +75,6 @@ class SegmentationPredictor:
         # 모델 구조는 학습 config와 같은 build_model 경로를 사용해야 checkpoint weight와 맞는다.
         self.model = build_model(cfg, num_classes=len(self.class_names))
         self.model.load_state_dict(state)
-
-        # 모델 내 Conv와 BatchNorm2d 레이어를 융합하여 연산 속도 개선
-        if use_fusion:
-            try:
-                self.model = fuse_modules(self.model)
-            except Exception:
-                pass
 
         if self.autocast_dtype is None:
             self.model.to(self.device)
@@ -387,53 +379,3 @@ def preprocess_rgb(image_rgb: np.ndarray, image_size: tuple[int, int]) -> torch.
         image_rgb = cv2.resize(image_rgb, (width, height), interpolation=cv2.INTER_LINEAR)
     tensor = torch.from_numpy(image_rgb.transpose(2, 0, 1)).float() / 255.0
     return tensor.unsqueeze(0)
-
-
-@torch.no_grad()
-def fuse_conv_and_bn(conv: torch.nn.Conv2d, bn: torch.nn.BatchNorm2d) -> torch.nn.Conv2d:
-    """합성곱(Conv2d)과 배치정규화(BatchNorm2d) 레이어를 런타임 추론용으로 융합합니다."""
-    fused_conv = torch.nn.Conv2d(
-        conv.in_channels,
-        conv.out_channels,
-        kernel_size=conv.kernel_size,
-        stride=conv.stride,
-        padding=conv.padding,
-        dilation=conv.dilation,
-        groups=conv.groups,
-        bias=True
-    ).requires_grad_(False).to(device=conv.weight.device, dtype=conv.weight.dtype)
-    
-    # 1. Conv와 BN의 파라미터를 결합하여 새로운 가중치 계산
-    w_conv = conv.weight.clone().view(conv.out_channels, -1)
-    w_bn = torch.diag(bn.weight.div(torch.sqrt(bn.running_var + bn.eps)))
-    fused_conv.weight.copy_(torch.mm(w_bn, w_conv).view(fused_conv.weight.shape))
-    
-    # 2. 새로운 편향값 계산
-    if conv.bias is not None:
-        b_conv = conv.bias
-    else:
-        b_conv = torch.zeros(conv.out_channels, device=conv.weight.device)
-    b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps))
-    fused_conv.bias.copy_(torch.mv(w_bn, b_conv) + b_bn)
-    
-    return fused_conv
-
-
-def fuse_modules(module: torch.nn.Module) -> torch.nn.Module:
-    """모델 내부를 재귀적으로 탐색하여 Conv2d + BatchNorm2d 패턴을 찾아 융합합니다."""
-    for name, child in list(module.named_children()):
-        if isinstance(child, torch.nn.Sequential):
-            i = 0
-            while i < len(child) - 1:
-                if isinstance(child[i], torch.nn.Conv2d) and isinstance(child[i+1], torch.nn.BatchNorm2d):
-                    # 합성곱과 배치정규화 레이어 융합 수행
-                    fused = fuse_conv_and_bn(child[i], child[i+1])
-                    child[i] = fused
-                    # 배치정규화 자리를 Identity 연산으로 교체
-                    child[i+1] = torch.nn.Identity()
-                    i += 2
-                else:
-                    i += 1
-        else:
-            fuse_modules(child)
-    return module
