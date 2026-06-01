@@ -134,9 +134,11 @@ private:
     double fitness_threshold_ = 0.5;
 
     // Vehicle Kinematics
-    double tire_radius_ = 0.327;
-    double track_width_ = 1.655;
-    double rear_axle_x_ = 0.79;
+    double tire_radius_ = 0.298;
+    double track_width_ = 1.634;
+    double rear_axle_x_ = 0.82;
+    double wheelbase_ = 2.97;
+    double steering_ratio_ = 1.0;  // Steer_WhlAng → road wheel angle conversion ratio
 
     // EKF Noise Config
     double wheel_speed_std_ = 0.05;

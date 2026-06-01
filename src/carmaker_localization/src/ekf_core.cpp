@@ -6,7 +6,7 @@
 namespace carmaker_localization {
 
 EkfCore::EkfCore()
-    : is_initialized_(false), last_time_(0.0) {
+    : is_initialized_(false), last_time_(0.0), wheelbase_(2.97) {
     x_ = Eigen::VectorXd::Zero(STATE_DIM);
     P_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1.0;
     Q_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 0.01;
@@ -44,7 +44,15 @@ void EkfCore::setProcessNoise(const Eigen::MatrixXd& Q) {
     }
 }
 
-void EkfCore::prediction(double timestamp) {
+void EkfCore::setWheelbase(double wheelbase) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (wheelbase > 0.0) {
+        wheelbase_ = wheelbase;
+        std::cout << "[EkfCore] Wheelbase set to: " << wheelbase_ << " m" << std::endl;
+    }
+}
+
+void EkfCore::prediction(double timestamp, const PredictionInput& u) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -58,55 +66,62 @@ void EkfCore::prediction(double timestamp) {
 
     if (dt <= 1e-4) return; // Ignore too small intervals
 
-    // --- State Transition (Constant Acceleration Model) ---
+    // --- Kinematic Bicycle Model Prediction ---
+    double v = x_(VX);
     double yaw = x_(YAW);
-    double vx = x_(VX);
-    double vy = x_(VY);
     double ax = x_(AX);
     double ay = x_(AY);
-    double yaw_rate = x_(YAW_RATE);
+    double delta = u.steering_angle;
 
-    // Global Position Update
-    double cos_y = std::cos(yaw);
-    double sin_y = std::sin(yaw);
-    double v_global_x = vx * cos_y - vy * sin_y;
-    double v_global_y = vx * sin_y + vy * cos_y;
+    double cos_yaw = std::cos(yaw);
+    double sin_yaw = std::sin(yaw);
 
-    x_(X) += v_global_x * dt + 0.5 * (ax * cos_y - ay * sin_y) * dt * dt;
-    x_(Y) += v_global_y * dt + 0.5 * (ax * sin_y + ay * cos_y) * dt * dt;
+    // Clamp steering angle to physical passenger vehicle limits (approx +/-40 deg = 0.7 rad)
+    double delta_clamped = std::max(-0.7, std::min(0.7, delta));
+    double tan_delta = std::tan(delta_clamped);
+    double yaw_rate_bicycle = v * tan_delta / wheelbase_;
+    double ay_bicycle = v * yaw_rate_bicycle;
 
-    // Local Velocity Update (Coriolis terms for rotating body frame)
-    x_(VX) += (ax + yaw_rate * vy) * dt;
-    x_(VY) += (ay - yaw_rate * vx) * dt;
+    // State propagation (second-order integration for position)
+    x_(X) += v * cos_yaw * dt + 0.5 * (ax * cos_yaw - ay * sin_yaw) * dt * dt;
+    x_(Y) += v * sin_yaw * dt + 0.5 * (ax * sin_yaw + ay * cos_yaw) * dt * dt;
+    x_(VX) += ax * dt;
+    x_(VY) = 0.0; // Non-holonomic constraint: lateral velocity is zero at rear axle
+    x_(AX) = ax;  // Constant longitudinal acceleration propagation
+    x_(AY) = ay_bicycle; // Lateral acceleration is constrained to centripetal acceleration
+    x_(YAW) += yaw_rate_bicycle * dt;
+    x_(YAW_RATE) = yaw_rate_bicycle;
 
-    // Heading Update
-    x_(YAW) += yaw_rate * dt;
-    // Yaw normalization
+    // Jacobian F
+    Eigen::MatrixXd F = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM);
+
+    // Position derivatives
+    F(X, VX)  = cos_yaw * dt;
+    F(X, AX)  = 0.5 * cos_yaw * dt * dt;
+    F(X, AY)  = -0.5 * sin_yaw * dt * dt;
+    F(X, YAW) = -v * sin_yaw * dt - 0.5 * (ax * sin_yaw + ay * cos_yaw) * dt * dt;
+
+    F(Y, VX)  = sin_yaw * dt;
+    F(Y, AX)  = 0.5 * sin_yaw * dt * dt;
+    F(Y, AY)  = 0.5 * cos_yaw * dt * dt;
+    F(Y, YAW) = v * cos_yaw * dt + 0.5 * (ax * cos_yaw - ay * sin_yaw) * dt * dt;
+
+    // Velocity derivatives
+    F(VX, AX) = dt;
+
+    // Override Identity diagonal for constrained states
+    F(VY, VY) = 0.0;
+    F(AY, AY) = 0.0;
+    F(YAW_RATE, YAW_RATE) = 0.0;
+
+    // Kinematic constraints derivatives
+    F(AY, VX) = 2.0 * v * tan_delta / wheelbase_;
+    F(YAW, VX) = tan_delta / wheelbase_ * dt;
+    F(YAW_RATE, VX) = tan_delta / wheelbase_;
+
+    // Yaw normalization (model-agnostic)
     while (x_(YAW) > M_PI) x_(YAW) -= 2.0 * M_PI;
     while (x_(YAW) < -M_PI) x_(YAW) += 2.0 * M_PI;
-
-    // --- Jacobian Matrix F [11x11] ---
-    Eigen::MatrixXd F = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM);
-    F(X, YAW) = (-vx * sin_y - vy * cos_y) * dt + 0.5 * (-ax * sin_y - ay * cos_y) * dt * dt;
-    F(X, VX) = cos_y * dt;
-    F(X, VY) = -sin_y * dt;
-    F(X, AX) = 0.5 * cos_y * dt * dt;
-    F(X, AY) = -0.5 * sin_y * dt * dt;
-
-    F(Y, YAW) = (vx * cos_y - vy * sin_y) * dt + 0.5 * (ax * cos_y - ay * sin_y) * dt * dt;
-    F(Y, VX) = sin_y * dt;
-    F(Y, VY) = cos_y * dt;
-    F(Y, AX) = 0.5 * sin_y * dt * dt;
-    F(Y, AY) = 0.5 * cos_y * dt * dt;
-
-    // Coriolis Jacobian: d(VX)/d(VY), d(VX)/d(YAW_RATE), d(VY)/d(VX), d(VY)/d(YAW_RATE)
-    F(VX, VY) = yaw_rate * dt;
-    F(VX, YAW_RATE) = vy * dt;
-    F(VX, AX) = dt;
-    F(VY, VX) = -yaw_rate * dt;
-    F(VY, YAW_RATE) = -vx * dt;
-    F(VY, AY) = dt;
-    F(YAW, YAW_RATE) = dt;
 
     // --- Covariance Propagation ---
     P_ = F * P_ * F.transpose() + Q_ * dt;

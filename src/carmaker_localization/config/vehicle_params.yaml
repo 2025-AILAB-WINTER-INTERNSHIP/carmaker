@@ -16,6 +16,14 @@ vehicle:
   # 축간거리: 앞바퀴 축과 뒷바퀴 축 사이의 거리
   wheelbase: 2.97               # [m] - Distance between front and rear axles
 
+  # 스티어링 기어비 (Steering Ratio)
+  # - 시뮬레이터에서 핸들 각도(Steer_WhlAng)를 이용해 타이어 조향각을 계산할 때 사용되는 비율
+  # - 현재 EKF 예측 단계는 핸들 각도 대신 실제 앞바퀴 타이어 조향각(Vhcl_FL_rz, Vhcl_FR_rz의 평균)을
+  #   직접 수집하여 사용하므로 기어비 변환이 필요 없어 1.0으로 설정
+  # - 앞바퀴 타이어 각도 대신 핸들 각도(Steer_WhlAng)를 제어 입력으로 사용할 경우,
+  #   해당 차량 모델의 실제 조향 기어비(예: 13.0 ~ 18.0)로 설정 필요
+  steering_ratio: 1.0
+
   # 윤거(타이어 중심 간 거리)
   track_width: 1.634            # [m] - Distance between left and right wheels
 

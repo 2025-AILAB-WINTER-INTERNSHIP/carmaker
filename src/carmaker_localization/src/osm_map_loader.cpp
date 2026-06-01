@@ -162,15 +162,20 @@ bool OsmMapLoader::load(const std::string& path) {
                 sampleSegment(a, b, 0.05, resolution_, lane_voxels);
             }
         } else if (class_id == 2 && way.nodes.size() >= 3) {
-            // Landmark: sample the entire filled polygon
-            std::vector<Point2d> poly;
-            poly.reserve(way.nodes.size());
-            for (int nid : way.nodes) {
-                auto it = node_map.find(nid);
-                if (it != node_map.end())
-                    poly.push_back({it->second.x, it->second.y});
+            // Landmark: sample only the boundary segments of the polygon (edge-to-edge)
+            size_t num_segments = way.nodes.size();
+            if (way.nodes.front() == way.nodes.back()) {
+                num_segments--;
             }
-            samplePolygon(poly, resolution_, landmark_voxels);
+            for (size_t i = 0; i < num_segments; ++i) {
+                auto it_a = node_map.find(way.nodes[i]);
+                auto it_b = node_map.find(way.nodes[(i + 1) % way.nodes.size()]);
+                if (it_a == node_map.end() || it_b == node_map.end()) continue;
+
+                Point2d a{it_a->second.x, it_a->second.y};
+                Point2d b{it_b->second.x, it_b->second.y};
+                sampleSegment(a, b, 0.05, resolution_, landmark_voxels);
+            }
         } else if (class_id == 3 && way.nodes.size() >= 3) {
             // Boundary: sample the entire filled polygon (inside)
             std::vector<Point2d> poly;

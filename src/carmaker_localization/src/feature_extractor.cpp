@@ -393,15 +393,20 @@ std::vector<LocalFeature> FeatureExtractor::process(
             is_black_mask.setTo(0, invalid_mask);
             is_yellow_mask.setTo(0, invalid_mask);
 
+            // Morphological erosion to extract thin 1-pixel boundary of Class 2 landmark (charging pad)
+            cv::Mat eroded_yellow;
+            cv::erode(is_yellow_mask, eroded_yellow, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+            cv::Mat edge_yellow_mask = is_yellow_mask - eroded_yellow;
+
             // 특징점 추출용 마스크 및 클래스 맵 설정 (루프 없이 고속 연산)
-            mask = is_black_mask | is_yellow_mask;
+            mask = is_black_mask | edge_yellow_mask;
             class_map.setTo(1, is_black_mask);
-            class_map.setTo(2, is_yellow_mask);
+            class_map.setTo(2, edge_yellow_mask);
 
             // 시각화 컬러 렌더링
             out_bev_image = cv::Mat::zeros(bev_cfg_.height, bev_cfg_.width, CV_8UC3);
             out_bev_image.setTo(cv::Scalar(255, 255, 255), is_black_mask); // 차선: 흰색
-            out_bev_image.setTo(cv::Scalar(255, 150, 0), is_yellow_mask);  // 랜드마크: 노란색
+            out_bev_image.setTo(cv::Scalar(255, 150, 0), edge_yellow_mask);  // 랜드마크: 노란색
         }
     }
 
@@ -447,10 +452,22 @@ std::vector<LocalFeature> FeatureExtractor::process(
             cv::Mat val_2_mask = (class_map == 2);
             cv::Mat val_other_mask = (class_map > 0) & (class_map != 1) & (class_map != 2);
 
+            // Morphological erosion to extract thin 1-pixel boundary of Class 2 landmark (charging pad)
+            cv::Mat eroded_val2;
+            cv::erode(val_2_mask, eroded_val2, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+            cv::Mat edge_val2_mask = val_2_mask - eroded_val2;
+
+            // Re-update mask and class_map with boundary features
+            mask = val_1_mask | edge_val2_mask | val_other_mask;
+            class_map.setTo(0);
+            class_map.setTo(1, val_1_mask);
+            class_map.setTo(2, edge_val2_mask);
+            class_map.setTo(3, val_other_mask);
+
             // 세그멘테이션 클래스 색상 매핑 (루프 없이 고속 렌더링)
             out_bev_image = cv::Mat::zeros(bev_cfg_.height, bev_cfg_.width, CV_8UC3);
             out_bev_image.setTo(cv::Scalar(255, 255, 255), val_1_mask);   // 차선: 흰색
-            out_bev_image.setTo(cv::Scalar(255, 76, 76), val_2_mask);     // 랜드마크: 코랄색
+            out_bev_image.setTo(cv::Scalar(255, 76, 76), edge_val2_mask);     // 랜드마크: 코랄색
             out_bev_image.setTo(cv::Scalar(100, 255, 100), val_other_mask); // 기타 세그먼트: 연초록
         }
     }
@@ -554,9 +571,14 @@ cv::Mat FeatureExtractor::processVisualization(const cv::Mat& seg_img) {
             is_black_mask.setTo(0, invalid_mask);
             is_yellow_mask.setTo(0, invalid_mask);
 
+            // Morphological erosion to extract thin 1-pixel boundary of Class 2 landmark (charging pad)
+            cv::Mat eroded_yellow;
+            cv::erode(is_yellow_mask, eroded_yellow, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+            cv::Mat edge_yellow_mask = is_yellow_mask - eroded_yellow;
+
             out_vis_image = cv::Mat::zeros(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_8UC3);
             out_vis_image.setTo(cv::Scalar(255, 255, 255), is_black_mask); // Lane: White
-            out_vis_image.setTo(cv::Scalar(255, 150, 0), is_yellow_mask);  // Landmark: Yellow
+            out_vis_image.setTo(cv::Scalar(255, 150, 0), edge_yellow_mask); // Landmark: Yellow
         }
     } else if (image_type_ == "raw") {
         if (seg_img.channels() == 3) {
@@ -584,9 +606,14 @@ cv::Mat FeatureExtractor::processVisualization(const cv::Mat& seg_img) {
             cv::Mat val_2_mask = (class_map == 2);
             cv::Mat val_other_mask = (class_map > 0) & (class_map != 1) & (class_map != 2);
 
+            // Morphological erosion to extract thin 1-pixel boundary of Class 2 landmark (charging pad)
+            cv::Mat eroded_val2;
+            cv::erode(val_2_mask, eroded_val2, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+            cv::Mat edge_val2_mask = val_2_mask - eroded_val2;
+
             out_vis_image = cv::Mat::zeros(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_8UC3);
             out_vis_image.setTo(cv::Scalar(255, 255, 255), val_1_mask);   // Lane: White
-            out_vis_image.setTo(cv::Scalar(255, 76, 76), val_2_mask);     // Landmark: Coral
+            out_vis_image.setTo(cv::Scalar(255, 76, 76), edge_val2_mask); // Landmark: Coral
             out_vis_image.setTo(cv::Scalar(100, 255, 100), val_other_mask); // Other: Green
         }
     }

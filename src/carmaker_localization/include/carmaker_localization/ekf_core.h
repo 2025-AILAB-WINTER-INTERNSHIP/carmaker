@@ -4,6 +4,7 @@
 #include <Eigen/Dense>
 #include <vector>
 #include <mutex>
+#include <memory>
 
 namespace carmaker_localization {
 
@@ -27,6 +28,15 @@ struct StateFrame {
     Eigen::MatrixXd P;
 };
 
+/**
+ * @brief Control inputs for the EKF prediction step.
+ */
+struct PredictionInput {
+    double dt = 0.0;                ///< Time step [s] (filled by EkfCore)
+    double steering_angle = 0.0;    ///< Front tire road-wheel angle δ [rad]
+    double rear_wheel_speed = 0.0;  ///< Rear axle longitudinal speed v [m/s]
+};
+
 class EkfCore {
 public:
     EkfCore();
@@ -38,9 +48,10 @@ public:
 
     // Parameters
     void setProcessNoise(const Eigen::MatrixXd& Q);
+    void setWheelbase(double wheelbase);
 
     // EKF Core Cycle
-    void prediction(double timestamp);
+    void prediction(double timestamp, const PredictionInput& u = {});
 
     // Multi-Sensor Corrections
     void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp);
@@ -52,6 +63,9 @@ public:
 
 private:
     void handleTimeJump(double timestamp);
+
+    // Configuration
+    double wheelbase_;
 
     // State
     Eigen::VectorXd x_; // [11x1]
