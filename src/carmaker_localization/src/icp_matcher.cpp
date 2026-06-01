@@ -224,18 +224,23 @@ MatchResult IcpMatcher::match(
     int valid_observed_count = 0;
     Eigen::Matrix2d R_final = transform.linear();
 
+    // 3x3 2D Pose (x, y, yaw)에 대한 정보 행렬(Information Matrix, Hessian) 누적 변수
+    Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+
     for (const auto& obs : observed_used) {
         if (kdtrees.find(obs.class_id) == kdtrees.end()) continue;
         valid_observed_count++;
 
-        Eigen::Vector2d pt_map = transform * Eigen::Vector2d(obs.x, obs.y);
+        Eigen::Vector2d p_obs(obs.x, obs.y);
+        Eigen::Vector2d p_rot  = R_final * p_obs;          // 회전만 적용된 좌표 (Jacobian 계산용)
+        Eigen::Vector2d pt_map = p_rot + transform.translation(); // 최종 맵 좌표
 
         // 매칭 루프와 동일한 마할라노비스 메트릭 재사용 (일관성 보장)
         Eigen::Matrix2d C_obs;
         C_obs << obs.cov_xx, obs.cov_xy, obs.cov_xy, obs.cov_yy;
         Eigen::Matrix2d C_map = R_final * C_obs * R_final.transpose();
         C_map(0,0) += 1e-3; C_map(1,1) += 1e-3;
-        Eigen::Matrix2d Info_map = C_map.inverse();
+        Eigen::Matrix2d Info_map = C_map.inverse(); // 이 매칭점의 가중치 행렬(W) 역할
 
         double lambda_max       = maxEigenvalue2x2(C_map(0,0), C_map(0,1), C_map(1,1));
         double search_radius_sq = 9.0 * lambda_max;
@@ -249,8 +254,23 @@ MatchResult IcpMatcher::match(
         for (const auto& m : ret_matches) {
             const auto& ref = map_by_class[obs.class_id][m.first];
             Eigen::Vector2d dp(ref.x - pt_map.x(), ref.y - pt_map.y());
+
+            // 인라이어(Inlier) 판정
             if (dp.transpose() * Info_map * dp < 9.0) {
                 inliers++;
+
+                // 매칭 쌍의 기하학적 제약 조건을 Hessian에 누적
+                // 상태 벡터: x = [tx, ty, theta]^T
+                // 자코비안 J (2x3): 매칭점의 위치가 x, y, theta 변화에 어떻게 반응하는가?
+                // J = [ I_2x2 | dR/d(theta) * p_obs ]
+                Eigen::Matrix<double, 2, 3> J;
+                J << 1.0, 0.0, -p_rot.y(),
+                     0.0, 1.0,  p_rot.x();
+
+                // H += J^T * W * J (가중치 W로 Info_map 사용)
+                // 차선과 같이 한쪽 방향의 불확실성이 큰 경우, Info_map이 그 기하학적 특성을 
+                // 반영하므로 H 행렬 역시 해당 방향의 정보량을 0에 가깝게 만듭니다.
+                H += J.transpose() * Info_map * J;
                 break;
             }
         }
@@ -265,11 +285,19 @@ MatchResult IcpMatcher::match(
         result.success   = true;
         result.transform = transform;
 
-        // Covariance inversely proportional to combined confidence of the match
+        // 매칭 스코어와 비전 센서의 기본 노이즈를 결합한 스케일 팩터 계산
         double base_var   = vision_base_std_ * vision_base_std_;
         double confidence = static_cast<double>(inliers) * result.fitness_score;
-        double sigma_sq   = base_var / std::max(confidence, 1.0);
-        result.covariance = Eigen::Matrix3d::Identity() * sigma_sq;
+        double scale      = base_var / std::max(confidence, 1.0);
+
+        // 최종 공분산 도출, 등방성(Identity) -> 비등방성(Anisotropic) 타원체
+        // 특징점이 부족하거나(직선 구간 등) 한 방향의 제약이 없을 때 역행렬이 발산(Singular)
+        // 하는 것을 방지하기 위해 최소한의 안정화(Regularization) 값 추가
+        H += Eigen::Matrix3d::Identity() * 1e-6;
+
+        // 최종 공분산 행렬 = 정보 행렬(H)의 역행렬 * 신뢰도 스케일
+        // 직선 차선일 경우 종방향 정보량이 0에 가까우므로, 역행렬 계산 시 종방향 공분산(불확실성)이 매우 증가
+        result.covariance = H.inverse() * scale;
     }
 
     return result;
