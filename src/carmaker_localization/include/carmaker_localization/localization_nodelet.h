@@ -15,6 +15,9 @@
 #include <array>
 #include <map>
 #include <vector>
+#include <queue>
+#include <thread>
+#include <condition_variable>
 #include <cv_bridge/cv_bridge.h>
 
 #include "carmaker_localization/feature_extractor.h"
@@ -64,7 +67,7 @@ struct Channel {
 class LocalizationNodelet : public nodelet::Nodelet {
 public:
     LocalizationNodelet() = default;
-    virtual ~LocalizationNodelet() = default;
+    virtual ~LocalizationNodelet();
 
 private:
     // Lifecycle functions (SRP breakdown of giant onInit)
@@ -92,6 +95,7 @@ private:
         const std::array<sensor_msgs::ImageConstPtr, 4>& imgs,
         const std::array<sensor_msgs::CameraInfoConstPtr, 4>& infos);
     void performCorrection(const carmaker_msgs::LocalFeatures& features);
+    void correctionWorkerLoop();
     void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
     void resetLocalization();
@@ -215,6 +219,13 @@ private:
     std::mutex svm_mutex_;
     std::map<std::string, cv::Mat> svm_masks_;
     std::vector<cv::Point> seam_line_points_;
+
+    // Asynchronous EKF Correction Thread
+    std::queue<carmaker_msgs::LocalFeatures> correction_queue_;
+    std::mutex correction_queue_mutex_;
+    std::condition_variable correction_queue_cv_;
+    std::thread correction_worker_thread_;
+    std::atomic<bool> run_correction_worker_{true};
 };
 
 } // namespace carmaker_localization

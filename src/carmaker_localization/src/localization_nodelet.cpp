@@ -8,6 +8,14 @@
 
 namespace carmaker_localization {
 
+LocalizationNodelet::~LocalizationNodelet() {
+    run_correction_worker_ = false;
+    correction_queue_cv_.notify_all();
+    if (correction_worker_thread_.joinable()) {
+        correction_worker_thread_.join();
+    }
+}
+
 void LocalizationNodelet::onInit() {
     // Suppress high-frequency TF2 time-jump warnings caused by simulator clocks
     if (ros::console::set_logger_level("ros.tf2", ros::console::levels::Error)) {
@@ -34,6 +42,9 @@ void LocalizationNodelet::onInit() {
     initEkf();
     initSvm();
     setupRosIo();
+
+    // ICP 정합 처리를 비동기로 수행할 백그라운드 워커 스레드 기동
+    correction_worker_thread_ = std::thread(&LocalizationNodelet::correctionWorkerLoop, this);
 }
 
 bool LocalizationNodelet::loadParameters() {
@@ -744,7 +755,13 @@ void LocalizationNodelet::processImages(
             if (fusion_) {
                 combined.features.insert(combined.features.end(), features.features.begin(), features.features.end());
             } else if (map_matcher_enabled_ && map_loader_ && matcher_) {
-                performCorrection(features);
+                std::lock_guard<std::mutex> lock(correction_queue_mutex_);
+                if (correction_queue_.size() < 1) {
+                    correction_queue_.push(features);
+                    correction_queue_cv_.notify_one();
+                } else {
+                    ROS_DEBUG_THROTTLE(2.0, "Correction queue busy. Dropping features from camera: %s", features.camera_name.c_str());
+                }
             }
         }
     }
@@ -769,7 +786,13 @@ void LocalizationNodelet::processImages(
     }
 
     if (fusion_ && !combined.features.empty() && map_matcher_enabled_ && map_loader_ && matcher_) {
-        performCorrection(combined);
+        std::lock_guard<std::mutex> lock(correction_queue_mutex_);
+        if (correction_queue_.size() < 1) {
+            correction_queue_.push(combined);
+            correction_queue_cv_.notify_one();
+        } else {
+            ROS_DEBUG_THROTTLE(2.0, "Correction queue busy. Dropping combined features.");
+        }
     }
 }
 
@@ -865,6 +888,24 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
     } else {
         visualizer_->clearCorrection();
         ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Match FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, match_result.num_observed, match_result.num_reference);
+    }
+}
+
+void LocalizationNodelet::correctionWorkerLoop() {
+    while (run_correction_worker_) {
+        carmaker_msgs::LocalFeatures features;
+        {
+            std::unique_lock<std::mutex> lock(correction_queue_mutex_);
+            correction_queue_cv_.wait(lock, [this]() {
+                return !run_correction_worker_ || !correction_queue_.empty();
+            });
+            if (!run_correction_worker_) {
+                break;
+            }
+            features = std::move(correction_queue_.front());
+            correction_queue_.pop();
+        }
+        performCorrection(features);
     }
 }
 void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
