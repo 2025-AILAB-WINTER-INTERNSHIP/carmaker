@@ -482,7 +482,7 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     // 3-3. 휠 오도메트리 보정
     Eigen::Matrix3d R_wheel = Eigen::Matrix3d::Identity();
     if (is_stopped) {
-        R_wheel *= 1e-6; // 정지 상태일 때는 속도/요레이트 0 측정을 극도로 신뢰하여 필터 상태 강제 고정
+        R_wheel *= 1e-3; // 정지 상태일 때는 속도/요레이트 0 측정을 신뢰하되, 포즈 공분산 P가 붕괴하여 비전 보정이 차단되지 않도록 완화
     } else {
         R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);
         R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint uncertainty
@@ -743,6 +743,7 @@ void LocalizationNodelet::processImages(
 
             carmaker_msgs::LocalFeatures viz_features = features;
             viz_features.header.frame_id = prediction_frame_;
+            viz_features.header.stamp = ros::Time(0);
             visualizer_->publishObservation(ch.name, viz_features);
             ch.processed_count++;
 
@@ -762,21 +763,7 @@ void LocalizationNodelet::processImages(
 
     // Draw seam lines if visualizer is active for visual validation
     if (visualizer_) {
-        cv::Mat svm_canvas_with_seams = svm_canvas_.clone();
-        if (seam_line_points_.size() >= 6) {
-            cv::Point p_fc = seam_line_points_[0];
-            cv::Point p_l1_fl = seam_line_points_[1];
-            cv::Point p_l2_fl = seam_line_points_[2];
-            cv::Point p_rc = seam_line_points_[3];
-            cv::Point p_l1_rl = seam_line_points_[4];
-            cv::Point p_l2_rl = seam_line_points_[5];
-
-            cv::line(svm_canvas_with_seams, p_fc, p_l1_fl, cv::Scalar(255, 255, 255), 1);
-            cv::line(svm_canvas_with_seams, p_fc, p_l2_fl, cv::Scalar(255, 255, 255), 1);
-            cv::line(svm_canvas_with_seams, p_rc, p_l1_rl, cv::Scalar(255, 255, 255), 1);
-            cv::line(svm_canvas_with_seams, p_rc, p_l2_rl, cv::Scalar(255, 255, 255), 1);
-        }
-        visualizer_->publishSvmImage(svm_canvas_with_seams);
+        visualizer_->publishSvmImage(svm_canvas_, seam_line_points_);
     }
 
     if (fusion_ && !combined.features.empty() && map_matcher_enabled_ && map_loader_ && matcher_) {

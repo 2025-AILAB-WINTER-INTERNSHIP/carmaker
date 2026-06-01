@@ -26,7 +26,7 @@ public:
     void publishEstimation(const geometry_msgs::PoseWithCovarianceStamped& pose);
     void publishCorrection(const geometry_msgs::PoseWithCovarianceStamped& pose);
     void publishObservation(const std::string& channel_name, const carmaker_msgs::LocalFeatures& features);
-    void publishSvmImage(const cv::Mat& svm_image);
+    void publishSvmImage(const cv::Mat& svm_image, const std::vector<cv::Point>& seam_line_points = {});
     void publishBevImage(const std::string& camera_name, const cv::Mat& bev_image, const std::string& type);
     void publishMapFeatures(const std::vector<MapFeature>& map_features);
     void clearCorrection();
@@ -50,6 +50,7 @@ private:
 
     double resolution_;
     double vehicle_length_, vehicle_width_, vehicle_height_, vehicle_length_offset_;
+    bool viz_seam_line_;
     std::string global_frame_;
     std::string prediction_frame_;
 

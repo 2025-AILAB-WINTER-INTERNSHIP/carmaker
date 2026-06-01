@@ -76,6 +76,7 @@ feature_extractor:
     covariance_k: 1.0 # 방사 방향 공분산 스케일 계수
 
 svm:
+  viz_seam_line: true # 심라인 시각화 유무
   seam_front_offset: -2.3175 # -Length/2 = -2.3175 (Geometric Center)
   seam_rear_offset: 2.3175 # Length/2 = 2.3175 (Geometric Center)
   seam_slope_front: 0.409924 # Width / Length = 1.9 / 4.635 = 0.409924 (Diagonal Slope)
@@ -105,6 +106,6 @@ map_matcher:
   map_format: "osm" # "osm" | 추후 "lanelet2", "pcd" 추가
   map_file: "" # launch argument로 지정
   search_radius: -1.0 # 지도 조회 반경 [m] (음수 설정 시 전체 맵 피처 사용 - 위치 유실 및 소형 맵 복구용)
-  min_search_radius: 0.5 # 최소 ICP 탐색 반경 [m] (초기 위치 오차 극복용)
+  min_search_radius: 5.0 # 최소 ICP 탐색 반경 [m] (초기 위치 오차 극복용)
   fitness_threshold: 0.35 # 매칭 유효 판정 임계값
   max_iterations: 50 # ICP 반복 횟수

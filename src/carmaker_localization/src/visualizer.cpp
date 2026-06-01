@@ -34,14 +34,31 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
     vehicle_length_offset_ = pnh.param("vehicle/center_offset_x", 2.3175);
 
     resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
+    viz_seam_line_ = pnh.param("svm/viz_seam_line", true);
 }
 
-void Visualizer::publishSvmImage(const cv::Mat& svm_image) {
+void Visualizer::publishSvmImage(const cv::Mat& svm_image, const std::vector<cv::Point>& seam_line_points) {
     if (svm_pub_.getNumSubscribers() > 0 && !svm_image.empty()) {
+        cv::Mat final_image = svm_image;
+        if (viz_seam_line_ && seam_line_points.size() >= 6) {
+            final_image = svm_image.clone();
+            cv::Point p_fc = seam_line_points[0];
+            cv::Point p_l1_fl = seam_line_points[1];
+            cv::Point p_l2_fl = seam_line_points[2];
+            cv::Point p_rc = seam_line_points[3];
+            cv::Point p_l1_rl = seam_line_points[4];
+            cv::Point p_l2_rl = seam_line_points[5];
+
+            cv::line(final_image, p_fc, p_l1_fl, cv::Scalar(255, 255, 255), 1);
+            cv::line(final_image, p_fc, p_l2_fl, cv::Scalar(255, 255, 255), 1);
+            cv::line(final_image, p_rc, p_l1_rl, cv::Scalar(255, 255, 255), 1);
+            cv::line(final_image, p_rc, p_l2_rl, cv::Scalar(255, 255, 255), 1);
+        }
+
         std_msgs::Header header;
         header.stamp = ros::Time::now();
         header.frame_id = prediction_frame_;
-        cv_bridge::CvImage cv_img(header, "rgb8", svm_image);
+        cv_bridge::CvImage cv_img(header, "rgb8", final_image);
         svm_pub_.publish(cv_img.toImageMsg());
     }
 }
