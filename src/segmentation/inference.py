@@ -98,9 +98,14 @@ class SegmentationPredictor:
         # torch.compile 최적화 컴파일 적용 (PyTorch 2.0 이상 지원)
         if use_compile:
             try:
-                self.model = torch.compile(self.model, mode="reduce-overhead")
+                # 멀티스레드(ROS worker thread) 환경에서 CUDA Graphs TLS AssertionError 방지를 위해 cudagraphs 비활성화 옵션 적용
+                self.model = torch.compile(self.model, options={"triton.cudagraphs": False})
             except Exception:
-                pass
+                try:
+                    # Fallback: 옵션 없는 기본 컴파일 시도
+                    self.model = torch.compile(self.model)
+                except Exception:
+                    pass
 
         self.warmup(max(0, int(warmup_iterations)))
 
