@@ -744,7 +744,7 @@ void LocalizationNodelet::processImages(
 
             carmaker_msgs::LocalFeatures viz_features = features;
             viz_features.header.frame_id = prediction_frame_;
-            viz_features.header.stamp = ros::Time(0);
+            viz_features.header.stamp = features.header.stamp;
             visualizer_->publishObservation(ch.name, viz_features);
             ch.processed_count++;
 
