@@ -191,7 +191,8 @@ class SegmentationInferenceNode:
                 else:
                     self.process_image(msg)
             except Exception as exc:
-                rospy.logerr_throttle(1.0, "segmentation worker processing failed: %s", exc)
+                import traceback
+                rospy.logerr_throttle(1.0, "segmentation worker processing failed: %s\n%s", exc, traceback.format_exc())
             finally:
                 # 작업이 성공적으로 수행되었거나 에러로 인해 끝났음을 큐에 신호로 알립니다.
                 self.msg_queue.task_done()
