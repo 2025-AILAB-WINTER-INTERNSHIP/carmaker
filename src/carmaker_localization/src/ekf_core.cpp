@@ -75,9 +75,9 @@ void EkfCore::prediction(double timestamp) {
     x_(X) += v_global_x * dt + 0.5 * (ax * cos_y - ay * sin_y) * dt * dt;
     x_(Y) += v_global_y * dt + 0.5 * (ax * sin_y + ay * cos_y) * dt * dt;
 
-    // Local Velocity Update
-    x_(VX) += ax * dt;
-    x_(VY) += ay * dt;
+    // Local Velocity Update (Coriolis terms for rotating body frame)
+    x_(VX) += (ax + yaw_rate * vy) * dt;
+    x_(VY) += (ay - yaw_rate * vx) * dt;
 
     // Heading Update
     x_(YAW) += yaw_rate * dt;
@@ -99,7 +99,12 @@ void EkfCore::prediction(double timestamp) {
     F(Y, AX) = 0.5 * sin_y * dt * dt;
     F(Y, AY) = 0.5 * cos_y * dt * dt;
 
+    // Coriolis Jacobian: d(VX)/d(VY), d(VX)/d(YAW_RATE), d(VY)/d(VX), d(VY)/d(YAW_RATE)
+    F(VX, VY) = yaw_rate * dt;
+    F(VX, YAW_RATE) = vy * dt;
     F(VX, AX) = dt;
+    F(VY, VX) = -yaw_rate * dt;
+    F(VY, YAW_RATE) = -vx * dt;
     F(VY, AY) = dt;
     F(YAW, YAW_RATE) = dt;
 
@@ -144,15 +149,15 @@ void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d&
     P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
-void EkfCore::correctVelocity(double vx, double vy, const Eigen::Matrix2d& R, double timestamp) {
+void EkfCore::correctWheel(double vx, double vy, double yaw_rate, const Eigen::Matrix3d& R, double timestamp) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(2, STATE_DIM);
-    H(0, VX) = 1.0; H(1, VY) = 1.0;
+    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, STATE_DIM);
+    H(0, VX) = 1.0; H(1, VY) = 1.0; H(2, YAW_RATE) = 1.0;
 
-    Eigen::Vector2d z(vx, vy);
-    Eigen::Vector2d h(x_(VX), x_(VY));
+    Eigen::Vector3d z(vx, vy, yaw_rate);
+    Eigen::Vector3d h(x_(VX), x_(VY), x_(YAW_RATE));
 
     Eigen::MatrixXd S = H * P_ * H.transpose() + R;
     Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();

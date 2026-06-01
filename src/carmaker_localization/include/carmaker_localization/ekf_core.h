@@ -44,8 +44,8 @@ public:
 
     // Multi-Sensor Corrections
     void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp);
-    void correctVelocity(double vx, double vy, const Eigen::Matrix2d& R, double timestamp);
     void correctImu(double ax, double ay, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
+    void correctWheel(double vx, double vy, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
 
     // Getters
     StateFrame getState() const;

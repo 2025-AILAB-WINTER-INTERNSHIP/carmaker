@@ -477,25 +477,17 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     // 차량 뒷바퀴 축은 측면 미끄러짐이 없으므로, Fr1A 기준 측면 속도(vy)는 순수 회전에 의해 발생함
     double vy_nhc = -yaw_rate_wheel * rear_axle_x_;
 
-    Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
+    // 3-3. 휠 오도메트리 보정
+    Eigen::Matrix3d R_wheel = Eigen::Matrix3d::Identity();
     if (is_stopped) {
-        R_wheel *= 1e-6; // 정지 상태일 때는 속도 0 측정을 극도로 신뢰하여 필터 속도 상태 강제 고정
+        R_wheel *= 1e-6; // 정지 상태일 때는 속도/요레이트 0 측정을 극도로 신뢰하여 필터 상태 강제 고정
     } else {
         R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);
         R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint uncertainty
+        R_wheel(2, 2) = std::pow(wheel_speed_std_ / track_width_, 2); // Yaw rate noise propagation
     }
 
-    ekf_core_->correctVelocity(vx_wheel, vy_nhc, R_wheel, current_time);
-
-    // 3-3. 휠 오도메트리 Yaw Rate 기반 IMU 바이어스 교정 (Redundancy)
-    Eigen::Matrix3d R_wheel_imu = Eigen::Matrix3d::Identity() * 1e6; // ax, ay 무시 (무한대 노이즈)
-    if (is_stopped) {
-        R_wheel_imu(2, 2) = 1e-6; // 정지 상태일 때는 요레이트 0 측정을 극도로 신뢰하여 요레이트 상태 및 바이어스 리셋
-    } else {
-        R_wheel_imu(2, 2) = std::pow(wheel_speed_std_ / track_width_, 2); // Yaw rate 노이즈 전파 계산
-    }
-
-    ekf_core_->correctImu(0.0, 0.0, yaw_rate_wheel, R_wheel_imu, current_time);
+    ekf_core_->correctWheel(vx_wheel, vy_nhc, yaw_rate_wheel, R_wheel, current_time);
 
     // 4. Publish Final Estimation
     publishEstimation(ros::Time(current_time));
