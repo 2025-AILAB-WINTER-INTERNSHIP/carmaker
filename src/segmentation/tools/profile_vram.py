@@ -38,9 +38,12 @@ def profile_single_case(
     width: int,
     warmup: int,
     measured_runs: int,
+    loss_name: str = "none",
 ) -> Dict[str, Any]:
     model = None
     dummy_input = None
+    dummy_target = None
+    loss_fn = None
 
     precision_lower = precision.lower()
     if precision_lower not in ("fp16", "bf16", "fp32"):
@@ -70,7 +73,14 @@ def profile_single_case(
         model = UNet(
             in_channels=3, num_classes=3, base_channels=32, norm_type="group"
         ).cuda()
-        model.eval()
+
+        if loss_name != "none":
+            from segmentation.losses import build_loss
+            loss_fn = build_loss(name=loss_name, num_classes=3, device="cuda")
+            model.train()
+            dummy_target = torch.randint(0, 3, (batch_size, height, width), dtype=torch.long, device="cuda")
+        else:
+            model.eval()
 
         dummy_input = torch.randn(batch_size, 3, height, width, device="cuda")
 
@@ -84,9 +94,16 @@ def profile_single_case(
         torch.cuda.synchronize()
         model_weights_mb = _to_mb(torch.cuda.memory_allocated())
 
-        with torch.inference_mode():
+        if loss_fn is not None:
             for _ in range(max(1, warmup)):
-                _ = model(dummy_input)
+                outputs = model(dummy_input)
+                loss = loss_fn(outputs, dummy_target)
+                loss.backward()
+                model.zero_grad()
+        else:
+            with torch.inference_mode():
+                for _ in range(max(1, warmup)):
+                    _ = model(dummy_input)
         torch.cuda.synchronize()
 
         run_peaks_allocated_mb: List[float] = []
@@ -101,8 +118,14 @@ def profile_single_case(
             torch.cuda.synchronize()
             start_event.record()
 
-            with torch.inference_mode():
-                _ = model(dummy_input)
+            if loss_fn is not None:
+                outputs = model(dummy_input)
+                loss = loss_fn(outputs, dummy_target)
+                loss.backward()
+                model.zero_grad()
+            else:
+                with torch.inference_mode():
+                    _ = model(dummy_input)
 
             end_event.record()
             torch.cuda.synchronize()
@@ -148,6 +171,10 @@ def profile_single_case(
     finally:
         del model
         del dummy_input
+        if dummy_target is not None:
+            del dummy_target
+        if loss_fn is not None:
+            del loss_fn
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -159,6 +186,7 @@ def run_case_in_isolated_process(
     width: int,
     warmup: int,
     measured_runs: int,
+    loss_name: str = "none",
 ) -> Dict[str, Any]:
     cmd = [
         sys.executable,
@@ -176,6 +204,8 @@ def run_case_in_isolated_process(
         str(warmup),
         "--measured-runs",
         str(measured_runs),
+        "--loss",
+        loss_name,
         "--json",
     ]
 
@@ -319,6 +349,8 @@ def parse_args():
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--measured-runs", type=int, default=10)
     parser.add_argument("--suite-trials", type=int, default=5)
+    parser.add_argument("--loss", type=str, default="none", help="Loss function name (e.g. ce, dice, focal, or none)")
+    parser.add_argument("--compare-concat", action="store_true", help="Compare batch=4 (720x480) vs concatenated batch=1 sizes")
     return parser.parse_args()
 
 
@@ -337,12 +369,67 @@ if __name__ == "__main__":
             width=args.width,
             warmup=args.warmup,
             measured_runs=args.measured_runs,
+            loss_name=args.loss,
         )
         if args.json:
             print(json.dumps(result, ensure_ascii=True))
         else:
             print(result)
         sys.exit(0 if result.get("ok") else 1)
+
+    if args.compare_concat:
+        print("=" * 80)
+        print("CarMaker Semantic Segmentation U-Net Concat Performance Comparison")
+        print(f"- Precision: {args.precision.upper()}, Loss: {args.loss.upper()}")
+        print("- Isolated subprocess per trial")
+        print("=" * 80)
+
+        # (Label, batch_size, height, width)
+        comparison_cases = [
+            ("Baseline (No Concat)", 4, 480, 720),
+            ("Concat Horizontal", 1, 480, 2880),
+            ("Concat Vertical", 1, 1920, 720),
+            ("Concat Grid (2x2)", 1, 960, 1440),
+        ]
+
+        results = []
+        for label, b, h, w in comparison_cases:
+            print(f"Profiling {label} (Batch {b}, {w}x{h})...")
+            trials = []
+            for trial_index in range(1, max(1, args.suite_trials) + 1):
+                trials.append(
+                    run_case_in_isolated_process(
+                        batch_size=b,
+                        precision=cast(Precision, args.precision),
+                        height=h,
+                        width=w,
+                        warmup=args.warmup,
+                        measured_runs=args.measured_runs,
+                        loss_name=args.loss,
+                    )
+                )
+            summary = summarize_case(trials)
+            results.append((label, b, f"{w}x{h}", summary))
+
+        print("\n" + "=" * 80)
+        print(f"Concat Comparison Summary (Precision: {args.precision.upper()}, Loss: {args.loss.upper()})")
+        print("=" * 80)
+        print(f"{'Configuration':<25} | {'Batch':<5} | {'Resolution':<12} | {'Peak VRAM (MB)':<15} | {'Latency (ms)':<12} | {'Throughput (FPS)':<16}")
+        print("-" * 80)
+        for label, b, res, summary in results:
+            if summary.get("ok"):
+                vram_str = f"{summary['peak_allocated_mb_median']:.2f}"
+                lat_str = f"{summary['latency_ms_median']:.2f}"
+                fps_str = f"{summary['fps_median']:.2f}"
+            else:
+                errors = summary.get("errors", ["OOM"])
+                is_oom = any("OutOfMemory" in str(e) or "OOM" in str(e) for e in errors)
+                vram_str = "OOM" if is_oom else "FAILED"
+                lat_str = "N/A"
+                fps_str = "N/A"
+            print(f"{label:<25} | {b:<5} | {res:<12} | {vram_str:>15} | {lat_str:>12} | {fps_str:>16}")
+        print("=" * 80)
+        sys.exit(0)
 
     print("=" * 60)
     print("CarMaker Semantic Segmentation U-Net Stable VRAM Profiler")
@@ -373,6 +460,7 @@ if __name__ == "__main__":
                     width=args.width,
                     warmup=args.warmup,
                     measured_runs=args.measured_runs,
+                    loss_name=args.loss,
                 )
             )
 

@@ -91,32 +91,7 @@ class SegmentationPredictor:
             image: Input image as HWC uint8. ROS OpenCV images are usually BGR.
             color_order: Either ``"bgr"`` or ``"rgb"``.
         """
-        if image is None or image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError("image must be an HWC uint8 3-channel array")
-
-        original_h, original_w = image.shape[:2]
-
-        # 학습 Dataset은 RGB, float32, CHW, 0..1 스케일을 사용했다.
-        # ROS/OpenCV 입력은 보통 BGR이므로 여기서 학습 입력 형식으로 맞춘다.
-        rgb = to_rgb(image, color_order)
-        tensor = preprocess_rgb(rgb, self.image_size).to(self.device)
-
-        # CrossEntropy 기반 semantic segmentation 모델의 출력은 [B, C, H, W] logits이다.
-        # class_map은 각 픽셀에서 가장 큰 logit을 가진 class id이다.
-        with self.autocast_context():
-            logits = self.model(tensor)
-        class_map_t = torch.argmax(logits, dim=1).to(torch.uint8)
-        class_map = class_map_t[0].detach().cpu().numpy()
-
-        # 모델 입력 크기가 원본 카메라 크기와 다를 수 있으므로 class id를 nearest로 복원한다.
-        # bilinear를 쓰면 class id가 섞일 수 있어서 segmentation mask에는 쓰면 안 된다.
-        if self.resize_output and (class_map.shape[0] != original_h or class_map.shape[1] != original_w):
-            class_map = cv2.resize(class_map, (original_w, original_h), interpolation=cv2.INTER_NEAREST)
-
-        return SegmentationResult(
-            class_map=class_map,
-            class_names=self.class_names,
-        )
+        return self.predict_batch([image], color_order=color_order)[0]
 
     @torch.inference_mode()
     def predict_batch(self, images: Sequence[np.ndarray], color_order: str = "bgr") -> list[SegmentationResult]:
@@ -124,8 +99,6 @@ class SegmentationPredictor:
         if not images:
             return []
 
-        # 각 입력 이미지는 preprocess_rgb()에서 [1, 3, H, W]로 변환된다.
-        # 아래에서 torch.cat()으로 합쳐 모델에는 [B, 3, H, W] batch를 한 번만 넣는다.
         original_shapes = []
         tensors = []
         for image in images:
@@ -133,27 +106,75 @@ class SegmentationPredictor:
                 raise ValueError("each image must be an HWC uint8 3-channel array")
 
             original_shapes.append(image.shape[:2])
-            rgb = to_rgb(image, color_order)
-            tensors.append(preprocess_rgb(rgb, self.image_size))
+            # Fast HWC uint8 -> CHW uint8 tensor on CPU (no copy, extremely fast)
+            tensors.append(torch.from_numpy(image.transpose(2, 0, 1)))
 
-        batch = torch.cat(tensors, dim=0).to(self.device)
+        # Stack as a single uint8 batch and send to GPU
+        batch = torch.stack(tensors).to(self.device)
+        
+        # Fast color channel swapping on GPU
+        if color_order.lower() == "bgr":
+            batch = batch[:, [2, 1, 0], :, :]
+            
+        # Float conversion and normalization on GPU
+        batch = batch.float() / 255.0
+        
+        # Resize on GPU in parallel
+        width, height = self.image_size
+        if batch.shape[-1] != width or batch.shape[-2] != height:
+            batch = torch.nn.functional.interpolate(
+                batch, size=(height, width), mode="bilinear", align_corners=False
+            )
+
         with self.autocast_context():
             logits = self.model(batch)
         class_maps_t = torch.argmax(logits, dim=1).to(torch.uint8)
 
-        # batch output [B, H, W]를 다시 이미지별 SegmentationResult로 풀어준다.
-        # 원본 크기가 모델 입력 크기와 다르면 단일 이미지 경로와 동일하게 nearest로 복원한다.
+        # Check if all images share the same original resolution
+        all_same_shape = all(shape == original_shapes[0] for shape in original_shapes)
+        
         results = []
-        for class_map_t, (original_h, original_w) in zip(class_maps_t, original_shapes):
-            class_map = class_map_t.detach().cpu().numpy()
-            if self.resize_output and (class_map.shape[0] != original_h or class_map.shape[1] != original_w):
-                class_map = cv2.resize(class_map, (original_w, original_h), interpolation=cv2.INTER_NEAREST)
-            results.append(
-                SegmentationResult(
-                    class_map=class_map,
-                    class_names=self.class_names,
+        if self.resize_output:
+            if all_same_shape:
+                original_h, original_w = original_shapes[0]
+                if class_maps_t.shape[-2] != original_h or class_maps_t.shape[-1] != original_w:
+                    class_maps_t = torch.nn.functional.interpolate(
+                        class_maps_t.unsqueeze(1).float(),
+                        size=(original_h, original_w),
+                        mode="nearest"
+                    ).squeeze(1).to(torch.uint8)
+                
+                # Single host-to-device transfer for the whole batch
+                class_maps_cpu = class_maps_t.cpu().numpy()
+                for i in range(len(images)):
+                    results.append(
+                        SegmentationResult(
+                            class_map=class_maps_cpu[i],
+                            class_names=self.class_names,
+                        )
+                    )
+            else:
+                # Resize individually on GPU
+                for i, (oh, ow) in enumerate(original_shapes):
+                    m = class_maps_t[i:i+1].unsqueeze(1).float()
+                    if m.shape[-2] != oh or m.shape[-1] != ow:
+                        m = torch.nn.functional.interpolate(m, size=(oh, ow), mode="nearest")
+                    class_map = m.squeeze(1).to(torch.uint8)[0].cpu().numpy()
+                    results.append(
+                        SegmentationResult(
+                            class_map=class_map,
+                            class_names=self.class_names,
+                        )
+                    )
+        else:
+            class_maps_cpu = class_maps_t.cpu().numpy()
+            for i in range(len(images)):
+                results.append(
+                    SegmentationResult(
+                        class_map=class_maps_cpu[i],
+                        class_names=self.class_names,
+                    )
                 )
-            )
         return results
 
     def autocast_context(self):
