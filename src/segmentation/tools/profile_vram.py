@@ -87,9 +87,13 @@ def profile_single_case(
         if precision_lower == "fp16":
             dummy_input = dummy_input.half()
             model = model.half()
+            if loss_fn is not None:
+                loss_fn = loss_fn.half()
         elif precision_lower == "bf16":
             dummy_input = dummy_input.bfloat16()
             model = model.bfloat16()
+            if loss_fn is not None:
+                loss_fn = loss_fn.bfloat16()
 
         torch.cuda.synchronize()
         model_weights_mb = _to_mb(torch.cuda.memory_allocated())
@@ -414,21 +418,36 @@ if __name__ == "__main__":
         print("\n" + "=" * 80)
         print(f"Concat Comparison Summary (Precision: {args.precision.upper()}, Loss: {args.loss.upper()})")
         print("=" * 80)
-        print(f"{'Configuration':<25} | {'Batch':<5} | {'Resolution':<12} | {'Peak VRAM (MB)':<15} | {'Latency (ms)':<12} | {'Throughput (FPS)':<16}")
+        print(f"{'Configuration':<25} | {'Batch':<5} | {'Resolution':<12} | {'Peak VRAM (MB)':<15} | {'Latency (ms)':<12} | {'Throughput (FPS)*':<17}")
         print("-" * 80)
         for label, b, res, summary in results:
             if summary.get("ok"):
                 vram_str = f"{summary['peak_allocated_mb_median']:.2f}"
                 lat_str = f"{summary['latency_ms_median']:.2f}"
-                fps_str = f"{summary['fps_median']:.2f}"
+                # For concat cases, batch size is 1, but it processes 4 images worth of pixels,
+                # so to compare throughput fairly, scale it by 4 (equivalent 720x480 images processed).
+                fps_val = summary['fps_median']
+                if b == 1:
+                    fps_val *= 4
+                fps_str = f"{fps_val:.2f}"
             else:
                 errors = summary.get("errors", ["OOM"])
                 is_oom = any("OutOfMemory" in str(e) or "OOM" in str(e) for e in errors)
                 vram_str = "OOM" if is_oom else "FAILED"
                 lat_str = "N/A"
                 fps_str = "N/A"
-            print(f"{label:<25} | {b:<5} | {res:<12} | {vram_str:>15} | {lat_str:>12} | {fps_str:>16}")
+            print(f"{label:<25} | {b:<5} | {res:<12} | {vram_str:>15} | {lat_str:>12} | {fps_str:>17}")
         print("=" * 80)
+        print("* Throughput (FPS) for Concat cases is calculated as equivalent 720x480 frames processed per second (i.e. Batch 1 FPS * 4).")
+        
+        has_failures = any(not s.get("ok") for _, _, _, s in results)
+        if has_failures:
+            print("\nError Details:")
+            for label, _, _, summary in results:
+                if not summary.get("ok"):
+                    errors = summary.get("errors", ["Unknown error"])
+                    print(f"  * {label}: {', '.join(map(str, errors))}")
+            print("=" * 80)
         sys.exit(0)
 
     print("=" * 60)
