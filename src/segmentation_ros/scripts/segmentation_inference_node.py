@@ -58,6 +58,11 @@ class SegmentationInferenceNode:
         cuda_warmup_iterations = int(rospy.get_param("~cuda_warmup_iterations", 1))
         image_size_param = rospy.get_param("~image_size", None)
         image_size = parse_image_size(image_size_param) if image_size_param else None
+        
+        # 모델 최적화 옵션 로드 (Conv-BN Fusion, torch.compile)
+        use_fusion = parse_bool(rospy.get_param("~use_fusion", True))
+        use_compile = parse_bool(rospy.get_param("~use_compile", True))
+
         # cv_bridge가 ROS Image를 OpenCV 배열로 바꿀 때 사용할 encoding.
         # CarMaker/ROS 카메라 이미지는 보통 bgr8이므로 기본값도 bgr8로 둔다.
         self.input_encoding = rospy.get_param("~input_encoding", "bgr8")
@@ -78,6 +83,8 @@ class SegmentationInferenceNode:
             inference_precision=inference_precision,
             warmup_iterations=cuda_warmup_iterations,
             resize_output=resize_output,
+            use_fusion=use_fusion,
+            use_compile=use_compile,
         )
 
         # input_mode는 이 노드의 ROS 입출력 형태를 고른다.
