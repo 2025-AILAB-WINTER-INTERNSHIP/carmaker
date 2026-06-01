@@ -106,6 +106,8 @@ private:
     // 2. Read-Only Configuration Parameters
     // =========================================================================
     int imu_id_ = 0;
+    double imu_offset_x_ = 0.0;
+    double imu_offset_y_ = 0.0;
     std::string global_frame_;
     std::string prediction_frame_;
 

@@ -185,8 +185,8 @@ void LocalizationNodelet::initEkf() {
     double wheel_std = pnh.param("ekf/wheel_noise/speed_std", 0.05);
 
     imu_id_ = pnh.param("ekf/imu/imu_id", 0);
-    double imu_x = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_x", 2.29);
-    double imu_y = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_y", 0.0);
+    imu_offset_x_ = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_x", 2.29);
+    imu_offset_y_ = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_y", 0.0);
     double imu_z = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_z", 0.298);
 
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 1e-4;
@@ -196,7 +196,7 @@ void LocalizationNodelet::initEkf() {
 
     ekf_core_->setProcessNoise(Q);
 
-    NODELET_INFO("Selected IMU: %d (offset_x: %.2f)", imu_id_, imu_x);
+    NODELET_INFO("Selected IMU: %d (offset_x: %.2f)", imu_id_, imu_offset_x_);
 }
 
 void LocalizationNodelet::initSvm() {
@@ -419,9 +419,31 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     R_imu(1, 1) = R_imu(0, 0);
     R_imu(2, 2) = std::pow(imu_gyro_std_, 2);
 
-    ekf_core_->correctImu(current_dynamics.Sensor_Inertial_0_Acc_B_x,
-                          current_dynamics.Sensor_Inertial_0_Acc_B_y,
-                          current_dynamics.Sensor_Inertial_0_Omega_B_z,
+    double ax_raw = current_dynamics.Sensor_Inertial_0_Acc_B_x;
+    double ay_raw = current_dynamics.Sensor_Inertial_0_Acc_B_y;
+    double wz_raw = current_dynamics.Sensor_Inertial_0_Omega_B_z;
+
+    // 요레이트 수치 미분을 통한 요각가속도 추정 (Lever-arm 보정용)
+    static double last_wz = 0.0;
+    double dwz = (dt > 1e-4) ? (wz_raw - last_wz) / dt : 0.0;
+    last_wz = wz_raw;
+
+    // 휠 속도를 레버 암 보정용 임시 참조 (NHC 측면 속도 도출)
+    double v_left_temp = current_dynamics.Vhcl_RL_rotv * tire_radius_;
+    double v_right_temp = current_dynamics.Vhcl_RR_rotv * tire_radius_;
+    double vx_wheel_temp = (v_left_temp + v_right_temp) / 2.0;
+    double yaw_rate_wheel_temp = (v_right_temp - v_left_temp) / track_width_;
+    double vy_nhc_temp = -yaw_rate_wheel_temp * rear_axle_x_;
+    if (std::abs(vx_wheel_temp) < 0.01) {
+        vx_wheel_temp = 0.0;
+        vy_nhc_temp = 0.0;
+    }
+
+    // IMU 레버암(Lever-arm) 오프셋 및 원심력 보정 적용 (뒷차축 중심의 순수 선가속도로 변환)
+    double ax_corrected = ax_raw + imu_offset_y_ * dwz + imu_offset_x_ * wz_raw * wz_raw + wz_raw * vy_nhc_temp;
+    double ay_corrected = ay_raw - imu_offset_x_ * dwz + imu_offset_y_ * wz_raw * wz_raw - wz_raw * vx_wheel_temp;
+
+    ekf_core_->correctImu(ax_corrected, ay_corrected, wz_raw,
                           R_imu, current_time);
 
     // 3. Wheel Speed Observation Correction & Kinematic Constraints
@@ -432,19 +454,35 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     double vx_wheel = (v_left + v_right) / 2.0;
     double yaw_rate_wheel = (v_right - v_left) / track_width_;
 
+    // 정지 상태 감지 가드 (Zero Velocity Update - ZUPT)
+    // 차량 속도가 극도로 낮을 경우(0.01 m/s 미만) 정지한 것으로 판정하여 속도 및 요레이트를 강제 0으로 규제합니다.
+    bool is_stopped = (std::abs(vx_wheel) < 0.01);
+    if (is_stopped) {
+        vx_wheel = 0.0;
+        yaw_rate_wheel = 0.0;
+    }
+
     // 3-2. 비홀로노믹 제약(NHC) + 레버 암 효과
     // 차량 뒷바퀴 축은 측면 미끄러짐이 없으므로, Fr1A 기준 측면 속도(vy)는 순수 회전에 의해 발생함
     double vy_nhc = -yaw_rate_wheel * rear_axle_x_;
 
     Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
-    R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);
-    R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint uncertainty
+    if (is_stopped) {
+        R_wheel *= 1e-6; // 정지 상태일 때는 속도 0 측정을 극도로 신뢰하여 필터 속도 상태 강제 고정
+    } else {
+        R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);
+        R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint uncertainty
+    }
 
     ekf_core_->correctVelocity(vx_wheel, vy_nhc, R_wheel, current_time);
 
     // 3-3. 휠 오도메트리 Yaw Rate 기반 IMU 바이어스 교정 (Redundancy)
     Eigen::Matrix3d R_wheel_imu = Eigen::Matrix3d::Identity() * 1e6; // ax, ay 무시 (무한대 노이즈)
-    R_wheel_imu(2, 2) = std::pow(wheel_speed_std_ / track_width_, 2); // Yaw rate 노이즈 전파 계산
+    if (is_stopped) {
+        R_wheel_imu(2, 2) = 1e-6; // 정지 상태일 때는 요레이트 0 측정을 극도로 신뢰하여 요레이트 상태 및 바이어스 리셋
+    } else {
+        R_wheel_imu(2, 2) = std::pow(wheel_speed_std_ / track_width_, 2); // Yaw rate 노이즈 전파 계산
+    }
 
     ekf_core_->correctImu(0.0, 0.0, yaw_rate_wheel, R_wheel_imu, current_time);
 
