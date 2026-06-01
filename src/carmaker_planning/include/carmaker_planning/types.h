@@ -62,7 +62,7 @@ struct VehicleSpec {
   double min_turning_radius;
   double max_steer_angle;
   double max_vel;
-  double max_acc;
+  double max_accel;
   double max_decel;
   double max_jerk;
   double max_lat_acc;
@@ -189,7 +189,7 @@ struct GlobalPostProcessConfig {
   } smoother;
   struct Resampler { double resolution; } resampler;
   struct Profiler {
-    double max_vel, max_acc, max_dec, max_jerk, max_lat_acc, goal_vel;
+    double max_vel, max_accel, max_decel, max_jerk, max_lat_acc, goal_vel;
   } profiler;
 };
 
@@ -214,7 +214,6 @@ inline double quaternionToYaw(const geometry_msgs::Quaternion& q) {
                     1.0 - 2.0 * (q.y * q.y + q.z * q.z));
 }
 
-// ── Parameter Loading Helpers ─────────────────────────────────────────
 inline void loadVehicleSpec(const ros::NodeHandle& nh, VehicleSpec& spec,
                             const std::string& ns = "vehicle") {
   nh.param(ns + "/width",             spec.width,            1.9);
@@ -232,7 +231,7 @@ inline void loadVehicleSpec(const ros::NodeHandle& nh, VehicleSpec& spec,
   spec.max_steer_angle = deg2rad(steer_deg);
 
   nh.param(ns + "/limits/max_vel",   spec.max_vel,   1.5);
-  nh.param(ns + "/limits/max_acc",   spec.max_acc,   1.0);
+  nh.param(ns + "/limits/max_accel", spec.max_accel, 1.0);
   nh.param(ns + "/limits/max_decel", spec.max_decel, 2.0);
   nh.param(ns + "/limits/max_jerk",  spec.max_jerk,  2.0);
   nh.param(ns + "/limits/max_lat_acc", spec.max_lat_acc, 1.5);
@@ -295,8 +294,8 @@ inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostPro
   nh.param(ns + "/smoother/max_iterations", cfg.smoother.max_iterations, 500);
   nh.param(ns + "/resampler/resolution",    cfg.resampler.resolution,   0.1);
   nh.param(ns + "/profiler/max_vel",        cfg.profiler.max_vel,       1.5);
-  nh.param(ns + "/profiler/max_acc",        cfg.profiler.max_acc,       1.0);
-  nh.param(ns + "/profiler/max_dec",        cfg.profiler.max_dec,       1.5);
+  nh.param(ns + "/profiler/max_accel",      cfg.profiler.max_accel,     1.0);
+  nh.param(ns + "/profiler/max_decel",      cfg.profiler.max_decel,     1.5);
   nh.param(ns + "/profiler/max_jerk",       cfg.profiler.max_jerk,      5.0);
   nh.param(ns + "/profiler/max_lat_acc",    cfg.profiler.max_lat_acc,   1.0);
   nh.param(ns + "/profiler/goal_vel",       cfg.profiler.goal_vel,      0.0);

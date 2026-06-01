@@ -35,11 +35,12 @@ vehicle:
   wheelbase: 2.97   # meters
   rear_axle_offset: 0.82 # meters (Rear Bumper to Rear Axle)
   min_turning_radius: 5.5 # meters
-  max_steer_angle_deg: 35.0 # degrees
+  # Ioniq 5 wheelbase/min_turning_radius 기준: atan(2.97 / 5.5) = 28.4 deg
+  max_steer_angle_deg: 28.4 # degrees
 
   limits:
     max_vel: 10.0     # m/s
-    max_acc: 3.0      # m/s^2
+    max_accel: 3.0    # m/s^2
     max_decel: 3.0    # m/s^2
     max_jerk: 2.0     # m/s^3
     max_lat_acc: 1.5  # m/s^2
@@ -96,8 +97,8 @@ global_post_processing:
     resolution: 0.1
   profiler:
     max_vel: 2.0      # m/s 7.2 km/h
-    max_acc: 0.8      # m/s^2
-    max_dec: 0.8      # m/s^2
+    max_accel: 0.8    # m/s^2
+    max_decel: 0.8    # m/s^2
     max_jerk: 1.5     # m/s^3
     max_lat_acc: 0.8  # m/s^2
     goal_vel: 0.0

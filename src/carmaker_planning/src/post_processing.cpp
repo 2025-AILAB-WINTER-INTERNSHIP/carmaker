@@ -16,7 +16,7 @@ void profileKinematicPass(Path& path, double start_v, double start_a,
                           double goal_v, double goal_a, const KinematicLimits& limits) {
   if (path.empty()) return;
   const int n = static_cast<int>(path.size());
-  const double max_acc = std::abs(limits.max_acc);
+  const double max_accel = std::abs(limits.max_accel);
   const double max_decel = -std::abs(limits.max_decel);
   const double max_jerk = std::abs(limits.max_jerk);
 
@@ -29,26 +29,26 @@ void profileKinematicPass(Path& path, double start_v, double start_a,
 
   std::vector<double> v_fwd(n), a_fwd(n);
   v_fwd[0] = std::max(0.0, start_v);
-  a_fwd[0] = std::clamp(start_a, max_decel, max_acc);
+  a_fwd[0] = std::clamp(start_a, max_decel, max_accel);
   for (int i = 1; i < n; ++i) {
     const double ds = dist(path[i-1].x, path[i-1].y, path[i].x, path[i].y);
     const double dt = (ds > 1e-6) ? ds / std::max(0.1, v_fwd[i-1]) : 0.1;
-    double a_lim = std::min(max_acc, a_fwd[i-1] + max_jerk * dt);
+    double a_lim = std::min(max_accel, a_fwd[i-1] + max_jerk * dt);
     v_fwd[i] = std::sqrt(std::max(0.0, v_fwd[i-1]*v_fwd[i-1] + 2.0*a_lim*ds));
     a_fwd[i] = std::clamp((ds > 1e-6) ? (v_fwd[i]*v_fwd[i]-v_fwd[i-1]*v_fwd[i-1])/(2.0*ds)
-                          : a_fwd[i-1], max_decel, max_acc);
+                          : a_fwd[i-1], max_decel, max_accel);
   }
 
   std::vector<double> v_bwd(n), a_bwd(n);
   v_bwd[n-1] = std::max(0.0, goal_v);
-  a_bwd[n-1] = std::clamp(goal_a, max_decel, max_acc);
+  a_bwd[n-1] = std::clamp(goal_a, max_decel, max_accel);
   for (int i = n-2; i >= 0; --i) {
     const double ds = dist(path[i].x, path[i].y, path[i+1].x, path[i+1].y);
     const double dt = (ds > 1e-6) ? ds / std::max(0.1, v_bwd[i+1]) : 0.1;
     double a_lim = std::max(max_decel, a_bwd[i+1] - max_jerk * dt);
     v_bwd[i] = std::sqrt(std::max(0.0, v_bwd[i+1]*v_bwd[i+1] - 2.0*a_lim*ds));
     a_bwd[i] = std::clamp((ds > 1e-6) ? (v_bwd[i+1]*v_bwd[i+1]-v_bwd[i]*v_bwd[i])/(2.0*ds)
-                          : a_bwd[i+1], max_decel, max_acc);
+                          : a_bwd[i+1], max_decel, max_accel);
   }
 
   for (int i = 0; i < n; ++i) {
@@ -60,7 +60,7 @@ void profileKinematicPass(Path& path, double start_v, double start_a,
       const double ds = dist(path[i-1].x, path[i-1].y, path[i].x, path[i].y);
       const double dt = (ds > 1e-6) ? ds / std::max(0.1, (path[i].v + path[i-1].v) / 2.0) : 0.1;
       const double acc_dt = std::max(0.01, dt);
-      path[i].a = std::clamp((path[i].v - path[i-1].v) / acc_dt, max_decel, max_acc);
+      path[i].a = std::clamp((path[i].v - path[i-1].v) / acc_dt, max_decel, max_accel);
       path[i].t = path[i-1].t + dt;
     }
   }
@@ -404,8 +404,8 @@ bool VelocityProfiler::profile(Path& path, double start_vel) {
 
   KinematicLimits limits;
   limits.max_vel = config_.profiler.max_vel;
-  limits.max_acc = config_.profiler.max_acc;
-  limits.max_decel = config_.profiler.max_dec;
+  limits.max_accel = config_.profiler.max_accel;
+  limits.max_decel = config_.profiler.max_decel;
   limits.max_jerk = config_.profiler.max_jerk;
   limits.max_lat_acc = config_.profiler.max_lat_acc;
 

@@ -39,7 +39,7 @@ private:
 
 struct KinematicLimits {
   double max_vel;
-  double max_acc;
+  double max_accel;
   double max_decel;
   double max_jerk;
   double max_lat_acc;
