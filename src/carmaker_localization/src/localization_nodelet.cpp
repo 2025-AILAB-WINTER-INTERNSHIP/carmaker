@@ -296,8 +296,10 @@ void LocalizationNodelet::setupRosIo() {
     search_radius_ = pnh.param("map_matcher/search_radius", 20.0);
     double vision_base_std = pnh.param("ekf/vision_noise/base_std", 0.1);
 
+    double min_search_radius = pnh.param("map_matcher/min_search_radius", 0.5);
+
     if (matcher_type == "icp") {
-        matcher_ = std::make_shared<IcpMatcher>(fitness_threshold_, max_iterations, vision_base_std);
+        matcher_ = std::make_shared<IcpMatcher>(fitness_threshold_, max_iterations, vision_base_std, min_search_radius);
     }
 
     // 맵 매칭 활성화 여부 (false 시 EKF 예측만 수행, 디버깅용)

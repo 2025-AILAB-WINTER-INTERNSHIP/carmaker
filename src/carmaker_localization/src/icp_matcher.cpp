@@ -41,10 +41,11 @@ static double maxEigenvalue2x2(double a, double b, double c) {
 // ─────────────────────────────────────────────────────────────────────────────
 // IcpMatcher
 // ─────────────────────────────────────────────────────────────────────────────
-IcpMatcher::IcpMatcher(double fitness_threshold, int max_iterations, double vision_base_std)
+IcpMatcher::IcpMatcher(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius)
     : fitness_threshold_(fitness_threshold),
       max_iterations_(max_iterations),
-      vision_base_std_(vision_base_std) {}
+      vision_base_std_(vision_base_std),
+      min_search_radius_(min_search_radius) {}
 
 MatchResult IcpMatcher::match(
     const std::vector<LocalFeature>& observed,
@@ -112,9 +113,11 @@ MatchResult IcpMatcher::match(
                      obs.cov_xy, obs.cov_yy;
             Eigen::Matrix2d C_map = R_curr * C_obs * R_curr.transpose();
 
-            // 특이 행렬 방지(Invertibility 보장)를 위해 대각 성분에 아주 작은 노이즈 추가
-            C_map(0,0) += 1e-3;
-            C_map(1,1) += 1e-3;
+            // 최소 탐색 반경(min_search_radius)을 고려하여 공분산에 최소 불확실성 마진 추가
+            // 이를 통해 KD-tree 탐색 범위가 지나치게 좁아지는 것을 막고, Mahalanobis 거리 평가 시 게이트를 완화
+            double min_var = (min_search_radius_ * min_search_radius_) / 9.0;
+            C_map(0,0) += std::max(1e-3, min_var);
+            C_map(1,1) += std::max(1e-3, min_var);
             Eigen::Matrix2d Info_map = C_map.inverse();
 
             // 2. KD-tree 반경 탐색
