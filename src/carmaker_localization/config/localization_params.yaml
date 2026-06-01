@@ -86,6 +86,7 @@ svm:
 ekf:
   dimension: 2 # 2D (추후 3D 전환 시 3으로 변경)
   frequency: 100.0 # ekf state 업데이트 주기 [Hz]
+  enable_zupt: false # 정지 상태 감지 및 강제 규제(ZUPT) 활성화 여부
 
   # initial_state: [0.0, 0.0, 0.0]  # 초기 상태 설정: [x(m), y(m), yaw(deg)]. GT 사용 시 주석 처리
 

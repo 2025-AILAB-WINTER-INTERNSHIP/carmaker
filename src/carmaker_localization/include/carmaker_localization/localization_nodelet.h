@@ -148,6 +148,7 @@ private:
     double init_x_ = 0.0;
     double init_y_ = 0.0;
     double init_yaw_ = 0.0;
+    bool enable_zupt_ = false;
 
     // =========================================================================
     // 3. ROS Communication Objects

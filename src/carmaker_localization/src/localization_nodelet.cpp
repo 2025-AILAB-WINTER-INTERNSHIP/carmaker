@@ -59,6 +59,8 @@ bool LocalizationNodelet::loadParameters() {
     track_width_ = pnh.param("vehicle/track_width", 1.655);
     rear_axle_x_ = pnh.param("vehicle/rear_axle_offset_x", 0.79);
 
+    enable_zupt_ = pnh.param("ekf/enable_zupt", false);
+
     wheel_speed_std_ = pnh.param("ekf/wheel_noise/speed_std", 0.05);
     imu_acc_std_ = pnh.param("ekf/imu/acc_std", 0.1);
     imu_gyro_std_ = pnh.param("ekf/imu/gyro_std", 0.01);
@@ -468,8 +470,11 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
     double yaw_rate_wheel = (v_right - v_left) / track_width_;
 
     // 정지 상태 감지 가드 (Zero Velocity Update - ZUPT)
-    // 차량 속도가 극도로 낮을 경우(0.01 m/s 미만) 정지한 것으로 판정하여 속도 및 요레이트를 강제 0으로 규제합니다.
-    bool is_stopped = (std::abs(vx_wheel) < 0.01);
+    // 차량 속도가 극도로 낮을 경우(0.01 m/s 미만) 정지한 것으로 판정하여 속도 및 요레이트를 강제 0으로 규제
+    bool is_stopped = false;
+    if (enable_zupt_) {
+        is_stopped = (std::abs(vx_wheel) < 0.01);
+    }
     if (is_stopped) {
         vx_wheel = 0.0;
         yaw_rate_wheel = 0.0;
@@ -481,13 +486,9 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
 
     // 3-3. 휠 오도메트리 보정
     Eigen::Matrix3d R_wheel = Eigen::Matrix3d::Identity();
-    if (is_stopped) {
-        R_wheel *= 1e-3; // 정지 상태일 때는 속도/요레이트 0 측정을 신뢰하되, 포즈 공분산 P가 붕괴하여 비전 보정이 차단되지 않도록 완화
-    } else {
-        R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);
-        R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint uncertainty
-        R_wheel(2, 2) = std::pow(wheel_speed_std_ / track_width_, 2); // Yaw rate noise propagation
-    }
+    R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);
+    R_wheel(1, 1) = 0.01; // Strong non-holonomic constraint uncertainty
+    R_wheel(2, 2) = std::pow(wheel_speed_std_ / track_width_, 2); // Yaw rate noise propagation
 
     ekf_core_->correctWheel(vx_wheel, vy_nhc, yaw_rate_wheel, R_wheel, current_time);
 
