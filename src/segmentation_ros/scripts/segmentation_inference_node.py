@@ -8,6 +8,7 @@ import queue
 import sys
 import threading
 import time
+import numpy as np
 from pathlib import Path
 from typing import Tuple
 
@@ -64,6 +65,10 @@ class SegmentationInferenceNode:
         self.timing_log_interval = float(rospy.get_param("~timing_log_interval", 1.0))
         self.drop_while_busy = parse_bool(rospy.get_param("~drop_while_busy", True))
         
+        # 출력 해상도 복원(원본 카메라 크기로 리사이즈) 여부를 결정하는 파라미터 (기본값: True)
+        # False로 설정 시 모델 네이티브 해상도(720x480) 그대로 반환하여 호스트-디바이스 복사 오버헤드를 극적으로 아낍니다.
+        resize_output = parse_bool(rospy.get_param("~resize_output", False))
+        
         # 실제 모델 로딩과 PyTorch inference는 ROS와 분리된 SegmentationPredictor가 담당한다.
         self.predictor = SegmentationPredictor(
             checkpoint_path=checkpoint_path,
@@ -72,6 +77,7 @@ class SegmentationInferenceNode:
             image_size=image_size,
             inference_precision=inference_precision,
             warmup_iterations=cuda_warmup_iterations,
+            resize_output=resize_output,
         )
 
         # input_mode는 이 노드의 ROS 입출력 형태를 고른다.
@@ -246,41 +252,65 @@ class SegmentationInferenceNode:
             rospy.logerr_throttle(1.0, "segmentation bundle inference failed: %s", exc)
 
     def predict_class_map_msg(self, msg: Image) -> Tuple[Image, float]:
-        # ROS Image -> OpenCV BGR image.
+        # ROS Image -> OpenCV BGR/RGB image.
+        # bgr8/rgb8는 빠른 처리를 위해 cv_bridge의 메모리 카피 과정 없이 바로 numpy 뷰(frombuffer)를 생성합니다.
         # predictor는 내부에서 학습 때와 같은 RGB/resize/tensor 변환을 수행한다.
         # desired_encoding은 input_encoding 파라미터를 따른다. 기본값은 CarMaker 카메라에서
         # 흔히 쓰는 bgr8이며, 입력 토픽이 rgb8이면 YAML/launch에서 바꿔주면 된다.
-        image_bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.input_encoding)
+        if msg.encoding in {"bgr8", "rgb8"}:
+            image_np = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+        else:
+            image_np = self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.input_encoding)
 
         # 실제 PyTorch forward 시간만 따로 재서 로그에 남긴다.
         inference_start = time.perf_counter()
-        result = self.predictor.predict(image_bgr, color_order="bgr")
+        result = self.predictor.predict(image_np, color_order=msg.encoding if msg.encoding in {"bgr8", "rgb8"} else "bgr")
         inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
-        # class_map은 원본 입력 이미지 크기로 되돌려 publish한다.
+        # class_map은 원본 입력 이미지 크기(또는 resize_output=False에 따른 크기)로 되돌려 publish한다.
         # 그래서 다른 노드가 같은 camera frame/header 기준으로 바로 맞춰 쓸 수 있다.
         # encoding은 mono8이다. 픽셀 밝기값이 시각화용 intensity가 아니라 class id이다.
         # 예: 0=background, 1=lane, 2=landmark.
-        class_msg = self.bridge.cv2_to_imgmsg(result.class_map, encoding="mono8")
+        # 여기서는 cv_bridge 오버헤드를 우회하기 위해 직접 ROS Image 메시지를 생성하고 bytes 대입을 수행합니다.
+        class_msg = Image()
         class_msg.header = msg.header
+        class_msg.height = result.class_map.shape[0]
+        class_msg.width = result.class_map.shape[1]
+        class_msg.encoding = "mono8"
+        class_msg.is_bigendian = 0
+        class_msg.step = class_msg.width
+        class_msg.data = result.class_map.tobytes()
         return class_msg, inference_ms
 
     def predict_class_map_msgs(self, msgs: list[Image]) -> Tuple[list[Image], float]:
         # ROS Image 배열을 OpenCV 배열 리스트로 바꾼 뒤 predictor의 batch API에 넘긴다.
         # 결과 순서는 입력 순서와 같으므로 CameraBundle의 names/images index 규칙이 유지된다.
-        images_bgr = [
-            self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.input_encoding)
-            for msg in msgs
-        ]
+        # bgr8/rgb8 인코딩은 복사 없는 고속 처리를 위해 numpy 뷰(frombuffer) 형태로 리스트를 구성합니다.
+        images_np = []
+        for msg in msgs:
+            if msg.encoding in {"bgr8", "rgb8"}:
+                images_np.append(np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3))
+            else:
+                images_np.append(self.bridge.imgmsg_to_cv2(msg, desired_encoding=self.input_encoding))
+
+        # 첫 이미지의 인코딩을 기준으로 컬러 정렬 결정
+        color_order = msgs[0].encoding if msgs[0].encoding in {"bgr8", "rgb8"} else "bgr"
 
         inference_start = time.perf_counter()
-        results = self.predictor.predict_batch(images_bgr, color_order="bgr")
+        results = self.predictor.predict_batch(images_np, color_order=color_order)
         inference_ms = (time.perf_counter() - inference_start) * 1000.0
 
         class_msgs = []
         for msg, result in zip(msgs, results):
-            class_msg = self.bridge.cv2_to_imgmsg(result.class_map, encoding="mono8")
+            # cv_bridge 오버헤드를 배제하기 위해 직접 ROS Image 메시지를 생성하고 bytes를 주입합니다.
+            class_msg = Image()
             class_msg.header = msg.header
+            class_msg.height = result.class_map.shape[0]
+            class_msg.width = result.class_map.shape[1]
+            class_msg.encoding = "mono8"
+            class_msg.is_bigendian = 0
+            class_msg.step = class_msg.width
+            class_msg.data = result.class_map.tobytes()
             class_msgs.append(class_msg)
         return class_msgs, inference_ms
 

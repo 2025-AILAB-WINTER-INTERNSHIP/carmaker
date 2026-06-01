@@ -116,8 +116,11 @@ class SegmentationPredictor:
         if color_order.lower() == "bgr":
             batch = batch[:, [2, 1, 0], :, :]
             
-        # Float conversion and normalization on GPU
-        batch = batch.float() / 255.0
+        # Float conversion and normalization on GPU (선택된 precision에 맞춰 캐스팅)
+        if self.autocast_dtype is not None:
+            batch = batch.to(self.autocast_dtype) / 255.0
+        else:
+            batch = batch.float() / 255.0
         
         # Resize on GPU in parallel
         width, height = self.image_size
