@@ -200,7 +200,7 @@ class SegmentationInferenceNode:
             callback_start = time.perf_counter()
             # 단일 이미지 모드도 실제 inference 로직은 공용 helper를 쓴다.
             # 이렇게 해두면 bundle 모드와 class_map 생성 규칙이 항상 같게 유지된다.
-            class_msg, inference_ms = self.predict_class_map_msg(msg)
+            class_msg, inference_ms, pure_ms = self.predict_class_map_msg(msg)
             self.class_map_pub.publish(class_msg)
 
             if self.log_timing:
