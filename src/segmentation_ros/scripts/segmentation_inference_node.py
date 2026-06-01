@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import sys
 import threading
 import time
@@ -62,10 +63,8 @@ class SegmentationInferenceNode:
         self.log_timing = parse_bool(rospy.get_param("~log_timing", True))
         self.timing_log_interval = float(rospy.get_param("~timing_log_interval", 1.0))
         self.drop_while_busy = parse_bool(rospy.get_param("~drop_while_busy", True))
-        self.inference_lock = threading.Lock()
-
+        
         # 실제 모델 로딩과 PyTorch inference는 ROS와 분리된 SegmentationPredictor가 담당한다.
-        # 이 노드는 topic 입출력만 얇게 연결하는 adapter 역할을 한다.
         self.predictor = SegmentationPredictor(
             checkpoint_path=checkpoint_path,
             config_path=config_path,
@@ -87,6 +86,7 @@ class SegmentationInferenceNode:
         #   출력도 CameraBundle로 내보내되, names/infos/header는 입력 기준을 유지하고
         #   images 배열만 mono8 class_map 배열로 바꾼다.
         input_mode = str(rospy.get_param("~input_mode", "image")).strip().lower()
+        self.input_mode = input_mode
         image_topic = rospy.get_param("~image_topic", "/camera/image_raw")
         class_map_topic = rospy.get_param("~class_map_topic", "/segmentation/class_map")
         bundle_topic = rospy.get_param("~bundle_topic", "/synced/bundle")
@@ -97,11 +97,12 @@ class SegmentationInferenceNode:
         # 예: 0=background, 1=lane, 2=landmark.
         # queue_size=1은 오래된 이미지를 쌓지 않고 최신 프레임 위주로 처리하기 위한 설정이다.
         # inference가 카메라 FPS보다 느릴 때 지연이 계속 누적되는 것을 줄인다.
+        # 여기서는 비동기 처리 큐(Queue)와 백그라운드 워커 스레드를 사용하여 병렬성을 높입니다.
+        self.msg_queue = queue.Queue(maxsize=1 if self.drop_while_busy else 0)
+        self.worker_thread = threading.Thread(target=self.worker_loop, daemon=True)
+        self.worker_thread.start()
+
         if input_mode == "bundle":
-            # Multi-camera path:
-            # /synced/bundle 같은 토픽 하나에 front/rear/left/right 이미지가 묶여 들어온다.
-            # downstream 노드가 어떤 결과가 어떤 카메라인지 계속 알 수 있도록
-            # 출력 타입도 CameraBundle로 맞춘다.
             self.class_map_bundle_pub = rospy.Publisher(
                 class_map_bundle_topic,
                 CameraBundle,
@@ -114,7 +115,7 @@ class SegmentationInferenceNode:
                 queue_size=queue_size,
             )
             rospy.loginfo(
-                "segmentation_inference_node subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s warmup=%d drop_while_busy=%s classes=%s",
+                "segmentation_inference_node (async) subscribed bundle=%s class_map_bundle=%s device=%s precision=%s image_size=%sx%s warmup=%d drop_while_busy=%s classes=%s",
                 bundle_topic,
                 class_map_bundle_topic,
                 self.predictor.device,
@@ -126,12 +127,10 @@ class SegmentationInferenceNode:
                 ",".join(self.predictor.class_names),
             )
         elif input_mode == "image":
-            # Legacy single-image path:
-            # bundle synchronizer 없이 모델만 빠르게 테스트할 때 사용한다.
             self.class_map_pub = rospy.Publisher(class_map_topic, Image, queue_size=queue_size)
             self.image_sub = rospy.Subscriber(image_topic, Image, self.image_callback, queue_size=queue_size)
             rospy.loginfo(
-                "segmentation_inference_node subscribed image=%s class_map=%s device=%s precision=%s classes=%s",
+                "segmentation_inference_node (async) subscribed image=%s class_map=%s device=%s precision=%s classes=%s",
                 image_topic,
                 class_map_topic,
                 self.predictor.device,
@@ -142,11 +141,51 @@ class SegmentationInferenceNode:
             raise rospy.ROSException("~input_mode must be 'image' or 'bundle'")
 
     def image_callback(self, msg: Image) -> None:
-        if not self.acquire_inference("image"):
-            return
+        self.push_to_queue(msg)
+
+    def bundle_callback(self, msg: CameraBundle) -> None:
+        self.push_to_queue(msg)
+
+    def push_to_queue(self, msg) -> None:
+        if self.drop_while_busy:
+            try:
+                self.msg_queue.put_nowait(msg)
+            except queue.Full:
+                # 큐가 꽉 차 있으면 가장 오래된 기존 메시지를 꺼내서 버린 후 새 메시지를 넣어 최신 프레임을 유지합니다.
+                try:
+                    self.msg_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.msg_queue.put_nowait(msg)
+                except queue.Full:
+                    pass
+        else:
+            self.msg_queue.put(msg)
+
+    def worker_loop(self) -> None:
+        """백그라운드에서 큐를 감시하며 전달된 프레임을 순차적으로 추론 처리하는 루프입니다."""
+        while not rospy.is_shutdown():
+            try:
+                # 큐에 작업 메시지가 들어올 때까지 대기합니다. (타임아웃 0.1초)
+                msg = self.msg_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            try:
+                if self.input_mode == "bundle":
+                    self.process_bundle(msg)
+                else:
+                    self.process_image(msg)
+            except Exception as exc:
+                rospy.logerr_throttle(1.0, "segmentation worker processing failed: %s", exc)
+            finally:
+                # 작업이 성공적으로 수행되었거나 에러로 인해 끝났음을 큐에 신호로 알립니다.
+                self.msg_queue.task_done()
+
+    def process_image(self, msg: Image) -> None:
         try:
             callback_start = time.perf_counter()
-
             # 단일 이미지 모드도 실제 inference 로직은 공용 helper를 쓴다.
             # 이렇게 해두면 bundle 모드와 class_map 생성 규칙이 항상 같게 유지된다.
             class_msg, inference_ms = self.predict_class_map_msg(msg)
@@ -164,15 +203,10 @@ class SegmentationInferenceNode:
                 )
         except (CvBridgeError, ValueError, RuntimeError) as exc:
             rospy.logerr_throttle(1.0, "segmentation inference failed: %s", exc)
-        finally:
-            self.inference_lock.release()
 
-    def bundle_callback(self, msg: CameraBundle) -> None:
-        if not self.acquire_inference("bundle"):
-            return
+    def process_bundle(self, msg: CameraBundle) -> None:
         try:
             callback_start = time.perf_counter()
-
             if not msg.images:
                 rospy.logwarn_throttle(1.0, "segmentation inference skipped empty CameraBundle")
                 return
@@ -210,17 +244,6 @@ class SegmentationInferenceNode:
                 )
         except (CvBridgeError, ValueError, RuntimeError) as exc:
             rospy.logerr_throttle(1.0, "segmentation bundle inference failed: %s", exc)
-        finally:
-            self.inference_lock.release()
-
-    def acquire_inference(self, source: str) -> bool:
-        if not self.drop_while_busy:
-            self.inference_lock.acquire()
-            return True
-        if self.inference_lock.acquire(blocking=False):
-            return True
-        rospy.logwarn_throttle(1.0, "segmentation skipped %s callback because inference is still busy", source)
-        return False
 
     def predict_class_map_msg(self, msg: Image) -> Tuple[Image, float]:
         # ROS Image -> OpenCV BGR image.
