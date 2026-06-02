@@ -2,7 +2,7 @@
   <class name="carmaker_localization/LocalizationNodelet" type="carmaker_localization::LocalizationNodelet" base_class_type="nodelet::Nodelet">
     <description>
       CarMaker Localization: BEV Feature Extraction, EKF Sensor Fusion,
-      Map Matching, and Debug Visualization.
+      Feature Registration, and Debug Visualization.
     </description>
   </class>
 </library>

@@ -367,7 +367,7 @@ void Visualizer::clearObservation(const std::string& channel_name) {
     pub.publish(marker_array);
 }
 
-void Visualizer::clearMapFeatures() {
+void Visualizer::clearReferenceFeatures() {
     if (map_features_pub_.getNumSubscribers() == 0) return;
 
     visualization_msgs::MarkerArray marker_array;
@@ -386,7 +386,7 @@ void Visualizer::clearMapFeatures() {
 void Visualizer::reset() {
     clearEstimation();
     clearCorrection();
-    clearMapFeatures();
+    clearReferenceFeatures();
     for (const auto& pair : observation_pub_map_) {
         clearObservation(pair.first);
     }
@@ -432,7 +432,7 @@ void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array
     marker_array.markers.push_back(text);
 }
 
-void Visualizer::publishMapFeatures(const std::vector<MapFeature>& map_features) {
+void Visualizer::publishReferenceFeatures(const std::vector<ReferenceFeature>& reference_features) {
     if (map_features_pub_.getNumSubscribers() == 0 && !map_features_pub_.isLatched()) return;
 
     visualization_msgs::MarkerArray marker_array;
@@ -464,7 +464,7 @@ void Visualizer::publishMapFeatures(const std::vector<MapFeature>& map_features)
     landmark_marker.color.r = 1.0; landmark_marker.color.g = 0.3; landmark_marker.color.b = 0.3; landmark_marker.color.a = 0.8; // Coral Red
     landmark_marker.pose.orientation.w = 1.0;
 
-    for (const auto& feat : map_features) {
+    for (const auto& feat : reference_features) {
         geometry_msgs::Point p;
         p.x = feat.x;
         p.y = feat.y;

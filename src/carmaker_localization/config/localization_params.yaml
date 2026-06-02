@@ -62,7 +62,7 @@ frames:
   prediction: "Fr1A_pred"
 
 feature_extractor:
-  fusion: true # True : 개별 채널별 특징점 융합 후 매칭 수행, False : 개별 채널 별 매칭 수행
+  fusion: true # True : 개별 채널별 특징점 융합 후 정합 수행, False : 개별 채널 별 정합 수행
 
   bev:
     resolution: 0.05 # [m/pixel]
@@ -105,16 +105,16 @@ ekf:
     base_std: 0.1 # vision_noise : vision 노이즈 [m]
   divergence_threshold: 100.0 # divergence_threshold : 필터 발산 판정 임계값 (Trace(P))
 
-map_matcher:
-  enable: true # True : 매칭 수행, False : 매칭 미수행 (디버깅용)
+feature_registration:
+  enable: true # True : 정합 수행, False : 정합 미수행 (디버깅용)
   type: "icp" # "icp" | 추후 "ndt", "point_to_line" 추가
   map_format: "osm" # "osm" | 추후 "lanelet2", "pcd" 추가
   map_file: "" # launch argument로 지정
   search_radius: -1.0 # 지도 조회 반경 [m] (음수 설정 시 전체 맵 피처 사용 - 위치 유실 및 소형 맵 복구용)
   min_search_radius: 5.0 # 최소 ICP 탐색 반경 [m] (초기 위치 오차 극복용)
-  fitness_threshold: 0.35 # 매칭 유효 판정 임계값
+  fitness_threshold: 0.35 # 정합 유효 판정 임계값
   max_iterations: 50 # ICP 반복 횟수
 
   validation_gate:
-    max_position_dev: 1.0 # [m] - EKF 예측치 기준 최대 허용 매칭 위치 편차 (오매칭 필터 차단)
-    max_yaw_dev: 0.25 # [rad] - EKF 예측치 기준 최대 허용 매칭 요각 편차 (~14.3 deg)
+    max_position_dev: 1.0 # [m] - EKF 예측치 기준 최대 허용 정합 위치 편차 (오정합 필터 차단)
+    max_yaw_dev: 0.25 # [rad] - EKF 예측치 기준 최대 허용 정합 요각 편차 (~14.3 deg)

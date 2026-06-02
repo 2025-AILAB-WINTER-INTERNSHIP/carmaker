@@ -23,8 +23,8 @@
 #include "carmaker_localization/feature_extractor.h"
 #include "carmaker_localization/ekf_core.h"
 #include "carmaker_localization/visualizer.h"
-#include "carmaker_localization/map_loader_base.h"
-#include "carmaker_localization/matcher_base.h"
+#include "carmaker_localization/feature_loader_base.h"
+#include "carmaker_localization/registration_base.h"
 #include <carmaker_msgs/LocalFeatures.h>
 #include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/CameraBundle.h>
@@ -127,9 +127,9 @@ private:
     double r_max_ = 15.0;
     double cov_k_ = 1.0;
 
-    // Map Loader / Map Matcher Config
+    // Feature Loader & Registration Config
     double resolution_ = 0.05;
-    bool map_matcher_enabled_ = true;  // map_matcher/enable 파라미터로 제어
+    bool feature_registration_enabled_ = true;  // feature_registration/enable 파라미터로 제어
     double search_radius_ = 20.0;
     double fitness_threshold_ = 0.5;
 
@@ -196,8 +196,8 @@ private:
     // 4. Algorithm Core Engines
     // =========================================================================
     std::shared_ptr<EkfCore> ekf_core_;
-    std::shared_ptr<MapLoaderBase> map_loader_;
-    std::shared_ptr<MatcherBase> matcher_;
+    std::shared_ptr<FeatureLoaderBase> feature_loader_;
+    std::shared_ptr<RegistrationBase> registration_engine_;
 
     // =========================================================================
     // 5. Runtime Shared States & Sync Buffers

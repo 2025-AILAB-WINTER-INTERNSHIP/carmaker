@@ -1,7 +1,7 @@
 #include "carmaker_localization/localization_nodelet.h"
 #include <ros/console.h>
-#include "carmaker_localization/osm_map_loader.h"
-#include "carmaker_localization/icp_matcher.h"
+#include "carmaker_localization/osm_feature_loader.h"
+#include "carmaker_localization/icp_registration.h"
 #include <XmlRpcValue.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <pluginlib/class_list_macros.h>
@@ -73,8 +73,8 @@ bool LocalizationNodelet::loadParameters() {
 
     max_position_step_ = pnh.param("ekf/rate_limiter/max_position_step", 0.15);
     max_yaw_step_ = pnh.param("ekf/rate_limiter/max_yaw_step", 0.05);
-    max_position_dev_ = pnh.param("map_matcher/validation_gate/max_position_dev", 1.0);
-    max_yaw_dev_ = pnh.param("map_matcher/validation_gate/max_yaw_dev", 0.25);
+    max_position_dev_ = pnh.param("feature_registration/validation_gate/max_position_dev", 1.0);
+    max_yaw_dev_ = pnh.param("feature_registration/validation_gate/max_yaw_dev", 0.25);
 
     pnh.param<double>("diagnostic_period", diag_period_, 1.0);
 
@@ -283,42 +283,42 @@ void LocalizationNodelet::setupRosIo() {
     ros::NodeHandle& nh = getNodeHandle();
     ros::NodeHandle& pnh = getPrivateNodeHandle();
 
-    // Map Loader Setup
-    std::string map_type = pnh.param("map_matcher/map_format", std::string("osm"));
-    std::string map_file = pnh.param("map_matcher/map_file", std::string(""));
+    // Feature Loader Setup
+    std::string feature_format = pnh.param("feature_registration/map_format", std::string("osm"));
+    std::string feature_file = pnh.param("feature_registration/map_file", std::string(""));
 
-    if (map_type == "osm") {
-        map_loader_ = std::make_shared<OsmMapLoader>(resolution_);
-        if (!map_file.empty()) {
-            if (map_loader_->load(map_file)) {
-                NODELET_INFO("Map loaded successfully: %s", map_file.c_str());
+    if (feature_format == "osm") {
+        feature_loader_ = std::make_shared<OsmFeatureLoader>(resolution_);
+        if (!feature_file.empty()) {
+            if (feature_loader_->load(feature_file)) {
+                NODELET_INFO("Features loaded successfully from: %s", feature_file.c_str());
                 if (visualizer_) {
-                    visualizer_->publishMapFeatures(map_loader_->queryNear(0.0, 0.0, -1.0));
+                    visualizer_->publishReferenceFeatures(feature_loader_->queryNear(0.0, 0.0, -1.0));
                 }
             } else {
-                NODELET_ERROR("Failed to load map: %s", map_file.c_str());
+                NODELET_ERROR("Failed to load features: %s", feature_file.c_str());
             }
         } else {
-            NODELET_WARN("No map_file specified for map_matcher. Map will be empty.");
+            NODELET_WARN("No map_file specified for feature_registration. Reference features will be empty.");
         }
     }
 
-    // Matcher Setup
-    std::string matcher_type = pnh.param("map_matcher/type", std::string("icp"));
-    fitness_threshold_ = pnh.param("map_matcher/fitness_threshold", 0.5);
-    int max_iterations = pnh.param("map_matcher/max_iterations", 50);
-    search_radius_ = pnh.param("map_matcher/search_radius", 20.0);
+    // Registration Engine Setup
+    std::string registration_type = pnh.param("feature_registration/type", std::string("icp"));
+    fitness_threshold_ = pnh.param("feature_registration/fitness_threshold", 0.5);
+    int max_iterations = pnh.param("feature_registration/max_iterations", 50);
+    search_radius_ = pnh.param("feature_registration/search_radius", 20.0);
     double vision_base_std = pnh.param("ekf/vision_noise/base_std", 0.1);
 
-    double min_search_radius = pnh.param("map_matcher/min_search_radius", 0.5);
+    double min_search_radius = pnh.param("feature_registration/min_search_radius", 0.5);
 
-    if (matcher_type == "icp") {
-        matcher_ = std::make_shared<IcpMatcher>(fitness_threshold_, max_iterations, vision_base_std, min_search_radius);
+    if (registration_type == "icp") {
+        registration_engine_ = std::make_shared<IcpRegistration>(fitness_threshold_, max_iterations, vision_base_std, min_search_radius);
     }
 
-    // 맵 매칭 활성화 여부 (false 시 EKF 예측만 수행, 디버깅용)
-    map_matcher_enabled_ = pnh.param("map_matcher/enable", true);
-    NODELET_INFO("Map matcher: %s", map_matcher_enabled_ ? "ENABLED" : "DISABLED (debug mode)");
+    // 정합 활성화 여부 (false 시 EKF 예측만 수행, 디버깅용)
+    feature_registration_enabled_ = pnh.param("feature_registration/enable", true);
+    NODELET_INFO("Feature registration: %s", feature_registration_enabled_ ? "ENABLED" : "DISABLED (debug mode)");
 
     // IO Publishers & Subscribers
     std::string topic_pose = pnh.param("topics/publish/pose", std::string("/localization/pose"));
@@ -756,7 +756,7 @@ void LocalizationNodelet::processImages(
 
             if (fusion_) {
                 combined.features.insert(combined.features.end(), features.features.begin(), features.features.end());
-            } else if (map_matcher_enabled_ && map_loader_ && matcher_) {
+            } else if (feature_registration_enabled_ && feature_loader_ && registration_engine_) {
                 std::lock_guard<std::mutex> lock(correction_queue_mutex_);
                 if (correction_queue_.size() < 1) {
                     correction_queue_.push(features);
@@ -773,7 +773,7 @@ void LocalizationNodelet::processImages(
         visualizer_->publishSvmImage(svm_canvas_, seam_line_points_);
     }
 
-    if (fusion_ && !combined.features.empty() && map_matcher_enabled_ && map_loader_ && matcher_) {
+    if (fusion_ && !combined.features.empty() && feature_registration_enabled_ && feature_loader_ && registration_engine_) {
         std::lock_guard<std::mutex> lock(correction_queue_mutex_);
         if (correction_queue_.size() < 1) {
             correction_queue_.push(combined);
@@ -791,7 +791,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
     }
 
     Eigen::Isometry2d initial_guess = Eigen::Isometry2d::Identity();
-    std::vector<MapFeature> ref_features;
+    std::vector<ReferenceFeature> ref_features;
     double query_x = 0.0;
     double query_y = 0.0;
 
@@ -806,7 +806,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         query_y = ekf_pose(Y);
     }
 
-    ref_features = map_loader_->queryNear(query_x, query_y, search_radius_);
+    ref_features = feature_loader_->queryNear(query_x, query_y, search_radius_);
 
     if (ref_features.empty()) {
         if (search_radius_ < 0.0) {
@@ -831,16 +831,16 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         cpp_features.push_back(cpp_feat);
     }
 
-    // ICP Matching (Mutex released to prevent blocking the 100Hz EKF loop!)
-    auto match_result = matcher_->match(cpp_features, ref_features, initial_guess);
-    if (match_result.success) {
+    // ICP Feature Registration (Mutex released to prevent blocking the 100Hz EKF loop!)
+    auto registration_result = registration_engine_->align(cpp_features, ref_features, initial_guess);
+    if (registration_result.success) {
         Eigen::Vector3d z;
-        z << match_result.transform.translation().x(),
-                match_result.transform.translation().y(),
-                Eigen::Rotation2Dd(match_result.transform.linear()).angle();
+        z << registration_result.transform.translation().x(),
+                registration_result.transform.translation().y(),
+                Eigen::Rotation2Dd(registration_result.transform.linear()).angle();
 
         // 뮤텍스 락 아래 스레드 안전한 EKF 보정 단계 수행
-        Eigen::Matrix3d R_map = match_result.covariance;
+        Eigen::Matrix3d R_reg = registration_result.covariance;
         double current_time = ros::Time::now().toSec();
         double img_time = features.header.stamp.toSec();
         double dt = current_time - img_time;
@@ -856,7 +856,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             Q_latency(0, 0) = std::pow(0.15, 2);  // 종방향 오차 표준편차 0.15 m/s
             Q_latency(1, 1) = std::pow(0.10, 2);  // 횡방향 오차 표준편차 0.10 m/s
             Q_latency(2, 2) = std::pow(0.03, 2);  // 요각 속도 오차 표준편차 약 1.7 deg/s (0.03 rad/s)
-            R_map += Q_latency * dt;
+            R_reg += Q_latency * dt;
         }
 
         {
@@ -871,7 +871,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
                 delta = (latest_dynamics_.Vhcl_FL_rz + latest_dynamics_.Vhcl_FR_rz) / 2.0;
             }
 
-            // 매칭 포즈를 차량 원점(Fr1 범퍼)에서 후륜 축(Rear Axle)으로 변환
+            // 정합 포즈를 차량 원점(Fr1 범퍼)에서 후륜 축(Rear Axle)으로 변환
             z(0) += rear_axle_x_ * std::cos(z(2));
             z(1) += rear_axle_x_ * std::sin(z(2));
 
@@ -888,8 +888,8 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             while (z(2) > M_PI) z(2) -= 2.0 * M_PI;
             while (z(2) < -M_PI) z(2) += 2.0 * M_PI;
 
-            // EKF 상태와 지연 보상된 매칭 결과의 편차 검증 (Validation Gate)
-            // 급격한 점프 및 오매칭(False Positive)으로 인한 필터 오염 방지
+            // EKF 상태와 지연 보상된 정합 결과의 편차 검증 (Validation Gate)
+            // 급격한 점프 및 오정합(False Positive)으로 인한 필터 오염 방지
             double dx = z(0) - current_state(X);
             double dy = z(1) - current_state(Y);
             double dist = std::hypot(dx, dy);
@@ -906,7 +906,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             }
 
             // 범퍼 기준 위치로 EKF 상태 보정 (속도 한계 조절 적용)
-            ekf_core_->correctPose(z(0), z(1), z(2), R_map, current_time, max_position_step_, max_yaw_step_);
+            ekf_core_->correctPose(z(0), z(1), z(2), R_reg, current_time, max_position_step_, max_yaw_step_);
         }
 
         // Correction Hz 추적: 첫 correction 시각을 기록하고 횟수 누적
@@ -930,15 +930,15 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         for (int r = 0; r < 3; ++r) {
             for (int c = 0; c < 3; ++c) {
                 int idx = (r == 2 ? 5 : r) * 6 + (c == 2 ? 5 : c);
-                correction_msg.pose.covariance[idx] = match_result.covariance(r, c);
+                correction_msg.pose.covariance[idx] = registration_result.covariance(r, c);
             }
         }
         correction_data_pub_.publish(correction_msg);
         visualizer_->publishCorrection(correction_msg);
-        ROS_INFO_THROTTLE(2.0, "performCorrection: ICP Match SUCCESS! Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, match_result.num_observed, match_result.num_reference);
+        ROS_INFO_THROTTLE(2.0, "performCorrection: ICP Registration SUCCESS! Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", registration_result.fitness_score, fitness_threshold_, registration_result.num_observed, registration_result.num_reference);
     } else {
         visualizer_->clearCorrection();
-        ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Match FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", match_result.fitness_score, fitness_threshold_, match_result.num_observed, match_result.num_reference);
+        ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Registration FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", registration_result.fitness_score, fitness_threshold_, registration_result.num_observed, registration_result.num_reference);
     }
 }
 
@@ -1022,8 +1022,8 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
         double dx = x(X) - last_map_pub_x_;
         double dy = x(Y) - last_map_pub_y_;
         if (dx*dx + dy*dy > 1.0 * 1.0) {
-            auto current_ref_features = map_loader_->queryNear(x(X), x(Y), search_radius_);
-            visualizer_->publishMapFeatures(current_ref_features);
+            auto current_ref_features = feature_loader_->queryNear(x(X), x(Y), search_radius_);
+            visualizer_->publishReferenceFeatures(current_ref_features);
             last_map_pub_x_ = x(X);
             last_map_pub_y_ = x(Y);
         }
@@ -1145,18 +1145,18 @@ void LocalizationNodelet::initLocalization(double current_time, const carmaker_m
     NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vel [%.2f, %.2f]", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx, init_vy);
 
     if (visualizer_) {
-        visualizer_->publishMapFeatures(map_loader_->queryNear(init_x, init_y, search_radius_));
+        visualizer_->publishReferenceFeatures(feature_loader_->queryNear(init_x, init_y, search_radius_));
         last_map_pub_x_ = init_x;
         last_map_pub_y_ = init_y;
     }
 }
 
 bool LocalizationNodelet::getMapCallback(nav_msgs::GetMap::Request&, nav_msgs::GetMap::Response& res) {
-    if (!map_loader_) {
-        NODELET_WARN("Map loader is not initialized, cannot provide map.");
+    if (!feature_loader_) {
+        NODELET_WARN("Feature loader is not initialized, cannot provide map.");
         return false;
     }
-    res.map = map_loader_->getOccupancyGrid();
+    res.map = feature_loader_->getOccupancyGrid();
     if (res.map.data.empty()) {
         NODELET_WARN("OccupancyGrid map data is empty.");
         return false;

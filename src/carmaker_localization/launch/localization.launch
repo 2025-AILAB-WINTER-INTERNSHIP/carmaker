@@ -18,7 +18,7 @@
         <rosparam command="load" file="$(find carmaker_localization)/config/vehicle_params.yaml" />
 
         <!-- Overwrite Map File Path -->
-        <param name="map_matcher/map_file" value="$(arg map_file)" />
+        <param name="feature_registration/map_file" value="$(arg map_file)" />
     </node>
 
     <!-- Foxglove Bridge for Visualization (Optional) -->

@@ -1,5 +1,5 @@
-#ifndef CARMAKER_LOCALIZATION_MAP_LOADER_BASE_H
-#define CARMAKER_LOCALIZATION_MAP_LOADER_BASE_H
+#ifndef CARMAKER_LOCALIZATION_FEATURE_LOADER_BASE_H
+#define CARMAKER_LOCALIZATION_FEATURE_LOADER_BASE_H
 
 #include <string>
 #include <vector>
@@ -13,7 +13,7 @@
 
 namespace carmaker_localization {
 
-struct MapFeature {
+struct ReferenceFeature {
     double x;
     double y;
     uint8_t class_id;
@@ -28,31 +28,31 @@ struct Point2d {
 };
 
 /**
- * @brief Abstract interface for map loading.
+ * @brief Abstract interface for road feature loading.
  * Supports OSM, Lanelet2, PCD, etc.
  */
-class MapLoaderBase {
+class FeatureLoaderBase {
 public:
-    virtual ~MapLoaderBase() = default;
+    virtual ~FeatureLoaderBase() = default;
 
     /**
-     * @brief Load map from file
-     * @param path Absolute path to map file
+     * @brief Load features from file
+     * @param path Absolute path to feature file
      * @return true if success
      */
     virtual bool load(const std::string& path) = 0;
 
     /**
-     * @brief Query features near a position
+     * @brief Query reference features near a position
      * @param x Query X (m)
      * @param y Query Y (m)
      * @param radius Search radius (m)
      * @return Vector of features within radius
      */
-    virtual std::vector<MapFeature> queryNear(double x, double y, double radius) const = 0;
+    virtual std::vector<ReferenceFeature> queryNear(double x, double y, double radius) const = 0;
 
     /**
-     * @brief Get compiled OccupancyGrid map
+     * @brief Get compiled OccupancyGrid map for debugging/visualization
      * @return OccupancyGrid message
      */
     virtual nav_msgs::OccupancyGrid getOccupancyGrid() const = 0;
@@ -65,7 +65,6 @@ protected:
     static void sampleSegment(const Point2d& a, const Point2d& b,
                               double half_width, double res,
                               std::set<std::pair<double,double>>& out) {
-        // 1. 물리적 마진을 포함한 Bounding Box 계산
         const double eps = 1e-6;
         double margin = half_width + eps;
         double min_x = std::min(a.x, b.x) - margin;
@@ -73,15 +72,13 @@ protected:
         double min_y = std::min(a.y, b.y) - margin;
         double max_y = std::max(a.y, b.y) + margin;
 
-        // 2. 부동소수점 공간을 정수형(Integer) 격자 인덱스로 변환
         int min_ix = static_cast<int>(std::floor(min_x / res));
         int max_ix = static_cast<int>(std::floor(max_x / res));
         int min_iy = static_cast<int>(std::floor(min_y / res));
         int max_iy = static_cast<int>(std::floor(max_y / res));
 
-        // 3. 정수 루프를 통한 탐색 (누적 오차 0%)
         for (int ix = min_ix; ix <= max_ix; ++ix) {
-            double gx = (ix + 0.5) * res; // 정확한 Voxel Center 위상 보장
+            double gx = (ix + 0.5) * res;
 
             for (int iy = min_iy; iy <= max_iy; ++iy) {
                 double gy = (iy + 0.5) * res;
@@ -98,7 +95,6 @@ protected:
                               std::set<std::pair<double,double>>& out) {
         if (polygon.size() < 3) return;
 
-        // 1. 다각형의 Bounding Box 계산 (앱실론 마진)
         const double eps = 1e-6;
         double min_x = polygon[0].x - eps;
         double max_x = polygon[0].x + eps;
@@ -110,13 +106,11 @@ protected:
             min_y = std::min(min_y, p.y);  max_y = std::max(max_y, p.y);
         }
 
-        // 2. 부동소수점 공간을 정수형(Integer) 격자 인덱스로 변환
         int min_ix = static_cast<int>(std::floor(min_x / res));
         int max_ix = static_cast<int>(std::floor(max_x / res));
         int min_iy = static_cast<int>(std::floor(min_y / res));
         int max_iy = static_cast<int>(std::floor(max_y / res));
 
-        // 3. 정수 루프로 다각형 내부 및 경계 판별
         for (int ix = min_ix; ix <= max_ix; ++ix) {
             double gx = (ix + 0.5) * res;
 
@@ -133,9 +127,9 @@ protected:
 
     static void voxelsToFeatures(const std::set<std::pair<double,double>>& voxels,
                                  uint8_t class_id,
-                                 std::vector<MapFeature>& features) {
+                                 std::vector<ReferenceFeature>& features) {
         for (const auto& pt : voxels) {
-            MapFeature f;
+            ReferenceFeature f;
             f.x = pt.first;
             f.y = pt.second;
             f.class_id = class_id;
@@ -178,4 +172,4 @@ private:
 
 } // namespace carmaker_localization
 
-#endif // CARMAKER_LOCALIZATION_MAP_LOADER_BASE_H
+#endif // CARMAKER_LOCALIZATION_FEATURE_LOADER_BASE_H
