@@ -529,6 +529,8 @@ accel_command = PID(target_speed, current_speed)
 
 PID는 전진/후진 자체를 결정하는 역할보다는, 현재 segment 안에서 얼마나 빠르게 움직일 것인지를 제어하는 역할에 가깝다. 그래서 target speed와 current speed는 절댓값으로 비교한다.
 
+segment 완료 판정이 나기 전에는 lookahead point가 기어 전환점의 0 속도를 읽더라도 `min_tracking_speed` 이상의 속도 목표를 유지한다. 이렇게 해야 차량이 segment 끝점에 도착하기 전에 멈춰 서서 다음 전진/후진 segment로 넘어가지 못하는 상황을 피할 수 있다.
+
 ```text
 target_speed > current_speed
   -> 가속 필요
@@ -836,6 +838,7 @@ control:
 
 ```yaml
 control:
+  min_tracking_speed: 0.2
   lookahead_distance: 0.8
   lookahead_time: 0.4
   min_lookahead_distance: 0.4
@@ -843,6 +846,8 @@ control:
 ```
 
 lookahead가 너무 짧으면 조향과 속도 목표가 자주 흔들릴 수 있고, 너무 길면 코너나 정지점 반영이 늦어질 수 있다.
+
+`min_tracking_speed`는 segment 완료 판정이 나기 전까지 적용되는 최소 속도 목표다. `/control/debug/target_speed`가 0이고 `/control/debug/tracking_state`가 1이면 차량이 끝점에 도착하기 전에 멈출 수 있으므로 이 값이 필요하다. 완료 판정 후에는 `tracking_state = 2`가 되고 stop/gear switch 로직이 brake와 다음 gear 전환을 처리한다.
 
 ### Segment 완료와 기어 전환
 

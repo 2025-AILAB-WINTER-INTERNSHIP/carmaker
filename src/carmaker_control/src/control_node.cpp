@@ -827,14 +827,10 @@ double ControlNode::selectTargetSpeed(const PathSegment& segment, std::size_t ta
     target_speed = 0.0;
   }
 
-  const bool close_to_segment_end =
-      target_index + static_cast<std::size_t>(std::max(0, segment_finish_index_margin_)) >=
-      segment.points.size() - 1;
-  if (!close_to_segment_end) {
-    // segment 중간에서 profiler 속도가 0인 점을 만나면 차량이 멈춰 버릴 수 있다.
-    // 끝점 근처가 아닐 때만 최소 추종 속도를 적용한다.
-    target_speed = std::max(target_speed, min_tracking_speed_);
-  }
+  // segment 완료 판정은 controlTimerCallback()에서 이미 먼저 수행된다.
+  // 아직 완료가 아니라면 lookahead가 끝점의 0 속도를 읽더라도 최소 속도를 유지해야
+  // 끝점 근처에서 멈춘 채 다음 segment로 넘어가지 못하는 상황을 피할 수 있다.
+  target_speed = std::max(target_speed, min_tracking_speed_);
 
   return clamp(target_speed, 0.0, max_target_speed_);
 }

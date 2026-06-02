@@ -27,8 +27,8 @@ control:
   # 이 값보다 작은 속도는 정지점으로 보고 이전 direction에 붙인다.
   direction_velocity_epsilon: 0.02
 
-  # segment 중간에서 target velocity가 0인 점을 만나도 멈춰 서지 않게 하는 최소 추종 속도.
-  # segment 끝점 근처에서는 이 값을 적용하지 않아 정지/기어 전환이 가능하다.
+  # segment 완료 판정이 나기 전까지 target velocity가 0이어도 멈춰 서지 않게 하는 최소 추종 속도.
+  # 완료 판정 후에는 별도 stop/gear switch 로직이 brake와 다음 gear 전환을 처리한다.
   min_tracking_speed: 0.2
   max_target_speed: 2.0
 
