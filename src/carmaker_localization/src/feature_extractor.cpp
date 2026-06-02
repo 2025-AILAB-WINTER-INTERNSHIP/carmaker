@@ -571,7 +571,7 @@ cv::Mat FeatureExtractor::processVisualization(const cv::Mat& seg_img) {
             is_black_mask.setTo(0, invalid_mask);
             is_yellow_mask.setTo(0, invalid_mask);
 
-            // Morphological erosion to extract thin 1-pixel boundary of Class 2 landmark (charging pad)
+            // Charging pad (yellow)의 얇은 외곽선(Edge) 모폴로지 추출
             cv::Mat eroded_yellow;
             cv::erode(is_yellow_mask, eroded_yellow, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
             cv::Mat edge_yellow_mask = is_yellow_mask - eroded_yellow;
@@ -606,7 +606,7 @@ cv::Mat FeatureExtractor::processVisualization(const cv::Mat& seg_img) {
             cv::Mat val_2_mask = (class_map == 2);
             cv::Mat val_other_mask = (class_map > 0) & (class_map != 1) & (class_map != 2);
 
-            // Morphological erosion to extract thin 1-pixel boundary of Class 2 landmark (charging pad)
+            // Charging pad의 얇은 외곽선(Edge) 모폴로지 추출
             cv::Mat eroded_val2;
             cv::erode(val_2_mask, eroded_val2, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
             cv::Mat edge_val2_mask = val_2_mask - eroded_val2;

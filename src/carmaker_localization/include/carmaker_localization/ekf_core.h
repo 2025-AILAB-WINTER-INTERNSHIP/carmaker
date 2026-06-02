@@ -49,6 +49,7 @@ public:
     // Parameters
     void setProcessNoise(const Eigen::MatrixXd& Q);
     void setWheelbase(double wheelbase);
+    void setRearAxleOffset(double offset);
 
     // EKF Core Cycle
     void prediction(double timestamp, const PredictionInput& u = {});
@@ -66,6 +67,7 @@ private:
 
     // Configuration
     double wheelbase_;
+    double rear_axle_offset_;
 
     // State
     Eigen::VectorXd x_; // [11x1]

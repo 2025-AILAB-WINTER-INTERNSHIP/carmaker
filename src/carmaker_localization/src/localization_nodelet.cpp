@@ -211,9 +211,10 @@ void LocalizationNodelet::initEkf() {
 
     ekf_core_->setProcessNoise(Q);
 
-    // --- Configure EKF Prediction Model Type (Dedicated Kinematic Bicycle) ---
+    // --- Configure EKF Prediction Model ---
     ekf_core_->setWheelbase(wheelbase_);
-    NODELET_INFO("EKF Prediction Model: Kinematic Bicycle (wheelbase: %.2fm)", wheelbase_);
+    ekf_core_->setRearAxleOffset(rear_axle_x_);
+    NODELET_INFO("EKF Prediction Model: Kinematic Bicycle (wheelbase: %.2fm, rear_axle_offset: %.2fm)", wheelbase_, rear_axle_x_);
 
     NODELET_INFO("Selected IMU: %d (offset_x: %.2f)", imu_id_, imu_offset_x_);
 }
@@ -831,7 +832,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
                 match_result.transform.translation().y(),
                 Eigen::Rotation2Dd(match_result.transform.linear()).angle();
 
-        // Thread-safe EKF correction step under mutex lock
+        // 뮤텍스 락 아래 스레드 안전한 EKF 보정 단계 수행
         Eigen::Matrix3d R_map = match_result.covariance;
         double current_time = ros::Time::now().toSec();
         double img_time = features.header.stamp.toSec();
@@ -840,6 +841,15 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         if (dt < 0.0 || dt >= 0.5) {
             ROS_WARN_THROTTLE(2.0, "performCorrection: Measurement latency too high (%.3f s) or negative. Skipping EKF correction.", dt);
             return;
+        }
+
+        // 지연 시간(dt) 동안의 기구학 모델 불확실성을 반영한 공분산 인플레이션 (Covariance Inflation)
+        if (dt > 0.0) {
+            Eigen::Matrix3d Q_latency = Eigen::Matrix3d::Zero();
+            Q_latency(0, 0) = std::pow(0.15, 2);  // 종방향 오차 표준편차 0.15 m/s
+            Q_latency(1, 1) = std::pow(0.10, 2);  // 횡방향 오차 표준편차 0.10 m/s
+            Q_latency(2, 2) = std::pow(0.03, 2);  // 요각 속도 오차 표준편차 약 1.7 deg/s (0.03 rad/s)
+            R_map += Q_latency * dt;
         }
 
         {
@@ -854,19 +864,24 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
                 delta = (latest_dynamics_.Vhcl_FL_rz + latest_dynamics_.Vhcl_FR_rz) / 2.0;
             }
 
-            // Shift matched pose from vehicle origin (Fr1) to Rear Axle
+            // 매칭 포즈를 차량 원점(Fr1 범퍼)에서 후륜 축(Rear Axle)으로 변환
             z(0) += rear_axle_x_ * std::cos(z(2));
             z(1) += rear_axle_x_ * std::sin(z(2));
 
-            // Kinematic bicycle model forward latency compensation at Rear Axle
+            // 후륜 축 기준 기구학 자전거 모델을 이용해 전방 지연 시간 선도 보상
             z(0) += v * std::cos(z(2)) * dt;
             z(1) += v * std::sin(z(2)) * dt;
             z(2) += (v * std::tan(delta) / wheelbase_) * dt;
 
-            // Yaw wrapping
+            // 선도 보상 완료 후 다시 후륜 축에서 차량 원점(Fr1 범퍼)으로 복귀 (Shift-back)
+            z(0) -= rear_axle_x_ * std::cos(z(2));
+            z(1) -= rear_axle_x_ * std::sin(z(2));
+
+            // 요각 정규화
             while (z(2) > M_PI) z(2) -= 2.0 * M_PI;
             while (z(2) < -M_PI) z(2) += 2.0 * M_PI;
 
+            // 범퍼 기준 위치로 EKF 상태 보정
             ekf_core_->correctPose(z(0), z(1), z(2), R_map, current_time);
         }
 
