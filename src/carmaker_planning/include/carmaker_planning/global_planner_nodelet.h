@@ -17,7 +17,6 @@
 #include <mutex>
 #include <atomic>
 #include <memory>
-#include <string>
 
 #include "carmaker_planning/global_planner.h"
 #include "carmaker_planning/global_map.h"
@@ -67,7 +66,6 @@ private:
 
   std::string global_frame_;
   std::string ego_frame_;
-  std::string dynamics_pose_reference_{"rear_bumper"};
 
   // Diagnostics
   std::unique_ptr<diagnostic_updater::Updater> diagnostic_updater_;

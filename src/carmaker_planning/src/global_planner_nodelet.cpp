@@ -23,14 +23,6 @@ void GlobalPlannerNodelet::onInit() {
   pnh_.param<std::string>("frames/ego", ego_frame_, "Fr1A_pred");
   pnh_.param<bool>("setting/use_gt_pose", use_gt_pose_, false);
   pnh_.param<bool>("setting/use_manual_pose/enabled", use_manual_pose_, false);
-  pnh_.param<std::string>("vehicle/dynamics_pose_reference",
-                          dynamics_pose_reference_, "rear_bumper");
-  if (dynamics_pose_reference_ != "rear_bumper" &&
-      dynamics_pose_reference_ != "rear_axle") {
-    NODELET_WARN("Unknown vehicle/dynamics_pose_reference='%s'. Falling back to 'rear_bumper'.",
-                 dynamics_pose_reference_.c_str());
-    dynamics_pose_reference_ = "rear_bumper";
-  }
 
   // Initialize time trackers for diagnostics
   last_sim_time_ = ros::Time(0);
@@ -98,15 +90,9 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
       std::lock_guard<std::mutex> lock(dynamics_mutex_);
       dyn = latest_dynamics_;
     }
-    // Planner 내부 상태는 rear axle 기준이다.
-    // DynamicsInfo가 rear bumper 기준이면 rear axle로 옮기고,
-    // rear axle 기준이면 그대로 쓴다.
-    start_state.x = dyn.Car_x;
-    start_state.y = dyn.Car_y;
-    if (dynamics_pose_reference_ == "rear_bumper") {
-      start_state.x += config_.vehicle.rear_axle_offset * std::cos(dyn.Car_Yaw);
-      start_state.y += config_.vehicle.rear_axle_offset * std::sin(dyn.Car_Yaw);
-    }
+    // Translate start pose from rear bumper forward to rear axle center
+    start_state.x = dyn.Car_x + config_.vehicle.rear_axle_offset * std::cos(dyn.Car_Yaw);
+    start_state.y = dyn.Car_y + config_.vehicle.rear_axle_offset * std::sin(dyn.Car_Yaw);
     start_state.theta = dyn.Car_Yaw;
   }
   else if (use_manual_pose_) {

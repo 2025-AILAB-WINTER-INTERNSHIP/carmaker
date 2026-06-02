@@ -34,10 +34,6 @@ vehicle:
   length: 4.635     # meters
   wheelbase: 2.97   # meters
   rear_axle_offset: 0.82 # meters (Rear Bumper to Rear Axle)
-  # DynamicsInfo.Car_x/y 기준점. control의 vehicle/dynamics_pose_reference와 같은 값으로 맞춘다.
-  # rear_bumper: Car_x/y가 Fr1A/rear bumper center이면 planner에서 rear axle로 변환한다.
-  # rear_axle: Car_x/y가 rear axle center이면 그대로 planner start state로 사용한다.
-  dynamics_pose_reference: "rear_bumper"
   min_turning_radius: 5.5 # meters
   # Ioniq 5 wheelbase/min_turning_radius 기준: atan(2.97 / 5.5) = 28.4 deg
   max_steer_angle_deg: 28.4 # degrees
@@ -100,11 +96,9 @@ global_post_processing:
   resampler:
     resolution: 0.1
   profiler:
-    # Tight parking task speed profile: 0.7 m/s = 2.5 km/h.
-    # 조향 추종이 먼저 안정될 때까지 속도와 횡가속을 낮춘다.
-    max_vel: 0.7      # m/s
-    max_accel: 0.5    # m/s^2
+    max_vel: 2.0      # m/s 7.2 km/h
+    max_accel: 0.8    # m/s^2
     max_decel: 0.8    # m/s^2
-    max_jerk: 0.8     # m/s^3
-    max_lat_acc: 0.35 # m/s^2
+    max_jerk: 1.5     # m/s^3
+    max_lat_acc: 0.8  # m/s^2
     goal_vel: 0.0
