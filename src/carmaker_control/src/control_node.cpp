@@ -8,8 +8,12 @@
 #include <vector>
 
 #include <geometry_msgs/Quaternion.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Path.h>
 #include <nav_msgs/Odometry.h>
 #include <ros/ros.h>
+#include <std_msgs/Float64.h>
+#include <std_msgs/Int32.h>
 
 #include <carmaker_msgs/Control_Signal.h>
 #include <carmaker_msgs/DynamicsInfo.h>
@@ -58,6 +62,16 @@ double quaternionToYaw(const geometry_msgs::Quaternion& q)
 {
   return std::atan2(2.0 * (q.w * q.z + q.x * q.y),
                     1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
+geometry_msgs::Quaternion yawToQuaternion(double yaw)
+{
+  geometry_msgs::Quaternion q;
+  q.x = 0.0;
+  q.y = 0.0;
+  q.z = std::sin(0.5 * yaw);
+  q.w = std::cos(0.5 * yaw);
+  return q;
 }
 
 double clamp(double value, double min_value, double max_value)
@@ -127,6 +141,22 @@ private:
   void advanceOrStop(const PathSegment& active_segment,
                      std::size_t active_segment_index,
                      double current_speed);
+  void advertiseDebugTopics();
+  void publishDebugTelemetry(const Pose2D& pose,
+                             double signed_speed,
+                             const PathSegment* segment,
+                             std::size_t segment_index,
+                             std::size_t nearest_index,
+                             std::size_t target_index,
+                             double target_speed,
+                             double lookahead,
+                             int tracking_state);
+  void publishPoseDebug(const ros::Publisher& publisher,
+                        double x,
+                        double y,
+                        double yaw,
+                        const ros::Time& stamp) const;
+  void publishActiveSegmentPath(const PathSegment& segment, const ros::Time& stamp);
   void publishControl(int direction, double steer_command, double accel_command);
   void publishStop(int direction, double steer_command = 0.0);
 
@@ -141,6 +171,20 @@ private:
   ros::Subscriber dynamics_sub_;
   ros::Publisher control_pub_;
   ros::Timer control_timer_;
+
+  ros::Publisher debug_current_pose_pub_;
+  ros::Publisher debug_nearest_pose_pub_;
+  ros::Publisher debug_lookahead_pose_pub_;
+  ros::Publisher debug_active_path_pub_;
+  ros::Publisher debug_current_speed_pub_;
+  ros::Publisher debug_target_speed_pub_;
+  ros::Publisher debug_speed_error_pub_;
+  ros::Publisher debug_cte_pub_;
+  ros::Publisher debug_heading_error_pub_;
+  ros::Publisher debug_lookahead_pub_;
+  ros::Publisher debug_segment_index_pub_;
+  ros::Publisher debug_direction_pub_;
+  ros::Publisher debug_tracking_state_pub_;
 
   mutable std::mutex odom_mutex_;
   nav_msgs::Odometry latest_odom_;
@@ -168,8 +212,11 @@ private:
   std::string dynamics_topic_;
   std::string control_topic_;
   std::string state_source_{"odom"};
+  std::string debug_topic_prefix_{"/control/debug"};
+  std::string debug_frame_id_{"Fr0"};
 
   bool publish_stop_without_path_{true};
+  bool publish_debug_{true};
   double control_rate_{30.0};
   double odom_timeout_{0.5};
   double dynamics_timeout_{0.5};
@@ -204,6 +251,8 @@ private:
   double reverse_steering_scale_{1.0};
 
   ros::Time last_control_time_;
+  ros::Time last_debug_path_time_;
+  double debug_path_period_{1.0};
 };
 
 ControlNode::ControlNode()
@@ -220,6 +269,7 @@ ControlNode::ControlNode()
     odom_sub_ = nh_.subscribe(odom_topic_, 30, &ControlNode::odomCallback, this);
   }
   control_pub_ = nh_.advertise<carmaker_msgs::Control_Signal>(control_topic_, 10);
+  advertiseDebugTopics();
 
   // 제어 루프는 trajectory callback과 독립적으로 일정 주기로 돈다.
   // trajectory가 latched publisher이므로 노드를 나중에 켜도 마지막 계획 경로를 받을 수 있다.
@@ -335,6 +385,11 @@ void ControlNode::loadParameters()
   pnh_.param("vehicle/steering_ratio", steering_ratio_, 1.0);
   max_steer_command_ = max_tire_steer * steering_ratio_;
   pnh_.param("vehicle/max_steer_command", max_steer_command_, max_steer_command_);
+
+  pnh_.param("debug/publish", publish_debug_, true);
+  pnh_.param<std::string>("debug/topic_prefix", debug_topic_prefix_, "/control/debug");
+  pnh_.param<std::string>("debug/frame_id", debug_frame_id_, "Fr0");
+  pnh_.param("debug/path_publish_period", debug_path_period_, 1.0);
 }
 
 void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr& msg)
@@ -602,6 +657,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   if (!should_track) {
     // 경로가 없거나 timeout이면 neutral + brake로 대기한다.
+    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0, 0.0, 0.0, 0);
     if (publish_stop_without_path_) {
       publishStop(0);
     }
@@ -623,6 +679,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   if (isSegmentComplete(active_segment, pose, nearest_index)) {
     // segment 끝에 도착하면 바로 다음 segment로 넘어가지 않고 먼저 충분히 감속한다.
     // 전진/후진 기어 전환을 움직이는 중에 하지 않기 위한 처리다.
+    publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
+                          nearest_index, nearest_index, 0.0, 0.0, 2);
     advanceOrStop(active_segment, active_segment_index, current_speed);
     return;
   }
@@ -640,6 +698,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
       computeSteeringCommand(pose, active_segment.points[nearest_index],
                              std::max(current_speed, target_speed), active_segment.direction);
 
+  publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
+                        nearest_index, target_index, target_speed, lookahead, 1);
   publishControl(active_segment.direction, steer_command, accel_command);
 }
 
@@ -788,6 +848,161 @@ void ControlNode::advanceOrStop(const PathSegment& active_segment,
     ROS_INFO("Trajectory complete.");
     publishStop(0);
   }
+}
+
+void ControlNode::advertiseDebugTopics()
+{
+  if (!publish_debug_) {
+    return;
+  }
+
+  if (!debug_topic_prefix_.empty() && debug_topic_prefix_.back() == '/') {
+    debug_topic_prefix_.pop_back();
+  }
+
+  debug_current_pose_pub_ =
+      nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/current_pose", 10);
+  debug_nearest_pose_pub_ =
+      nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/nearest_pose", 10);
+  debug_lookahead_pose_pub_ =
+      nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/lookahead_pose", 10);
+  debug_active_path_pub_ =
+      nh_.advertise<nav_msgs::Path>(debug_topic_prefix_ + "/active_segment_path", 1, true);
+
+  debug_current_speed_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/current_speed", 10);
+  debug_target_speed_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/target_speed", 10);
+  debug_speed_error_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/speed_error", 10);
+  debug_cte_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/cross_track_error", 10);
+  debug_heading_error_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/heading_error", 10);
+  debug_lookahead_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/lookahead_distance", 10);
+  debug_segment_index_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/segment_index", 10);
+  debug_direction_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/direction", 10);
+  debug_tracking_state_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/tracking_state", 10);
+
+  ROS_INFO("Control debug topics enabled at %s (frame=%s)",
+           debug_topic_prefix_.c_str(), debug_frame_id_.c_str());
+}
+
+void ControlNode::publishDebugTelemetry(const Pose2D& pose,
+                                        double signed_speed,
+                                        const PathSegment* segment,
+                                        std::size_t segment_index,
+                                        std::size_t nearest_index,
+                                        std::size_t target_index,
+                                        double target_speed,
+                                        double lookahead,
+                                        int tracking_state)
+{
+  if (!publish_debug_) {
+    return;
+  }
+
+  const ros::Time stamp = ros::Time::now();
+  const double current_speed = std::abs(signed_speed);
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  double cte = nan;
+  double heading_error = nan;
+  int direction = 0;
+  int segment_index_value = segment ? static_cast<int>(segment_index) : -1;
+
+  publishPoseDebug(debug_current_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
+
+  if (segment && !segment->points.empty()) {
+    direction = segment->direction;
+    const std::size_t nearest = std::min(nearest_index, segment->points.size() - 1);
+    const std::size_t target = std::min(target_index, segment->points.size() - 1);
+    const PathPoint& nearest_point = segment->points[nearest];
+    const PathPoint& target_point = segment->points[target];
+
+    publishPoseDebug(debug_nearest_pose_pub_,
+                     nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
+    publishPoseDebug(debug_lookahead_pose_pub_,
+                     target_point.x, target_point.y, target_point.yaw, stamp);
+
+    const double dx = pose.x - nearest_point.x;
+    const double dy = pose.y - nearest_point.y;
+    cte = std::sin(nearest_point.yaw) * dx - std::cos(nearest_point.yaw) * dy;
+    heading_error = normalizeAngle(nearest_point.yaw - pose.yaw);
+
+    const bool should_publish_path =
+        last_debug_path_time_.isZero() ||
+        debug_path_period_ <= 0.0 ||
+        (stamp - last_debug_path_time_).toSec() >= debug_path_period_;
+    if (should_publish_path) {
+      publishActiveSegmentPath(*segment, stamp);
+    }
+  } else {
+    target_speed = 0.0;
+    lookahead = nan;
+  }
+
+  std_msgs::Float64 float_msg;
+  float_msg.data = current_speed;
+  debug_current_speed_pub_.publish(float_msg);
+  float_msg.data = target_speed;
+  debug_target_speed_pub_.publish(float_msg);
+  float_msg.data = target_speed - current_speed;
+  debug_speed_error_pub_.publish(float_msg);
+  float_msg.data = cte;
+  debug_cte_pub_.publish(float_msg);
+  float_msg.data = heading_error;
+  debug_heading_error_pub_.publish(float_msg);
+  float_msg.data = lookahead;
+  debug_lookahead_pub_.publish(float_msg);
+
+  std_msgs::Int32 int_msg;
+  int_msg.data = segment_index_value;
+  debug_segment_index_pub_.publish(int_msg);
+  int_msg.data = direction;
+  debug_direction_pub_.publish(int_msg);
+  int_msg.data = tracking_state;
+  debug_tracking_state_pub_.publish(int_msg);
+}
+
+void ControlNode::publishPoseDebug(const ros::Publisher& publisher,
+                                   double x,
+                                   double y,
+                                   double yaw,
+                                   const ros::Time& stamp) const
+{
+  geometry_msgs::PoseStamped msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = debug_frame_id_;
+  msg.pose.position.x = x;
+  msg.pose.position.y = y;
+  msg.pose.position.z = 0.0;
+  msg.pose.orientation = yawToQuaternion(yaw);
+  publisher.publish(msg);
+}
+
+void ControlNode::publishActiveSegmentPath(const PathSegment& segment, const ros::Time& stamp)
+{
+  nav_msgs::Path path;
+  path.header.stamp = stamp;
+  path.header.frame_id = debug_frame_id_;
+  path.poses.reserve(segment.points.size());
+
+  for (const PathPoint& point : segment.points) {
+    geometry_msgs::PoseStamped pose;
+    pose.header = path.header;
+    pose.pose.position.x = point.x;
+    pose.pose.position.y = point.y;
+    pose.pose.position.z = 0.0;
+    pose.pose.orientation = yawToQuaternion(point.yaw);
+    path.poses.push_back(pose);
+  }
+
+  debug_active_path_pub_.publish(path);
+  last_debug_path_time_ = stamp;
 }
 
 void ControlNode::publishControl(int direction, double steer_command, double accel_command)

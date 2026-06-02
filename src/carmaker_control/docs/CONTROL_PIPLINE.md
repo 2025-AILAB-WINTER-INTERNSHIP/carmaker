@@ -675,6 +675,75 @@ steerangle = 0 또는 지정된 steer 값
 | `/planning/trajectory` | `carmaker_msgs/TrajectoryPath` | `carmaker_planning` | `carmaker_control` | 추종 경로 |
 | `/carmaker/control_signal` | `carmaker_msgs/Control_Signal` | `carmaker_control` | CarMaker bridge | 최종 제어 명령 |
 
+## Control debug 토픽
+
+`debug/publish: true`이면 control node가 PlotJuggler/RViz 진단용 토픽을 추가로 publish한다. 기본 prefix는 `/control/debug`다.
+
+### RViz용 토픽
+
+| 토픽 | 타입 | 설명 |
+| --- | --- | --- |
+| `/control/debug/current_pose` | `geometry_msgs/PoseStamped` | control이 현재 상태로 사용 중인 차량 pose. `odom` 모드면 localization pose, `dynamics` 모드면 GT pose |
+| `/control/debug/nearest_pose` | `geometry_msgs/PoseStamped` | 현재 active segment에서 차량과 가장 가까운 trajectory point |
+| `/control/debug/lookahead_pose` | `geometry_msgs/PoseStamped` | 목표 속도를 읽는 lookahead point |
+| `/control/debug/active_segment_path` | `nav_msgs/Path` | 현재 추종 중인 전진/후진 segment |
+
+RViz 설정 예:
+
+```text
+Fixed Frame: Fr0
+
+Add -> Pose
+  Topic: /control/debug/current_pose
+
+Add -> Pose
+  Topic: /control/debug/nearest_pose
+
+Add -> Pose
+  Topic: /control/debug/lookahead_pose
+
+Add -> Path
+  Topic: /control/debug/active_segment_path
+```
+
+### PlotJuggler용 토픽
+
+| 토픽 | 타입 | 설명 |
+| --- | --- | --- |
+| `/control/debug/current_speed` | `std_msgs/Float64` | 현재 속도 크기 |
+| `/control/debug/target_speed` | `std_msgs/Float64` | lookahead point의 목표 속도 |
+| `/control/debug/speed_error` | `std_msgs/Float64` | `target_speed - current_speed` |
+| `/control/debug/cross_track_error` | `std_msgs/Float64` | nearest point 기준 lateral error |
+| `/control/debug/heading_error` | `std_msgs/Float64` | nearest point 기준 yaw error |
+| `/control/debug/lookahead_distance` | `std_msgs/Float64` | 현재 tick에서 사용한 lookahead 거리 |
+| `/control/debug/segment_index` | `std_msgs/Int32` | 현재 active segment index |
+| `/control/debug/direction` | `std_msgs/Int32` | `1`: 전진, `-1`: 후진, `0`: 추종 중 아님 |
+| `/control/debug/tracking_state` | `std_msgs/Int32` | `0`: idle/no trajectory, `1`: tracking, `2`: stopping at segment end |
+
+PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
+
+```text
+/carmaker/control_signal/gear
+/carmaker/control_signal/gas
+/carmaker/control_signal/brake
+/carmaker/control_signal/steerangle
+/carmaker/control_signal/accel
+/control/debug/current_speed
+/control/debug/target_speed
+/control/debug/speed_error
+/control/debug/cross_track_error
+/control/debug/heading_error
+/control/debug/tracking_state
+```
+
+정상 패턴:
+
+- 직선 전진에서는 `cross_track_error`, `heading_error`, `steerangle`이 0 근처로 수렴한다.
+- `current_speed`가 `target_speed`보다 낮으면 `gas`가 증가하고, 높으면 `brake`가 증가한다.
+- segment 끝에서는 `tracking_state = 2`, `brake > 0`이 되고, 속도가 `gear_switch_speed` 이하로 내려가면 다음 segment로 넘어간다.
+- 전진 segment에서는 `direction = 1`, `gear = drive_gear`다.
+- 후진 segment에서는 `direction = -1`, `gear = reverse_gear`다.
+
 ## 주요 파라미터
 
 ### 토픽 설정
@@ -834,6 +903,18 @@ vehicle:
 ```
 
 Stanley는 타이어 조향각을 계산한다. CarMaker가 steering wheel angle을 기대한다면 `steering_ratio`를 키우거나 `max_steer_command`를 프로젝트 입력 스펙에 맞춰 조정해야 한다.
+
+### Debug publish
+
+```yaml
+debug:
+  publish: true
+  topic_prefix: "/control/debug"
+  frame_id: "Fr0"
+  path_publish_period: 1.0
+```
+
+`publish`를 `false`로 두면 control debug 토픽을 끌 수 있다. `path_publish_period`는 `/control/debug/active_segment_path` publish 주기이며, 0 이하로 두면 매 control tick마다 publish한다.
 
 ## 실행 확인 체크리스트
 

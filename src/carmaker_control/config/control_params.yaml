@@ -86,3 +86,11 @@ vehicle:
   # CarMaker 입력이 steering wheel angle이면 steering_ratio를 키우거나 max_steer_command를 조정한다.
   steering_ratio: 1.0
   max_steer_command: 0.4951
+
+debug:
+  # PlotJuggler/RViz 진단용 토픽을 publish한다.
+  publish: true
+  topic_prefix: "/control/debug"
+  frame_id: "Fr0"
+  # active_segment_path는 너무 자주 내보내지 않도록 별도 주기를 둔다. 0 이하면 매 tick publish.
+  path_publish_period: 1.0

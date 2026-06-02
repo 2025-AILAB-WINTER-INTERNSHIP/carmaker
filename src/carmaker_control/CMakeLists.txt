@@ -7,6 +7,7 @@ add_compile_options(-Wall -Wextra)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
+  std_msgs
   geometry_msgs
   nav_msgs
   carmaker_msgs
@@ -14,7 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 catkin_package(
   INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp geometry_msgs nav_msgs carmaker_msgs
+  CATKIN_DEPENDS roscpp std_msgs geometry_msgs nav_msgs carmaker_msgs
 )
 
 include_directories(
