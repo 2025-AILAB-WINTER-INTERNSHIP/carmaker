@@ -100,11 +100,11 @@ global_post_processing:
   resampler:
     resolution: 0.1
   profiler:
-    # Parking task speed profile: 1.0 m/s = 3.6 km/h.
-    # 너무 느린 creep만 쓰지 않되, 조향/후진 전환이 안정적인 저속으로 제한한다.
-    max_vel: 1.0      # m/s
-    max_accel: 0.6    # m/s^2
+    # Tight parking task speed profile: 0.7 m/s = 2.5 km/h.
+    # 조향 추종이 먼저 안정될 때까지 속도와 횡가속을 낮춘다.
+    max_vel: 0.7      # m/s
+    max_accel: 0.5    # m/s^2
     max_decel: 0.8    # m/s^2
-    max_jerk: 1.0     # m/s^3
-    max_lat_acc: 0.5  # m/s^2
+    max_jerk: 0.8     # m/s^3
+    max_lat_acc: 0.35 # m/s^2
     goal_vel: 0.0
