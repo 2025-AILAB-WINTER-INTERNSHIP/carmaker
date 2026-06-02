@@ -7,6 +7,7 @@
 
 #include <ros/ros.h>
 #include <nav_msgs/Path.h>
+#include <geometry_msgs/PoseArray.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <vector>
 #include <string>
@@ -33,10 +34,12 @@ private:
   ros::Publisher path_pub_;
   ros::Publisher tree_pub_;
   ros::Publisher velocity_pub_;
+  ros::Publisher pose_array_pub_;
 
   std::string path_topic_;
   std::string tree_topic_;
   std::string velocity_topic_;
+  std::string pose_array_topic_;
 };
 
 } // namespace carmaker_planning
