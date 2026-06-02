@@ -183,6 +183,12 @@ private:
   ros::Publisher debug_heading_error_pub_;
   ros::Publisher debug_lookahead_pub_;
   ros::Publisher debug_segment_index_pub_;
+  ros::Publisher debug_segment_count_pub_;
+  ros::Publisher debug_nearest_index_pub_;
+  ros::Publisher debug_target_index_pub_;
+  ros::Publisher debug_distance_to_end_pub_;
+  ros::Publisher debug_trajectory_age_pub_;
+  ros::Publisher debug_trajectory_completed_pub_;
   ros::Publisher debug_direction_pub_;
   ros::Publisher debug_tracking_state_pub_;
 
@@ -246,6 +252,8 @@ private:
   int neutral_gear_{0};
   int reverse_gear_{-1};
 
+  double rear_axle_offset_{0.82};
+  std::string dynamics_pose_reference_{"rear_bumper"};
   double steering_ratio_{1.0};
   double max_steer_command_{0.495};
   double reverse_steering_scale_{1.0};
@@ -352,6 +360,15 @@ void ControlNode::loadParameters()
   double min_turning_radius = 5.5;
   pnh_.param("vehicle/wheelbase", wheelbase, wheelbase);
   pnh_.param("vehicle/min_turning_radius", min_turning_radius, min_turning_radius);
+  pnh_.param("vehicle/rear_axle_offset", rear_axle_offset_, 0.82);
+  pnh_.param<std::string>("vehicle/dynamics_pose_reference",
+                          dynamics_pose_reference_, "rear_bumper");
+  if (dynamics_pose_reference_ != "rear_bumper" &&
+      dynamics_pose_reference_ != "rear_axle") {
+    ROS_WARN("Unknown vehicle/dynamics_pose_reference='%s'. Falling back to 'rear_bumper'.",
+             dynamics_pose_reference_.c_str());
+    dynamics_pose_reference_ = "rear_bumper";
+  }
 
   double max_tire_steer_deg = 28.4;
   if (wheelbase > 1e-6 && min_turning_radius > 1e-6) {
@@ -574,11 +591,16 @@ bool ControlNode::getCurrentState(Pose2D& pose, double& signed_speed) const
     }
 
     // DynamicsInfo의 Car_* 값은 CarMaker GT 상태다.
-    // planning의 GT start pose도 Car_x/Car_y/Car_Yaw를 기준으로 rear axle 보정을 하므로,
-    // control trajectory pose와 비교할 때는 Car_x/Car_y/Car_Yaw를 그대로 current pose로 쓴다.
+    // /planning/trajectory는 rear bumper 기준으로 publish되므로, CarMaker의 GT 기준점이
+    // rear axle이면 rear bumper로 변환해 control reference를 맞춘다.
+    const double yaw = normalizeAngle(dynamics.Car_Yaw);
     pose.x = dynamics.Car_x;
     pose.y = dynamics.Car_y;
-    pose.yaw = normalizeAngle(dynamics.Car_Yaw);
+    if (dynamics_pose_reference_ == "rear_axle") {
+      pose.x -= rear_axle_offset_ * std::cos(yaw);
+      pose.y -= rear_axle_offset_ * std::sin(yaw);
+    }
+    pose.yaw = yaw;
     signed_speed = dynamics.Car_vx;
     return true;
   }
@@ -883,6 +905,18 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/lookahead_distance", 10);
   debug_segment_index_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/segment_index", 10);
+  debug_segment_count_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/segment_count", 10);
+  debug_nearest_index_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/nearest_index", 10);
+  debug_target_index_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/target_index", 10);
+  debug_distance_to_end_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/distance_to_segment_end", 10);
+  debug_trajectory_age_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/trajectory_age", 10);
+  debug_trajectory_completed_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/trajectory_completed", 10);
   debug_direction_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/direction", 10);
   debug_tracking_state_pub_ =
@@ -911,8 +945,23 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   const double nan = std::numeric_limits<double>::quiet_NaN();
   double cte = nan;
   double heading_error = nan;
+  double distance_to_end = -1.0;
+  double trajectory_age = -1.0;
   int direction = 0;
   int segment_index_value = segment ? static_cast<int>(segment_index) : -1;
+  int nearest_index_value = -1;
+  int target_index_value = -1;
+  int segment_count = 0;
+  int trajectory_completed = 0;
+
+  {
+    std::lock_guard<std::mutex> lock(trajectory_mutex_);
+    segment_count = static_cast<int>(segments_.size());
+    trajectory_completed = trajectory_completed_ ? 1 : 0;
+    if (trajectory_received_) {
+      trajectory_age = (stamp - last_trajectory_time_).toSec();
+    }
+  }
 
   publishPoseDebug(debug_current_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
 
@@ -920,8 +969,11 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     direction = segment->direction;
     const std::size_t nearest = std::min(nearest_index, segment->points.size() - 1);
     const std::size_t target = std::min(target_index, segment->points.size() - 1);
+    nearest_index_value = static_cast<int>(nearest);
+    target_index_value = static_cast<int>(target);
     const PathPoint& nearest_point = segment->points[nearest];
     const PathPoint& target_point = segment->points[target];
+    distance_to_end = distance2D(pose, segment->points.back());
 
     publishPoseDebug(debug_nearest_pose_pub_,
                      nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
@@ -958,10 +1010,22 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_heading_error_pub_.publish(float_msg);
   float_msg.data = lookahead;
   debug_lookahead_pub_.publish(float_msg);
+  float_msg.data = distance_to_end;
+  debug_distance_to_end_pub_.publish(float_msg);
+  float_msg.data = trajectory_age;
+  debug_trajectory_age_pub_.publish(float_msg);
 
   std_msgs::Int32 int_msg;
   int_msg.data = segment_index_value;
   debug_segment_index_pub_.publish(int_msg);
+  int_msg.data = segment_count;
+  debug_segment_count_pub_.publish(int_msg);
+  int_msg.data = nearest_index_value;
+  debug_nearest_index_pub_.publish(int_msg);
+  int_msg.data = target_index_value;
+  debug_target_index_pub_.publish(int_msg);
+  int_msg.data = trajectory_completed;
+  debug_trajectory_completed_pub_.publish(int_msg);
   int_msg.data = direction;
   debug_direction_pub_.publish(int_msg);
   int_msg.data = tracking_state;

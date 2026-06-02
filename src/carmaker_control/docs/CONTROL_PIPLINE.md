@@ -392,6 +392,8 @@ float64 Car_vx
 
 `Car_x`, `Car_y`, `Car_Yaw`는 GT pose로 사용하고, `Car_vx`는 signed longitudinal speed로 사용한다.
 
+planning은 내부적으로 rear axle 기준으로 경로를 만들지만, `/planning/trajectory`를 publish할 때는 `rear_axle_offset`만큼 뒤로 옮겨 rear bumper 기준점으로 내보낸다. 따라서 control도 trajectory와 같은 기준점의 현재 pose를 써야 한다.
+
 ## Control 내부 처리 순서
 
 control loop는 다음 순서로 동작한다.
@@ -476,6 +478,8 @@ pose.y = dynamics.Car_y
 pose.yaw = dynamics.Car_Yaw
 speed = dynamics.Car_vx
 ```
+
+단, `DynamicsInfo.Car_x/y`가 rear axle 기준으로 들어오는 CarMaker 설정이라면 control에서 rear bumper 기준으로 변환해야 한다. 이때 `vehicle/dynamics_pose_reference: "rear_axle"`로 둔다.
 
 이 정보가 있어야 planning이 만든 trajectory 중 현재 차량과 가장 가까운 지점을 찾을 수 있고, 차량이 경로에서 얼마나 벗어났는지도 계산할 수 있다.
 
@@ -717,6 +721,12 @@ Add -> Path
 | `/control/debug/heading_error` | `std_msgs/Float64` | nearest point 기준 yaw error |
 | `/control/debug/lookahead_distance` | `std_msgs/Float64` | 현재 tick에서 사용한 lookahead 거리 |
 | `/control/debug/segment_index` | `std_msgs/Int32` | 현재 active segment index |
+| `/control/debug/segment_count` | `std_msgs/Int32` | 현재 trajectory가 전진/후진 부호 기준으로 나뉜 segment 개수 |
+| `/control/debug/nearest_index` | `std_msgs/Int32` | active segment 안에서 현재 pose와 가장 가까운 point index. 추종 중이 아니면 `-1` |
+| `/control/debug/target_index` | `std_msgs/Int32` | target speed를 읽는 lookahead point index. 추종 중이 아니면 `-1` |
+| `/control/debug/distance_to_segment_end` | `std_msgs/Float64` | 현재 pose에서 active segment 마지막 point까지 거리. 추종 중이 아니면 `-1` |
+| `/control/debug/trajectory_age` | `std_msgs/Float64` | 마지막 `/planning/trajectory` 수신 후 지난 시간. trajectory를 받은 적 없으면 `-1` |
+| `/control/debug/trajectory_completed` | `std_msgs/Int32` | `1`: trajectory 완료 상태, `0`: 아직 완료 아님 |
 | `/control/debug/direction` | `std_msgs/Int32` | `1`: 전진, `-1`: 후진, `0`: 추종 중 아님 |
 | `/control/debug/tracking_state` | `std_msgs/Int32` | `0`: idle/no trajectory, `1`: tracking, `2`: stopping at segment end |
 
@@ -734,6 +744,12 @@ PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 /control/debug/cross_track_error
 /control/debug/heading_error
 /control/debug/tracking_state
+/control/debug/direction
+/control/debug/segment_index
+/control/debug/segment_count
+/control/debug/distance_to_segment_end
+/control/debug/trajectory_age
+/control/debug/trajectory_completed
 ```
 
 정상 패턴:
@@ -741,6 +757,7 @@ PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 - 직선 전진에서는 `cross_track_error`, `heading_error`, `steerangle`이 0 근처로 수렴한다.
 - `current_speed`가 `target_speed`보다 낮으면 `gas`가 증가하고, 높으면 `brake`가 증가한다.
 - segment 끝에서는 `tracking_state = 2`, `brake > 0`이 되고, 속도가 `gear_switch_speed` 이하로 내려가면 다음 segment로 넘어간다.
+- segment 전환이 정상이라면 `segment_index`가 증가하고 `direction`이 다음 segment 방향으로 바뀐다.
 - 전진 segment에서는 `direction = 1`, `gear = drive_gear`다.
 - 후진 segment에서는 `direction = -1`, `gear = reverse_gear`다.
 
@@ -773,6 +790,23 @@ control:
 | `dynamics` | `/carmaker/dynamic_info` | localization 없이 GT로 planning/control 성능 확인 |
 
 `gt`는 `dynamics`, `localization`은 `odom`의 alias로 처리된다.
+
+### GT pose 기준점 선택
+
+```yaml
+vehicle:
+  rear_axle_offset: 0.82
+  dynamics_pose_reference: "rear_bumper"
+```
+
+`/planning/trajectory`는 rear bumper 기준점으로 publish된다. 그래서 GT mode에서 `/control/debug/current_pose`도 같은 기준점이어야 한다.
+
+| 값 | 의미 | 언제 사용 |
+| --- | --- | --- |
+| `rear_bumper` | `DynamicsInfo.Car_x/y`를 그대로 current pose로 사용 | CarMaker `Car_x/y`가 Fr1A/rear bumper center일 때 |
+| `rear_axle` | `Car_x/y`에서 `rear_axle_offset`만큼 뒤로 빼서 current pose로 사용 | CarMaker `Car_x/y`가 rear axle center일 때 |
+
+RViz에서 `/control/debug/current_pose`가 `/control/debug/nearest_pose`나 `/control/debug/active_segment_path`보다 차량 진행 방향으로 약 `0.82m` 앞에 보이면 `dynamics_pose_reference`를 `"rear_axle"`로 바꿔서 다시 실행한다.
 
 ### 안전 timeout
 
@@ -898,11 +932,13 @@ atan(2.97 / 5.5) = 28.4 deg
 vehicle:
   wheelbase: 2.97
   min_turning_radius: 5.5
+  rear_axle_offset: 0.82
+  dynamics_pose_reference: "rear_bumper"
   steering_ratio: 1.0
   max_steer_command: 0.4951
 ```
 
-Stanley는 타이어 조향각을 계산한다. CarMaker가 steering wheel angle을 기대한다면 `steering_ratio`를 키우거나 `max_steer_command`를 프로젝트 입력 스펙에 맞춰 조정해야 한다.
+Stanley는 타이어 조향각을 계산한다. CarMaker가 steering wheel angle을 기대한다면 `steering_ratio`를 키우거나 `max_steer_command`를 프로젝트 입력 스펙에 맞춰 조정해야 한다. `rear_axle_offset`과 `dynamics_pose_reference`는 GT pose 기준점을 trajectory 기준점과 맞추기 위한 값이다.
 
 ### Debug publish
 
@@ -947,6 +983,8 @@ rostopic echo /carmaker/dynamic_info
 - `Car_Yaw`가 radian 기준 yaw로 들어오는지
 - `Car_vx`가 차량 전후방 속도와 맞는지
 - 후진 시 `Car_vx` 부호가 실제 후진 방향과 일관되는지
+- RViz에서 `/control/debug/current_pose`가 `/control/debug/active_segment_path` 위에 놓이는지
+- current pose가 경로보다 약 `rear_axle_offset`만큼 앞에 있으면 `vehicle/dynamics_pose_reference: "rear_axle"`로 바꿔야 한다.
 
 ### planning 확인
 
@@ -1020,6 +1058,7 @@ rostopic echo /carmaker/control_signal
 - `/planning/trajectory`의 후진 구간 velocity가 음수인지
 - `gear_switch_speed`보다 차량 속도가 충분히 내려가는지
 - `reverse_gear` 값이 CarMaker 프로젝트의 후진 gear 값과 맞는지
+- `/control/debug/current_pose`와 `/control/debug/active_segment_path`의 기준점이 같은지
 - segment 완료 조건인 `segment_finish_distance`, `segment_finish_index_margin`이 너무 엄격하지 않은지
 
 ### 조향 방향이 반대로 보이는 경우
