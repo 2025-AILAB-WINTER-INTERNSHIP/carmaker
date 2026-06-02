@@ -35,10 +35,10 @@ control:
 
   # nearest point 기준으로 일정 거리 앞의 point에서 target speed를 읽는다.
   # 실제 lookahead = lookahead_distance + lookahead_time * current_speed 이며 min/max로 제한된다.
-  lookahead_distance: 0.4
+  lookahead_distance: 0.35
   lookahead_time: 0.2
   min_lookahead_distance: 0.2
-  max_lookahead_distance: 1.0
+  max_lookahead_distance: 0.8
 
   # nearest index가 경로 위에서 크게 튀지 않도록 이전 index 주변만 검색한다.
   nearest_search_back: 20
@@ -76,9 +76,13 @@ stanley:
   k: 2.5
   k_soft: 0.15
   cte_gain: 2.0
-  heading_gain: 1.6
+  heading_gain: 1.8
   max_steer_angle_deg: 28.4
   reverse_steering_scale: 1.3
+  # Trajectory curvature 기반 feedforward. 큰 주차 곡률에서 feedback보다 먼저 조향한다.
+  curvature_ff_gain: 0.6
+  # 후진에서는 같은 조향각이 yaw를 반대로 변화시키므로 curvature feedforward 부호도 반대로 둔다.
+  reverse_curvature_ff_sign: -1.0
 
 vehicle:
   wheelbase: 2.97

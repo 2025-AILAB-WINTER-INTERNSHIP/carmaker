@@ -103,6 +103,7 @@ private:
     double y{0.0};
     double yaw{0.0};
     double target_speed{0.0};
+    double curvature{0.0};
     int direction{1};
   };
 
@@ -185,6 +186,7 @@ private:
   ros::Publisher debug_target_speed_pub_;
   ros::Publisher debug_speed_error_pub_;
   ros::Publisher debug_steer_command_pub_;
+  ros::Publisher debug_curvature_ff_pub_;
   ros::Publisher debug_steer_saturated_pub_;
   ros::Publisher debug_cte_pub_;
   ros::Publisher debug_heading_error_pub_;
@@ -237,11 +239,11 @@ private:
 
   double direction_velocity_epsilon_{0.02};
   double min_tracking_speed_{0.2};
-  double max_target_speed_{3.0};
-  double lookahead_distance_{0.8};
-  double lookahead_time_{0.4};
-  double min_lookahead_distance_{0.4};
-  double max_lookahead_distance_{3.0};
+  double max_target_speed_{0.7};
+  double lookahead_distance_{0.35};
+  double lookahead_time_{0.2};
+  double min_lookahead_distance_{0.2};
+  double max_lookahead_distance_{0.8};
   int nearest_search_back_{20};
   int nearest_search_ahead_{120};
 
@@ -249,9 +251,9 @@ private:
   int segment_finish_index_margin_{3};
   double gear_switch_speed_{0.08};
 
-  double max_accel_{2.0};
-  double max_decel_{2.5};
-  double max_gas_{0.7};
+  double max_accel_{0.8};
+  double max_decel_{1.5};
+  double max_gas_{0.35};
   double max_brake_{1.0};
   double stop_brake_{0.4};
 
@@ -259,12 +261,15 @@ private:
   int neutral_gear_{0};
   int reverse_gear_{-1};
 
+  double wheelbase_{2.97};
   double rear_axle_offset_{0.82};
   std::string dynamics_pose_reference_{"rear_bumper"};
-  double steering_ratio_{1.0};
-  double max_steer_command_{0.495};
+  double steering_ratio_{9.0};
+  double max_steer_command_{4.5};
   double steering_command_sign_{1.0};
   double reverse_steering_scale_{1.0};
+  double curvature_ff_gain_{0.6};
+  double reverse_curvature_ff_sign_{-1.0};
   std::string steering_control_point_{"rear_axle"};
 
   ros::Time last_control_time_;
@@ -332,14 +337,14 @@ void ControlNode::loadParameters()
   // Reeds-Shepp cusp 근처에서 velocity가 0으로 떨어져도 불필요하게 segment가 쪼개지지 않는다.
   pnh_.param("control/direction_velocity_epsilon", direction_velocity_epsilon_, 0.02);
   pnh_.param("control/min_tracking_speed", min_tracking_speed_, 0.2);
-  pnh_.param("control/max_target_speed", max_target_speed_, 3.0);
+  pnh_.param("control/max_target_speed", max_target_speed_, 0.7);
 
   // lookahead는 속도가 높을수록 조금 멀리 보도록 base + time * speed 형태로 계산한다.
   // 단, 너무 가까워 떨리거나 너무 멀어 코너를 뭉개지 않도록 min/max로 제한한다.
-  pnh_.param("control/lookahead_distance", lookahead_distance_, 0.8);
-  pnh_.param("control/lookahead_time", lookahead_time_, 0.4);
-  pnh_.param("control/min_lookahead_distance", min_lookahead_distance_, 0.4);
-  pnh_.param("control/max_lookahead_distance", max_lookahead_distance_, 3.0);
+  pnh_.param("control/lookahead_distance", lookahead_distance_, 0.35);
+  pnh_.param("control/lookahead_time", lookahead_time_, 0.2);
+  pnh_.param("control/min_lookahead_distance", min_lookahead_distance_, 0.2);
+  pnh_.param("control/max_lookahead_distance", max_lookahead_distance_, 0.8);
 
   // nearest search는 이전 index 주변만 훑어 경로가 겹칠 때 뒤쪽 segment로 튀는 것을 줄인다.
   pnh_.param("control/nearest_search_back", nearest_search_back_, 20);
@@ -351,9 +356,9 @@ void ControlNode::loadParameters()
   pnh_.param("control/segment_finish_index_margin", segment_finish_index_margin_, 3);
   pnh_.param("control/gear_switch_speed", gear_switch_speed_, 0.08);
 
-  pnh_.param("control/max_accel", max_accel_, 2.0);
-  pnh_.param("control/max_decel", max_decel_, 2.5);
-  pnh_.param("control/max_gas", max_gas_, 0.7);
+  pnh_.param("control/max_accel", max_accel_, 0.8);
+  pnh_.param("control/max_decel", max_decel_, 1.5);
+  pnh_.param("control/max_gas", max_gas_, 0.35);
   pnh_.param("control/max_brake", max_brake_, 1.0);
   pnh_.param("control/stop_brake", stop_brake_, 0.4);
   pnh_.param("control/drive_gear", drive_gear_, 1);
@@ -365,9 +370,8 @@ void ControlNode::loadParameters()
   //   tire_steer_limit = atan(wheelbase / min_turning_radius)
   // 실제 CarMaker 입력이 steering wheel angle이면 vehicle/steering_ratio 또는
   // vehicle/max_steer_command로 최종 명령 범위를 조정한다.
-  double wheelbase = 2.97;
   double min_turning_radius = 5.5;
-  pnh_.param("vehicle/wheelbase", wheelbase, wheelbase);
+  pnh_.param("vehicle/wheelbase", wheelbase_, wheelbase_);
   pnh_.param("vehicle/min_turning_radius", min_turning_radius, min_turning_radius);
   pnh_.param("vehicle/rear_axle_offset", rear_axle_offset_, 0.82);
   pnh_.param<std::string>("vehicle/dynamics_pose_reference",
@@ -380,21 +384,24 @@ void ControlNode::loadParameters()
   }
 
   double max_tire_steer_deg = 28.4;
-  if (wheelbase > 1e-6 && min_turning_radius > 1e-6) {
-    max_tire_steer_deg = rad2deg(std::atan(wheelbase / min_turning_radius));
+  if (wheelbase_ > 1e-6 && min_turning_radius > 1e-6) {
+    max_tire_steer_deg = rad2deg(std::atan(wheelbase_ / min_turning_radius));
   }
   pnh_.param("stanley/max_steer_angle_deg", max_tire_steer_deg, max_tire_steer_deg);
   const double max_tire_steer = deg2rad(max_tire_steer_deg);
 
-  double stanley_k = 1.0;
-  double stanley_k_soft = 0.3;
-  double stanley_cte_gain = 1.0;
-  double stanley_heading_gain = 1.0;
+  double stanley_k = 2.5;
+  double stanley_k_soft = 0.15;
+  double stanley_cte_gain = 2.0;
+  double stanley_heading_gain = 1.8;
   pnh_.param("stanley/k", stanley_k, stanley_k);
   pnh_.param("stanley/k_soft", stanley_k_soft, stanley_k_soft);
   pnh_.param("stanley/cte_gain", stanley_cte_gain, stanley_cte_gain);
   pnh_.param("stanley/heading_gain", stanley_heading_gain, stanley_heading_gain);
-  pnh_.param("stanley/reverse_steering_scale", reverse_steering_scale_, 1.0);
+  pnh_.param("stanley/reverse_steering_scale", reverse_steering_scale_, 1.3);
+  pnh_.param("stanley/curvature_ff_gain", curvature_ff_gain_, 0.6);
+  pnh_.param("stanley/reverse_curvature_ff_sign", reverse_curvature_ff_sign_, -1.0);
+  reverse_curvature_ff_sign_ = reverse_curvature_ff_sign_ < 0.0 ? -1.0 : 1.0;
   stanley_.configure(stanley_k, stanley_k_soft, max_tire_steer,
                      stanley_cte_gain, stanley_heading_gain);
 
@@ -408,7 +415,7 @@ void ControlNode::loadParameters()
   pnh_.param("pid/speed/kd", speed_kd, speed_kd);
   speed_pid_.configure(speed_kp, speed_ki, speed_kd, -max_decel_, max_accel_);
 
-  pnh_.param("vehicle/steering_ratio", steering_ratio_, 1.0);
+  pnh_.param("vehicle/steering_ratio", steering_ratio_, 9.0);
   max_steer_command_ = max_tire_steer * steering_ratio_;
   pnh_.param("vehicle/max_steer_command", max_steer_command_, max_steer_command_);
   pnh_.param("vehicle/steering_command_sign", steering_command_sign_, 1.0);
@@ -582,6 +589,7 @@ ControlNode::makePathPoint(const carmaker_msgs::TrajectoryPoint& msg, int direct
   point.y = msg.pose.position.y;
   point.yaw = quaternionToYaw(msg.pose.orientation);
   point.target_speed = std::abs(msg.longitudinal_velocity);
+  point.curvature = std::isfinite(msg.curvature) ? msg.curvature : 0.0;
   point.direction = direction;
   return point;
 }
@@ -853,7 +861,13 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
 
   const double tire_steer =
       stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
-  const double steer_command = steering_command_sign_ * tire_steer * steering_ratio_;
+  const double ff_direction_sign =
+      direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
+  const double curvature_ff =
+      curvature_ff_gain_ * ff_direction_sign *
+      std::atan(wheelbase_ * control_reference.curvature);
+  const double steer_command =
+      steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 
   return clamp(steer_command, -max_steer_command_, max_steer_command_);
 }
@@ -942,6 +956,8 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/speed_error", 10);
   debug_steer_command_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/steer_command", 10);
+  debug_curvature_ff_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/curvature_feedforward", 10);
   debug_steer_saturated_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/steer_saturated", 10);
   debug_cte_pub_ =
@@ -993,6 +1009,7 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   const double nan = std::numeric_limits<double>::quiet_NaN();
   double cte = nan;
   double heading_error = nan;
+  double curvature_ff = nan;
   double distance_to_end = -1.0;
   double trajectory_age = -1.0;
   int direction = 0;
@@ -1041,6 +1058,11 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     cte = std::sin(control_nearest_point.yaw) * dx -
           std::cos(control_nearest_point.yaw) * dy;
     heading_error = normalizeAngle(control_nearest_point.yaw - control_pose.yaw);
+    const double ff_direction_sign =
+        direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
+    curvature_ff =
+        steering_command_sign_ * steering_ratio_ * curvature_ff_gain_ *
+        ff_direction_sign * std::atan(wheelbase_ * control_nearest_point.curvature);
     steer_saturated =
         std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
@@ -1065,6 +1087,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_speed_error_pub_.publish(float_msg);
   float_msg.data = steer_command;
   debug_steer_command_pub_.publish(float_msg);
+  float_msg.data = curvature_ff;
+  debug_curvature_ff_pub_.publish(float_msg);
   float_msg.data = cte;
   debug_cte_pub_.publish(float_msg);
   float_msg.data = heading_error;
