@@ -73,12 +73,12 @@ stanley:
   # Ioniq 5 설정값(wheelbase 2.97m, min_turning_radius 5.5m)으로 계산하면 약 28.4deg다.
   # 후진에서는 lateral error 항만 signed velocity 방향에 맞게 반대로 적용한다.
   # reverse_steering_scale로 후진 lateral error 보정 강도를 별도로 조절할 수 있다.
-  k: 1.0
-  k_soft: 0.3
-  cte_gain: 1.0
-  heading_gain: 1.0
+  k: 1.8
+  k_soft: 0.2
+  cte_gain: 1.4
+  heading_gain: 1.2
   max_steer_angle_deg: 28.4
-  reverse_steering_scale: 1.0
+  reverse_steering_scale: 1.2
 
 vehicle:
   wheelbase: 2.97
@@ -89,10 +89,15 @@ vehicle:
   #             planning trajectory의 rear bumper 기준점과 맞춘다.
   rear_axle_offset: 0.82
   dynamics_pose_reference: "rear_bumper"
-  # Stanley는 타이어 조향각을 계산한다.
-  # CarMaker 입력이 steering wheel angle이면 steering_ratio를 키우거나 max_steer_command를 조정한다.
-  steering_ratio: 1.0
-  max_steer_command: 0.4951
+  # Stanley는 타이어 조향각을 계산한다. CarMaker control_signal/steerangle은
+  # teleop와 같은 steering wheel command 범위로 보고 3.5까지 허용한다.
+  steering_ratio: 7.0
+  max_steer_command: 3.5
+  # 조향 부호가 반대로 보이면 -1.0으로 바꿔서 테스트한다.
+  steering_command_sign: 1.0
+  # /planning/trajectory는 rear bumper 기준으로 publish되지만,
+  # Stanley 조향 오차는 planning 내부 기준과 같은 rear axle에서 계산한다.
+  steering_control_point: "rear_axle"
 
 debug:
   # PlotJuggler/RViz 진단용 토픽을 publish한다.

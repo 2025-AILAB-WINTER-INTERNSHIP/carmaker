@@ -132,6 +132,8 @@ private:
   bool isSegmentComplete(const PathSegment& segment,
                          const Pose2D& pose,
                          std::size_t nearest_index) const;
+  Pose2D toSteeringControlPose(const Pose2D& pose) const;
+  PathPoint toSteeringControlPoint(const PathPoint& point) const;
   double computeSteeringCommand(const Pose2D& pose,
                                 const PathPoint& reference,
                                 double speed,
@@ -150,7 +152,8 @@ private:
                              std::size_t target_index,
                              double target_speed,
                              double lookahead,
-                             int tracking_state);
+                             int tracking_state,
+                             double steer_command);
   void publishPoseDebug(const ros::Publisher& publisher,
                         double x,
                         double y,
@@ -173,12 +176,16 @@ private:
   ros::Timer control_timer_;
 
   ros::Publisher debug_current_pose_pub_;
+  ros::Publisher debug_current_control_pose_pub_;
   ros::Publisher debug_nearest_pose_pub_;
+  ros::Publisher debug_nearest_control_pose_pub_;
   ros::Publisher debug_lookahead_pose_pub_;
   ros::Publisher debug_active_path_pub_;
   ros::Publisher debug_current_speed_pub_;
   ros::Publisher debug_target_speed_pub_;
   ros::Publisher debug_speed_error_pub_;
+  ros::Publisher debug_steer_command_pub_;
+  ros::Publisher debug_steer_saturated_pub_;
   ros::Publisher debug_cte_pub_;
   ros::Publisher debug_heading_error_pub_;
   ros::Publisher debug_lookahead_pub_;
@@ -256,7 +263,9 @@ private:
   std::string dynamics_pose_reference_{"rear_bumper"};
   double steering_ratio_{1.0};
   double max_steer_command_{0.495};
+  double steering_command_sign_{1.0};
   double reverse_steering_scale_{1.0};
+  std::string steering_control_point_{"rear_axle"};
 
   ros::Time last_control_time_;
   ros::Time last_debug_path_time_;
@@ -402,6 +411,16 @@ void ControlNode::loadParameters()
   pnh_.param("vehicle/steering_ratio", steering_ratio_, 1.0);
   max_steer_command_ = max_tire_steer * steering_ratio_;
   pnh_.param("vehicle/max_steer_command", max_steer_command_, max_steer_command_);
+  pnh_.param("vehicle/steering_command_sign", steering_command_sign_, 1.0);
+  steering_command_sign_ = steering_command_sign_ < 0.0 ? -1.0 : 1.0;
+  pnh_.param<std::string>("vehicle/steering_control_point",
+                          steering_control_point_, "rear_axle");
+  if (steering_control_point_ != "rear_bumper" &&
+      steering_control_point_ != "rear_axle") {
+    ROS_WARN("Unknown vehicle/steering_control_point='%s'. Falling back to 'rear_axle'.",
+             steering_control_point_.c_str());
+    steering_control_point_ = "rear_axle";
+  }
 
   pnh_.param("debug/publish", publish_debug_, true);
   pnh_.param<std::string>("debug/topic_prefix", debug_topic_prefix_, "/control/debug");
@@ -679,7 +698,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   if (!should_track) {
     // 경로가 없거나 timeout이면 neutral + brake로 대기한다.
-    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0, 0.0, 0.0, 0);
+    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0, 0.0, 0.0, 0, 0.0);
     if (publish_stop_without_path_) {
       publishStop(0);
     }
@@ -702,7 +721,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
     // segment 끝에 도착하면 바로 다음 segment로 넘어가지 않고 먼저 충분히 감속한다.
     // 전진/후진 기어 전환을 움직이는 중에 하지 않기 위한 처리다.
     publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
-                          nearest_index, nearest_index, 0.0, 0.0, 2);
+                          nearest_index, nearest_index, 0.0, 0.0, 2, 0.0);
     advanceOrStop(active_segment, active_segment_index, current_speed);
     return;
   }
@@ -721,7 +740,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
                              std::max(current_speed, target_speed), active_segment.direction);
 
   publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
-                        nearest_index, target_index, target_speed, lookahead, 1);
+                        nearest_index, target_index, target_speed, lookahead, 1, steer_command);
   publishControl(active_segment.direction, steer_command, accel_command);
 }
 
@@ -791,24 +810,52 @@ bool ControlNode::isSegmentComplete(const PathSegment& segment,
   return near_end_index && near_end_position;
 }
 
+ControlNode::Pose2D ControlNode::toSteeringControlPose(const Pose2D& pose) const
+{
+  if (steering_control_point_ != "rear_axle") {
+    return pose;
+  }
+
+  Pose2D control_pose = pose;
+  control_pose.x += rear_axle_offset_ * std::cos(pose.yaw);
+  control_pose.y += rear_axle_offset_ * std::sin(pose.yaw);
+  return control_pose;
+}
+
+ControlNode::PathPoint ControlNode::toSteeringControlPoint(const PathPoint& point) const
+{
+  if (steering_control_point_ != "rear_axle") {
+    return point;
+  }
+
+  PathPoint control_point = point;
+  control_point.x += rear_axle_offset_ * std::cos(point.yaw);
+  control_point.y += rear_axle_offset_ * std::sin(point.yaw);
+  return control_point;
+}
+
 double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            const PathPoint& reference,
                                            double speed,
                                            int direction) const
 {
+  const Pose2D control_pose = toSteeringControlPose(pose);
+  const PathPoint control_reference = toSteeringControlPoint(reference);
+
   // cte 부호 규약:
   // 경로 yaw 기준 차량이 왼쪽에 있으면 cte가 음수가 된다.
   // CarMaker/teleop 기준 positive steer가 좌회전이므로, 왼쪽으로 벗어난 차량은 음수 조향으로
   // 오른쪽 복귀를 하게 된다.
-  const double dx = pose.x - reference.x;
-  const double dy = pose.y - reference.y;
-  const double cte = std::sin(reference.yaw) * dx - std::cos(reference.yaw) * dy;
-  const double heading_error = normalizeAngle(reference.yaw - pose.yaw);
+  const double dx = control_pose.x - control_reference.x;
+  const double dy = control_pose.y - control_reference.y;
+  const double cte = std::sin(control_reference.yaw) * dx - std::cos(control_reference.yaw) * dy;
+  const double heading_error = normalizeAngle(control_reference.yaw - control_pose.yaw);
 
   const double tire_steer =
       stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
+  const double steer_command = steering_command_sign_ * tire_steer * steering_ratio_;
 
-  return clamp(tire_steer * steering_ratio_, -max_steer_command_, max_steer_command_);
+  return clamp(steer_command, -max_steer_command_, max_steer_command_);
 }
 
 double ControlNode::selectTargetSpeed(const PathSegment& segment, std::size_t target_index) const
@@ -876,8 +923,12 @@ void ControlNode::advertiseDebugTopics()
 
   debug_current_pose_pub_ =
       nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/current_pose", 10);
+  debug_current_control_pose_pub_ =
+      nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/current_control_pose", 10);
   debug_nearest_pose_pub_ =
       nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/nearest_pose", 10);
+  debug_nearest_control_pose_pub_ =
+      nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/nearest_control_pose", 10);
   debug_lookahead_pose_pub_ =
       nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/lookahead_pose", 10);
   debug_active_path_pub_ =
@@ -889,6 +940,10 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/target_speed", 10);
   debug_speed_error_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/speed_error", 10);
+  debug_steer_command_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/steer_command", 10);
+  debug_steer_saturated_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/steer_saturated", 10);
   debug_cte_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/cross_track_error", 10);
   debug_heading_error_pub_ =
@@ -926,7 +981,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
                                         std::size_t target_index,
                                         double target_speed,
                                         double lookahead,
-                                        int tracking_state)
+                                        int tracking_state,
+                                        double steer_command)
 {
   if (!publish_debug_) {
     return;
@@ -945,6 +1001,7 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   int target_index_value = -1;
   int segment_count = 0;
   int trajectory_completed = 0;
+  int steer_saturated = 0;
 
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
@@ -956,6 +1013,9 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   }
 
   publishPoseDebug(debug_current_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
+  const Pose2D control_pose = toSteeringControlPose(pose);
+  publishPoseDebug(debug_current_control_pose_pub_,
+                   control_pose.x, control_pose.y, control_pose.yaw, stamp);
 
   if (segment && !segment->points.empty()) {
     direction = segment->direction;
@@ -965,17 +1025,24 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     target_index_value = static_cast<int>(target);
     const PathPoint& nearest_point = segment->points[nearest];
     const PathPoint& target_point = segment->points[target];
+    const PathPoint control_nearest_point = toSteeringControlPoint(nearest_point);
     distance_to_end = distance2D(pose, segment->points.back());
 
     publishPoseDebug(debug_nearest_pose_pub_,
                      nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
+    publishPoseDebug(debug_nearest_control_pose_pub_,
+                     control_nearest_point.x, control_nearest_point.y,
+                     control_nearest_point.yaw, stamp);
     publishPoseDebug(debug_lookahead_pose_pub_,
                      target_point.x, target_point.y, target_point.yaw, stamp);
 
-    const double dx = pose.x - nearest_point.x;
-    const double dy = pose.y - nearest_point.y;
-    cte = std::sin(nearest_point.yaw) * dx - std::cos(nearest_point.yaw) * dy;
-    heading_error = normalizeAngle(nearest_point.yaw - pose.yaw);
+    const double dx = control_pose.x - control_nearest_point.x;
+    const double dy = control_pose.y - control_nearest_point.y;
+    cte = std::sin(control_nearest_point.yaw) * dx -
+          std::cos(control_nearest_point.yaw) * dy;
+    heading_error = normalizeAngle(control_nearest_point.yaw - control_pose.yaw);
+    steer_saturated =
+        std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
     const bool should_publish_path =
         last_debug_path_time_.isZero() ||
@@ -996,6 +1063,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_target_speed_pub_.publish(float_msg);
   float_msg.data = target_speed - current_speed;
   debug_speed_error_pub_.publish(float_msg);
+  float_msg.data = steer_command;
+  debug_steer_command_pub_.publish(float_msg);
   float_msg.data = cte;
   debug_cte_pub_.publish(float_msg);
   float_msg.data = heading_error;
@@ -1018,6 +1087,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_target_index_pub_.publish(int_msg);
   int_msg.data = trajectory_completed;
   debug_trajectory_completed_pub_.publish(int_msg);
+  int_msg.data = steer_saturated;
+  debug_steer_saturated_pub_.publish(int_msg);
   int_msg.data = direction;
   debug_direction_pub_.publish(int_msg);
   int_msg.data = tracking_state;
