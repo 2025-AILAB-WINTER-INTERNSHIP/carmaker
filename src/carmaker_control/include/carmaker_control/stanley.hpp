@@ -15,6 +15,8 @@ public:
   void configure(double k, double k_soft, double max_steer_angle,
                  double cte_gain, double heading_gain);
   double calculate(double cte, double heading_error, double velocity) const;
+  double calculate(double cte, double heading_error, double velocity,
+                   int direction, double reverse_cte_scale) const;
 
 private:
   double k_{1.0};

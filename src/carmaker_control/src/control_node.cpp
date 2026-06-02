@@ -805,12 +805,8 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
   const double cte = std::sin(reference.yaw) * dx - std::cos(reference.yaw) * dy;
   const double heading_error = normalizeAngle(reference.yaw - pose.yaw);
 
-  double tire_steer = stanley_.calculate(cte, heading_error, speed);
-  if (direction < 0) {
-    // 후진은 같은 조향각이 yaw를 반대 방향으로 변화시키므로 Stanley 결과의 부호를 뒤집는다.
-    // 실제 차량/CarMaker 모델에서 후진 조향 반응이 과하거나 부족하면 reverse_steering_scale로 튜닝한다.
-    tire_steer = -reverse_steering_scale_ * tire_steer;
-  }
+  const double tire_steer =
+      stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
 
   return clamp(tire_steer * steering_ratio_, -max_steer_command_, max_steer_command_);
 }

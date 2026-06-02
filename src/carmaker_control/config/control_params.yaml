@@ -29,15 +29,16 @@ control:
 
   # segment 완료 판정이 나기 전까지 target velocity가 0이어도 멈춰 서지 않게 하는 최소 추종 속도.
   # 완료 판정 후에는 별도 stop/gear switch 로직이 brake와 다음 gear 전환을 처리한다.
-  min_tracking_speed: 0.2
-  max_target_speed: 2.0
+  min_tracking_speed: 0.25
+  # Parking task speed cap. Planning profiler도 같은 1.0 m/s 상한을 사용한다.
+  max_target_speed: 1.0
 
   # nearest point 기준으로 일정 거리 앞의 point에서 target speed를 읽는다.
   # 실제 lookahead = lookahead_distance + lookahead_time * current_speed 이며 min/max로 제한된다.
-  lookahead_distance: 0.8
-  lookahead_time: 0.4
-  min_lookahead_distance: 0.4
-  max_lookahead_distance: 3.0
+  lookahead_distance: 0.6
+  lookahead_time: 0.3
+  min_lookahead_distance: 0.3
+  max_lookahead_distance: 1.6
 
   # nearest index가 경로 위에서 크게 튀지 않도록 이전 index 주변만 검색한다.
   nearest_search_back: 20
@@ -51,9 +52,9 @@ control:
   gear_switch_speed: 0.08
 
   # PID 출력 가속도 명령을 gas/brake/accel 필드로 변환할 때 쓰는 한계값.
-  max_accel: 2.0
-  max_decel: 2.5
-  max_gas: 0.7
+  max_accel: 1.0
+  max_decel: 1.5
+  max_gas: 0.45
   max_brake: 1.0
   stop_brake: 0.4
 
@@ -70,8 +71,8 @@ pid:
 stanley:
   # Stanley 조향 파라미터. max_steer_angle_deg는 타이어 조향각 기준이다.
   # Ioniq 5 설정값(wheelbase 2.97m, min_turning_radius 5.5m)으로 계산하면 약 28.4deg다.
-  # 후진에서는 조향 효과가 반대로 나타나므로 내부에서 부호를 뒤집고,
-  # reverse_steering_scale로 후진 조향 민감도를 별도로 조절할 수 있다.
+  # 후진에서는 lateral error 항만 signed velocity 방향에 맞게 반대로 적용한다.
+  # reverse_steering_scale로 후진 lateral error 보정 강도를 별도로 조절할 수 있다.
   k: 1.0
   k_soft: 0.3
   cte_gain: 1.0
@@ -87,7 +88,7 @@ vehicle:
   # rear_axle: Car_x/y가 rear axle center이면 rear_axle_offset만큼 뒤로 변환해서
   #             planning trajectory의 rear bumper 기준점과 맞춘다.
   rear_axle_offset: 0.82
-  dynamics_pose_reference: "rear_axle"
+  dynamics_pose_reference: "rear_bumper"
   # Stanley는 타이어 조향각을 계산한다.
   # CarMaker 입력이 steering wheel angle이면 steering_ratio를 키우거나 max_steer_command를 조정한다.
   steering_ratio: 1.0

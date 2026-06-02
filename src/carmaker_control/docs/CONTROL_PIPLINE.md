@@ -334,6 +334,8 @@ raw Hybrid A* path
 
 특히 velocity profiling은 전진/후진 전환 지점에서 속도를 0으로 만든다. 따라서 planning 결과는 control에게 "여기서 멈춘 뒤 기어를 바꿔야 한다"는 정보를 속도 프로파일로 전달한다.
 
+현재 주차 태스크 기본 profile은 `src/carmaker_planning/config/global_planner_params.yaml`에서 `global_post_processing/profiler/max_vel: 1.0`으로 둔다. 이는 약 `3.6 km/h`이며, 주차 경로를 너무 공격적으로 타지 않으면서도 과도하게 느린 creep 주행만 하지 않기 위한 기준값이다.
+
 마지막으로 planning은 `/planning/trajectory`를 publish할 때 direction을 별도 필드로 보내지 않고, `longitudinal_velocity` 부호에 실어 보낸다.
 
 ```cpp
@@ -581,14 +583,14 @@ steer = heading_gain * heading_error + cte_term
 
 ### 7. 후진 segment 처리
 
-후진 segment에서는 조향 반응이 전진과 반대로 나타난다. 그래서 후진 구간에서는 Stanley 결과를 그대로 쓰지 않고, 후진에 맞게 추가 보정한다.
+후진 segment에서는 조향 반응이 전진과 반대로 나타난다. 그래서 후진 구간에서는 Stanley의 lateral error 항을 후진 방향에 맞게 보정한다.
 
 ```text
-forward: steer = stanley(...)
-reverse: steer = -reverse_steering_scale * stanley(...)
+forward: steer = heading_error_term + lateral_error_term
+reverse: steer = heading_error_term - reverse_steering_scale * lateral_error_term
 ```
 
-이 처리를 하지 않으면 후진 시 조향 방향이 반대로 작용해서 경로에서 더 멀어질 수 있다. 따라서 후진 경로 추종 안정성을 위해 별도의 부호 반전과 scale 조정이 필요하다.
+heading error 항까지 통째로 뒤집으면 후진 segment가 맞게 선택되어도 전진 trajectory를 따라가는 것처럼 보일 수 있다. 따라서 trajectory pose yaw는 차량 자세 기준으로 유지하고, lateral error 항만 후진 주행 방향에 맞게 반대로 적용한다.
 
 이후 `steering_ratio`와 `max_steer_command`로 CarMaker 입력 범위에 맞춘다.
 
@@ -803,10 +805,24 @@ vehicle:
 
 `/planning/trajectory`는 rear bumper 기준점으로 publish된다. 그래서 GT mode에서 `/control/debug/current_pose`도 같은 기준점이어야 한다.
 
+GT mode에서는 planning과 control이 `DynamicsInfo.Car_x/y`의 기준점을 같은 방식으로 해석해야 한다. `src/carmaker_planning/config/global_planner_params.yaml`의 `vehicle/dynamics_pose_reference`와 `src/carmaker_control/config/control_params.yaml`의 `vehicle/dynamics_pose_reference`를 같은 값으로 맞춘다.
+
 | 값 | 의미 | 언제 사용 |
 | --- | --- | --- |
 | `rear_bumper` | `DynamicsInfo.Car_x/y`를 그대로 current pose로 사용 | CarMaker `Car_x/y`가 Fr1A/rear bumper center일 때 |
 | `rear_axle` | `Car_x/y`에서 `rear_axle_offset`만큼 뒤로 빼서 current pose로 사용 | CarMaker `Car_x/y`가 rear axle center일 때 |
+
+예를 들어 `Car_x/y`가 rear axle 기준이면:
+
+```yaml
+# src/carmaker_planning/config/global_planner_params.yaml
+vehicle:
+  dynamics_pose_reference: "rear_axle"
+
+# src/carmaker_control/config/control_params.yaml
+vehicle:
+  dynamics_pose_reference: "rear_axle"
+```
 
 RViz에서 `/control/debug/current_pose`가 `/control/debug/nearest_pose`나 `/control/debug/active_segment_path`보다 차량 진행 방향으로 약 `0.82m` 앞에 보이면 `dynamics_pose_reference`를 `"rear_axle"`로 바꿔서 다시 실행한다.
 
@@ -838,16 +854,19 @@ control:
 
 ```yaml
 control:
-  min_tracking_speed: 0.2
-  lookahead_distance: 0.8
-  lookahead_time: 0.4
-  min_lookahead_distance: 0.4
-  max_lookahead_distance: 3.0
+  min_tracking_speed: 0.25
+  max_target_speed: 1.0
+  lookahead_distance: 0.6
+  lookahead_time: 0.3
+  min_lookahead_distance: 0.3
+  max_lookahead_distance: 1.6
 ```
 
 lookahead가 너무 짧으면 조향과 속도 목표가 자주 흔들릴 수 있고, 너무 길면 코너나 정지점 반영이 늦어질 수 있다.
 
 `min_tracking_speed`는 segment 완료 판정이 나기 전까지 적용되는 최소 속도 목표다. `/control/debug/target_speed`가 0이고 `/control/debug/tracking_state`가 1이면 차량이 끝점에 도착하기 전에 멈출 수 있으므로 이 값이 필요하다. 완료 판정 후에는 `tracking_state = 2`가 되고 stop/gear switch 로직이 brake와 다음 gear 전환을 처리한다.
+
+주차 태스크에서는 `max_target_speed: 1.0`을 기본 상한으로 둔다. 너무 느리게 만들면 기어 전환점 근처에서 답답해지고 제어 응답이 늦어질 수 있으므로, 최소 추종 속도는 `0.25 m/s`, 일반 목표 상한은 `1.0 m/s`로 시작한다.
 
 ### Segment 완료와 기어 전환
 
@@ -883,9 +902,9 @@ pid:
 
 ```yaml
 control:
-  max_accel: 2.0
-  max_decel: 2.5
-  max_gas: 0.7
+  max_accel: 1.0
+  max_decel: 1.5
+  max_gas: 0.45
   max_brake: 1.0
   stop_brake: 0.4
 ```
@@ -930,6 +949,8 @@ atan(2.97 / 5.5) = 28.4 deg
 | 저속에서 조향이 튐 | `k_soft` 증가 |
 | 후진 조향이 과함 | `reverse_steering_scale` 감소 |
 | 후진 조향이 부족함 | `reverse_steering_scale` 증가 |
+
+후진 조향은 전진 Stanley 결과 전체를 단순히 뒤집지 않는다. trajectory pose yaw는 차량 자세 기준으로 유지하고, lateral error 항만 후진 주행 방향에 맞게 반대로 적용한다. 따라서 `reverse_steering_scale`은 후진 lateral error 보정 강도를 조절하는 값으로 보면 된다.
 
 ### CarMaker 조향 입력 범위
 
@@ -1095,4 +1116,4 @@ rostopic echo /carmaker/control_signal
 - `stop_brake`가 큼
 - planning velocity profile의 목표 속도가 control 제한보다 공격적임
 
-처음에는 낮은 `max_target_speed`와 작은 `max_gas`로 시작한 뒤, trajectory 추종이 안정적인 것을 확인하고 속도를 올리는 편이 안전하다.
+주차 태스크에서는 `global_post_processing/profiler/max_vel`과 control의 `max_target_speed`를 둘 다 `1.0 m/s`로 맞추고 시작한다. 추종이 안정적인데 시간이 너무 오래 걸리면 두 값을 함께 조금씩 올리고, 경로 이탈이나 조향 포화가 커지면 먼저 `lookahead_distance`와 조향 gain을 본다.
