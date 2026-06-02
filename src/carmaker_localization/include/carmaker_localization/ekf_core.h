@@ -12,11 +12,16 @@ namespace carmaker_localization {
  * @brief 11-Dimensional Full State EKF for Vehicle Localization
  * State Vector [11x1]: [x, y, vx, vy, ax, ay, yaw, yaw_rate, b_ax, b_ay, b_yaw_rate]
  */
+/**
+ * @brief EKF 상태 변수별 기준 좌표 프레임 정의
+ * - 위치(X, Y), 요각(YAW), 선속도(VX, VY)는 차량 기준점인 Fr1A(후방 범퍼) 기준
+ * - 가속도 상태(AX, AY)는 센서 보정(Lever-arm) 및 자전거 기구학 예측식과의 정합성 (Rigid Body의 각가속도 dwz 항 배제를 통한 수치적 안정성 확보)을 위해 후륜 축(Rear Axle) 중심 기준
+ */
 enum StateIdx {
-    X = 0, Y,          // Position (Global Frame)
-    VX, VY,            // Velocity (Vehicle Frame)
-    AX, AY,            // Acceleration (Vehicle Frame)
-    YAW, YAW_RATE,     // Heading & Turn Rate (Global/Vehicle Frame)
+    X = 0, Y,          // Position (Global Frame) - Fr1A(후방 범퍼) 기준
+    VX, VY,            // Velocity (Vehicle Frame) - Fr1A(후방 범퍼) 기준 (vy = -yaw_rate * offset)
+    AX, AY,            // Acceleration (Vehicle Frame) - 후륜 축(Rear Axle) 기준 (ay = vx * yaw_rate)
+    YAW, YAW_RATE,     // Heading & Turn Rate (강체 전체 공통 - 모든 위치에서 동일)
     B_AX, B_AY,        // IMU Acceleration Bias
     B_YAW_RATE,        // IMU Gyro Bias
     STATE_DIM

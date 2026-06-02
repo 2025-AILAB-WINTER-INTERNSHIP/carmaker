@@ -897,9 +897,8 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         geometry_msgs::PoseWithCovarianceStamped correction_msg;
         correction_msg.header.stamp = ros::Time(current_time);
         correction_msg.header.frame_id = global_frame_;
-        // Shift back to vehicle origin (Fr1) for visualization
-        correction_msg.pose.pose.position.x = z(0) - rear_axle_x_ * std::cos(z(2));
-        correction_msg.pose.pose.position.y = z(1) - rear_axle_x_ * std::sin(z(2));
+        correction_msg.pose.pose.position.x = z(0);
+        correction_msg.pose.pose.position.y = z(1);
         tf2::Quaternion q;
         q.setRPY(0, 0, z(2));
         correction_msg.pose.pose.orientation = tf2::toMsg(q);
@@ -945,8 +944,8 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     const double cos_yaw = std::cos(yaw);
     const double sin_yaw = std::sin(yaw);
 
-    double pub_x = x(X) - rear_axle_x_ * cos_yaw;
-    double pub_y = x(Y) - rear_axle_x_ * sin_yaw;
+    double pub_x = x(X);
+    double pub_y = x(Y);
 
     geometry_msgs::PoseWithCovarianceStamped pose_msg;
     pose_msg.header.stamp = stamp;
@@ -959,27 +958,15 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     q.setRPY(0, 0, x(YAW));
     pose_msg.pose.pose.orientation = tf2::toMsg(q);
 
-    double p_xx = P(X, X), p_yy = P(Y, Y), p_xy = P(X, Y);
-    double p_x_yaw = P(X, YAW), p_y_yaw = P(Y, YAW), p_yaw_yaw = P(YAW, YAW);
-    double d = rear_axle_x_;
-    double s = sin_yaw;
-    double c = cos_yaw;
-
-    double pub_p_xx = p_xx + 2.0 * d * s * p_x_yaw + d * d * s * s * p_yaw_yaw;
-    double pub_p_yy = p_yy - 2.0 * d * c * p_y_yaw + d * d * c * c * p_yaw_yaw;
-    double pub_p_xy = p_xy + d * s * p_y_yaw - d * c * p_x_yaw - d * d * s * c * p_yaw_yaw;
-    double pub_p_x_yaw = p_x_yaw + d * s * p_yaw_yaw;
-    double pub_p_y_yaw = p_y_yaw - d * c * p_yaw_yaw;
-
-    pose_msg.pose.covariance[0]  = pub_p_xx;
-    pose_msg.pose.covariance[1]  = pub_p_xy;
-    pose_msg.pose.covariance[5]  = pub_p_x_yaw;
-    pose_msg.pose.covariance[6]  = pub_p_xy;
-    pose_msg.pose.covariance[7]  = pub_p_yy;
-    pose_msg.pose.covariance[11] = pub_p_y_yaw;
-    pose_msg.pose.covariance[30] = pub_p_x_yaw;
-    pose_msg.pose.covariance[31] = pub_p_y_yaw;
-    pose_msg.pose.covariance[35] = p_yaw_yaw;
+    pose_msg.pose.covariance[0]  = P(X, X);
+    pose_msg.pose.covariance[1]  = P(X, Y);
+    pose_msg.pose.covariance[5]  = P(X, YAW);
+    pose_msg.pose.covariance[6]  = P(X, Y);
+    pose_msg.pose.covariance[7]  = P(Y, Y);
+    pose_msg.pose.covariance[11] = P(Y, YAW);
+    pose_msg.pose.covariance[30] = P(X, YAW);
+    pose_msg.pose.covariance[31] = P(Y, YAW);
+    pose_msg.pose.covariance[35] = P(YAW, YAW);
 
     pose_pub_.publish(pose_msg);
     estimation_data_pub_.publish(pose_msg);
@@ -990,7 +977,7 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     odom_msg.child_frame_id = prediction_frame_;
     odom_msg.pose = pose_msg.pose;
     odom_msg.twist.twist.linear.x = x(VX);
-    odom_msg.twist.twist.linear.y = -x(YAW_RATE) * rear_axle_x_; // Transform lateral velocity to vehicle origin
+    odom_msg.twist.twist.linear.y = x(VY);
     odom_msg.twist.twist.linear.z = 0.0;
     odom_msg.twist.twist.angular.z = x(YAW_RATE);
     odom_pub_.publish(odom_msg);
