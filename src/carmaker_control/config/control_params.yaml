@@ -21,7 +21,8 @@ control:
   odom_timeout: 0.5
   # dynamics GT 입력이 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
   dynamics_timeout: 0.5
-  trajectory_timeout: 30.0
+  # Parking trajectory can take longer at 0.7 m/s, so keep the latched plan valid long enough.
+  trajectory_timeout: 300.0
 
   # /planning/trajectory의 longitudinal_velocity 부호로 전진/후진 segment를 나눈다.
   # 이 값보다 작은 속도는 정지점으로 보고 이전 direction에 붙인다.

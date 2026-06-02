@@ -854,14 +854,14 @@ RViz에서 `/control/debug/current_pose`가 `/control/debug/nearest_pose`나 `/c
 control:
   odom_timeout: 0.5
   dynamics_timeout: 0.5
-  trajectory_timeout: 30.0
+  trajectory_timeout: 300.0
 ```
 
 `odom_timeout` 안에 localization odometry가 갱신되지 않으면 정지 명령을 낸다.
 
 `dynamics_timeout` 안에 CarMaker GT DynamicsInfo가 갱신되지 않으면 정지 명령을 낸다.
 
-`trajectory_timeout` 안에 새 planning trajectory가 없으면 경로가 오래되었다고 보고 정지한다.
+`trajectory_timeout` 안에 새 planning trajectory가 없으면 경로가 오래되었다고 보고 정지한다. 저속 주차 trajectory는 30초 이상 걸릴 수 있으므로 기본값은 300초로 둔다.
 
 ### 전진/후진 segment 판단
 
