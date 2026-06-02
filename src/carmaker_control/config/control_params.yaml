@@ -2,6 +2,7 @@ topics:
   subscribe:
     trajectory: "/planning/trajectory"
     odom: "/localization/odom"
+    dynamics: "/carmaker/dynamic_info"
   publish:
     control: "/carmaker/control_signal"
 
@@ -11,8 +12,15 @@ setting:
 
 control:
   rate: 30.0
+  # 현재 차량 상태 입력 선택.
+  # odom: localization이 publish하는 /localization/odom 사용
+  # dynamics: CarMaker GT /carmaker/dynamic_info 사용
+  state_source: "odom"
+
   # localization odometry가 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
   odom_timeout: 0.5
+  # dynamics GT 입력이 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
+  dynamics_timeout: 0.5
   trajectory_timeout: 30.0
 
   # /planning/trajectory의 longitudinal_velocity 부호로 전진/후진 segment를 나눈다.

@@ -6,7 +6,8 @@
 
 - ROS1 catkin workspace에서 실행한다고 가정한다.
 - CarMaker bridge는 `/carmaker/dynamic_info`를 publish하고, `/carmaker/control_signal`을 받아 차량에 적용한다고 가정한다.
-- 실제 localization 기반 파이프라인에서는 planning 시작 pose를 `/localization/odom` 또는 localization TF 계열에서 얻는 구성을 기준으로 설명한다.
+- 실제 localization 기반 파이프라인에서는 control 현재 상태 입력으로 `/localization/odom`을 쓰는 구성을 기준으로 설명한다.
+- localization 없이 planning/control 성능만 확인할 때는 control 현재 상태 입력을 `/carmaker/dynamic_info` GT로 바꿀 수 있다.
 - RViz 단독 테스트처럼 `/planning/start` 수동 pose를 쓰는 경우는 별도 테스트 모드로 본다.
 - 이 문서는 `carmaker_control` 중심 설명이다. segmentation, localization, planning 내부 알고리즘은 control과 연결되는 지점만 다룬다.
 
@@ -33,7 +34,7 @@ topic 기준으로 보면 다음 구조다.
         -> carmaker_planning
         -> /planning/trajectory
 
-/planning/trajectory + /localization/odom
+/planning/trajectory + /localization/odom 또는 /carmaker/dynamic_info
         -> carmaker_control
         -> /carmaker/control_signal
         -> CarMaker 차량 시뮬레이션
@@ -41,11 +42,18 @@ topic 기준으로 보면 다음 구조다.
 
 즉 localization은 현재 차량 상태를 추정하고, planning은 차량이 따라갈 trajectory를 생성하며, control은 그 trajectory를 실제 차량 명령으로 변환하는 마지막 단계다.
 
-`carmaker_control`이 직접 사용하는 입력은 두 개뿐이다.
+`carmaker_control`이 직접 사용하는 입력은 기본적으로 두 개다.
 
 ```text
 /planning/trajectory   carmaker_msgs/TrajectoryPath
 /localization/odom     nav_msgs/Odometry
+```
+
+localization 없이 GT로 테스트할 때는 현재 상태 입력만 다음으로 바꾼다.
+
+```text
+/planning/trajectory   carmaker_msgs/TrajectoryPath
+/carmaker/dynamic_info carmaker_msgs/DynamicsInfo
 ```
 
 최종 출력은 하나다.
@@ -59,12 +67,12 @@ control 기준에서 각 단계의 역할은 다음과 같다.
 | 단계 | 담당 패키지 | control과의 관계 |
 | --- | --- | --- |
 | segmentation | `carmaker_image`, `segmentation` 계열 | control이 직접 보지 않음 |
-| localization | `carmaker_localization` | `/localization/odom`으로 현재 pose, velocity 제공 |
+| localization | `carmaker_localization` | 기본 모드에서 `/localization/odom`으로 현재 pose, velocity 제공 |
 | planning | `carmaker_planning` | `/planning/trajectory`로 추종할 경로 제공 |
-| control | `carmaker_control` | PID 속도 제어, Stanley 조향 제어, 기어 전환 처리 |
+| control | `carmaker_control` | PID 속도 제어, Stanley 조향 제어, 기어 전환 처리. 테스트 모드에서는 `/carmaker/dynamic_info` GT 사용 가능 |
 | vehicle interface | CarMaker bridge | `/carmaker/control_signal`을 받아 차량에 적용 |
 
-중요한 점은 control이 segmentation 결과나 CarMaker GT pose를 직접 보지 않는다는 것이다. 현재 차량 상태는 localization이 만든 `/localization/odom`만 신뢰하고, 경로는 planning이 만든 `/planning/trajectory`만 사용한다.
+중요한 점은 control이 segmentation 결과를 직접 보지 않는다는 것이다. 현재 차량 상태는 기본적으로 localization이 만든 `/localization/odom`을 사용하고, localization 없는 성능 확인에서는 CarMaker GT인 `/carmaker/dynamic_info`를 선택할 수 있다. 경로는 두 모드 모두 planning이 만든 `/planning/trajectory`를 사용한다.
 
 ## Controller 노드의 역할
 
@@ -73,6 +81,7 @@ control 기준에서 각 단계의 역할은 다음과 같다.
 | 입력 또는 출력 | topic | control에서 사용하는 정보 |
 | --- | --- | --- |
 | Localization 입력 | `/localization/odom` | 현재 차량 위치, 자세, 속도 |
+| GT 테스트 입력 | `/carmaker/dynamic_info` | CarMaker GT 위치, yaw, 속도 |
 | Planning 입력 | `/planning/trajectory` | 따라갈 경로, 목표 속도, 곡률, 시간 정보 |
 | Control 출력 | `/carmaker/control_signal` | 조향, gas, brake, accel, gear 명령 |
 
@@ -203,6 +212,22 @@ rostopic hz /carmaker/control_signal
 rostopic echo /carmaker/control_signal
 ```
 
+기본값은 localization odometry를 현재 상태 입력으로 쓰는 모드다.
+
+```yaml
+control:
+  state_source: "odom"
+```
+
+localization이 들어오지 않은 상태에서 planning/control 성능만 확인하려면 `src/carmaker_control/config/control_params.yaml`에서 다음처럼 바꾼다.
+
+```yaml
+control:
+  state_source: "dynamics"
+```
+
+이 모드에서는 control이 `/localization/odom` 대신 `/carmaker/dynamic_info`를 구독한다.
+
 planning의 trajectory publisher는 latched publisher이므로, control node를 planning 이후에 켜도 마지막으로 publish된 trajectory를 받을 수 있다. 다만 오래된 경로를 계속 추종하지 않도록 control에는 `trajectory_timeout` 안전장치가 있다.
 
 ### 전체 실행 순서 요약
@@ -239,7 +264,7 @@ planning의 trajectory publisher는 latched publisher이므로, control node를 
 
 ```text
 subscribe: /planning/trajectory
-subscribe: /localization/odom
+subscribe: /localization/odom 또는 /carmaker/dynamic_info
 publish:   /carmaker/control_signal
 timer:     controlTimerCallback(), 기본 30 Hz
 ```
@@ -255,6 +280,10 @@ trajectoryCallback()
 odomCallback()
   -> 최신 odom 저장
   -> odom 수신 시각 갱신
+
+dynamicsCallback()
+  -> 최신 DynamicsInfo GT 저장
+  -> GT 수신 시각 갱신
 
 controlTimerCallback()
   -> 30 Hz 주기로 실제 제어 계산
@@ -352,6 +381,17 @@ float32 accel
 int32 gear
 ```
 
+### `carmaker_msgs/DynamicsInfo` 중 control GT mode에서 쓰는 필드
+
+```text
+float64 Car_x
+float64 Car_y
+float64 Car_Yaw
+float64 Car_vx
+```
+
+`Car_x`, `Car_y`, `Car_Yaw`는 GT pose로 사용하고, `Car_vx`는 signed longitudinal speed로 사용한다.
+
 ## Control 내부 처리 순서
 
 control loop는 다음 순서로 동작한다.
@@ -419,7 +459,7 @@ control이 전체 trajectory에서 바로 nearest point를 찾지 않고 현재 
 
 ### 2. 현재 상태 수신
 
-control은 `/localization/odom`을 현재 상태의 단일 출처로 사용한다.
+control은 `control/state_source` 값에 따라 현재 상태 입력을 선택한다. 기본값은 `/localization/odom`이다.
 
 ```text
 pose.x = odom.pose.pose.position.x
@@ -428,9 +468,18 @@ pose.yaw = odom.pose.pose.orientation
 speed = odom.twist.twist.linear.x
 ```
 
+localization 없이 GT로 테스트할 때는 `/carmaker/dynamic_info`에서 다음 값을 사용한다.
+
+```text
+pose.x = dynamics.Car_x
+pose.y = dynamics.Car_y
+pose.yaw = dynamics.Car_Yaw
+speed = dynamics.Car_vx
+```
+
 이 정보가 있어야 planning이 만든 trajectory 중 현재 차량과 가장 가까운 지점을 찾을 수 있고, 차량이 경로에서 얼마나 벗어났는지도 계산할 수 있다.
 
-GT pose, `/carmaker/dynamic_info`, TF lookup은 control에서 직접 사용하지 않는다. 이 덕분에 control은 localization 이후 단계로만 동작하며, 앞단 추정 방식이 바뀌어도 `/localization/odom` 인터페이스만 유지하면 된다.
+정식 localization 기반 폐루프에서는 `/localization/odom`을 쓰는 것이 맞다. `/carmaker/dynamic_info` GT 모드는 localization이 아직 없거나 불안정할 때 planning/control 자체의 성능을 분리해서 확인하기 위한 테스트 모드다.
 
 ### 3. Nearest point 검색
 
@@ -635,19 +684,39 @@ topics:
   subscribe:
     trajectory: "/planning/trajectory"
     odom: "/localization/odom"
+    dynamics: "/carmaker/dynamic_info"
   publish:
     control: "/carmaker/control_signal"
 ```
+
+### 현재 상태 입력 선택
+
+```yaml
+control:
+  state_source: "odom"
+```
+
+사용 가능한 값:
+
+| 값 | 입력 토픽 | 용도 |
+| --- | --- | --- |
+| `odom` | `/localization/odom` | 실제 localization 기반 control |
+| `dynamics` | `/carmaker/dynamic_info` | localization 없이 GT로 planning/control 성능 확인 |
+
+`gt`는 `dynamics`, `localization`은 `odom`의 alias로 처리된다.
 
 ### 안전 timeout
 
 ```yaml
 control:
   odom_timeout: 0.5
+  dynamics_timeout: 0.5
   trajectory_timeout: 30.0
 ```
 
 `odom_timeout` 안에 localization odometry가 갱신되지 않으면 정지 명령을 낸다.
+
+`dynamics_timeout` 안에 CarMaker GT DynamicsInfo가 갱신되지 않으면 정지 명령을 낸다.
 
 `trajectory_timeout` 안에 새 planning trajectory가 없으면 경로가 오래되었다고 보고 정지한다.
 
@@ -782,6 +851,22 @@ rostopic echo /localization/odom
 - `twist.twist.linear.x`가 실제 속도와 비슷한지
 - yaw가 차량 진행 방향과 일관되는지
 
+### GT DynamicsInfo 확인
+
+GT mode를 쓸 때 확인한다.
+
+```bash
+rostopic hz /carmaker/dynamic_info
+rostopic echo /carmaker/dynamic_info
+```
+
+확인할 것:
+
+- `Car_x`, `Car_y`가 차량 위치와 맞는지
+- `Car_Yaw`가 radian 기준 yaw로 들어오는지
+- `Car_vx`가 차량 전후방 속도와 맞는지
+- 후진 시 `Car_vx` 부호가 실제 후진 방향과 일관되는지
+
 ### planning 확인
 
 ```bash
@@ -841,6 +926,7 @@ rostopic echo /carmaker/control_signal
 가능한 원인:
 
 - localization odometry timeout
+- GT mode에서 DynamicsInfo timeout
 - trajectory timeout
 - trajectory points가 비어 있음
 - 현재 차량이 segment 끝으로 판정되어 정지 중

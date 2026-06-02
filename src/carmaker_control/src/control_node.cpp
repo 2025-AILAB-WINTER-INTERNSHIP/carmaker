@@ -12,6 +12,7 @@
 #include <ros/ros.h>
 
 #include <carmaker_msgs/Control_Signal.h>
+#include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/TrajectoryPath.h>
 #include <carmaker_msgs/TrajectoryPoint.h>
 
@@ -65,11 +66,11 @@ double clamp(double value, double min_value, double max_value)
 }
 }  // namespace
 
-// /planning/trajectory와 /localization/odom을 받아 /carmaker/control_signal을 내보내는 제어 노드.
+// /planning/trajectory와 현재 차량 상태를 받아 /carmaker/control_signal을 내보내는 제어 노드.
 //
 // 실제 파이프라인은 segmentation -> localization -> planning -> control 순서다.
-// 따라서 control은 CarMaker GT pose나 별도 TF lookup을 다시 보지 않고,
-// localization이 publish한 Odometry를 현재 상태의 단일 출처로 사용한다.
+// 기본 current state source는 localization이 publish한 Odometry이며,
+// localization 없이 planning/control 성능만 확인할 때는 CarMaker DynamicsInfo GT를 선택할 수 있다.
 class ControlNode {
 public:
   ControlNode();
@@ -101,6 +102,7 @@ private:
   void loadParameters();
   void trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr& msg);
   void odomCallback(const nav_msgs::OdometryConstPtr& msg);
+  void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
   void controlTimerCallback(const ros::TimerEvent& event);
 
   std::vector<PathSegment> splitTrajectory(const carmaker_msgs::TrajectoryPath& msg) const;
@@ -136,6 +138,7 @@ private:
 
   ros::Subscriber trajectory_sub_;
   ros::Subscriber odom_sub_;
+  ros::Subscriber dynamics_sub_;
   ros::Publisher control_pub_;
   ros::Timer control_timer_;
 
@@ -143,6 +146,11 @@ private:
   nav_msgs::Odometry latest_odom_;
   ros::Time last_odom_time_;
   bool odom_received_{false};
+
+  mutable std::mutex dynamics_mutex_;
+  carmaker_msgs::DynamicsInfo latest_dynamics_;
+  ros::Time last_dynamics_time_;
+  bool dynamics_received_{false};
 
   mutable std::mutex trajectory_mutex_;
   std::vector<PathSegment> segments_;
@@ -157,11 +165,14 @@ private:
 
   std::string trajectory_topic_;
   std::string odom_topic_;
+  std::string dynamics_topic_;
   std::string control_topic_;
+  std::string state_source_{"odom"};
 
   bool publish_stop_without_path_{true};
   double control_rate_{30.0};
   double odom_timeout_{0.5};
+  double dynamics_timeout_{0.5};
   double trajectory_timeout_{5.0};
 
   double direction_velocity_epsilon_{0.02};
@@ -201,9 +212,13 @@ ControlNode::ControlNode()
 {
   loadParameters();
 
-  // planning 결과와 localization 결과를 받고 최종 CarMaker 제어 명령을 publish한다.
+  // planning 결과와 현재 차량 상태를 받고 최종 CarMaker 제어 명령을 publish한다.
   trajectory_sub_ = nh_.subscribe(trajectory_topic_, 1, &ControlNode::trajectoryCallback, this);
-  odom_sub_ = nh_.subscribe(odom_topic_, 30, &ControlNode::odomCallback, this);
+  if (state_source_ == "dynamics") {
+    dynamics_sub_ = nh_.subscribe(dynamics_topic_, 30, &ControlNode::dynamicsCallback, this);
+  } else {
+    odom_sub_ = nh_.subscribe(odom_topic_, 30, &ControlNode::odomCallback, this);
+  }
   control_pub_ = nh_.advertise<carmaker_msgs::Control_Signal>(control_topic_, 10);
 
   // 제어 루프는 trajectory callback과 독립적으로 일정 주기로 돈다.
@@ -211,23 +226,39 @@ ControlNode::ControlNode()
   control_timer_ = nh_.createTimer(ros::Duration(1.0 / std::max(1.0, control_rate_)),
                                    &ControlNode::controlTimerCallback, this);
 
-  ROS_INFO("carmaker_control_node ready. trajectory=%s odom=%s control=%s",
-           trajectory_topic_.c_str(), odom_topic_.c_str(), control_topic_.c_str());
+  const std::string state_topic = state_source_ == "dynamics" ? dynamics_topic_ : odom_topic_;
+  ROS_INFO("carmaker_control_node ready. trajectory=%s state_source=%s state_topic=%s control=%s",
+           trajectory_topic_.c_str(), state_source_.c_str(),
+           state_topic.c_str(), control_topic_.c_str());
 }
 
 void ControlNode::loadParameters()
 {
-  // control은 localization 이후 단계이므로 현재 pose/speed는 /localization/odom에서 받는다.
+  // 기본 current state source는 localization odometry다.
+  // localization 없이 planning/control만 확인할 때 control/state_source=dynamics로 두면
+  // /carmaker/dynamic_info의 GT pose/speed를 직접 사용한다.
   pnh_.param<std::string>("topics/subscribe/trajectory", trajectory_topic_, "/planning/trajectory");
   pnh_.param<std::string>("topics/subscribe/odom", odom_topic_, "/localization/odom");
+  pnh_.param<std::string>("topics/subscribe/dynamics", dynamics_topic_, "/carmaker/dynamic_info");
   pnh_.param<std::string>("topics/publish/control", control_topic_, "/carmaker/control_signal");
 
   pnh_.param("setting/publish_stop_without_path", publish_stop_without_path_, true);
+  pnh_.param<std::string>("control/state_source", state_source_, "odom");
+  if (state_source_ == "gt") {
+    state_source_ = "dynamics";
+  } else if (state_source_ == "localization") {
+    state_source_ = "odom";
+  } else if (state_source_ != "odom" && state_source_ != "dynamics") {
+    ROS_WARN("Unknown control/state_source='%s'. Falling back to 'odom'.",
+             state_source_.c_str());
+    state_source_ = "odom";
+  }
 
   // trajectory_timeout은 새 경로가 너무 오래된 경우 차량을 정지시키기 위한 안전장치다.
   // Ubuntu ROS PC에서 시뮬레이션 clock을 쓸 경우 ROS time 기준으로 동작한다.
   pnh_.param("control/rate", control_rate_, 30.0);
   pnh_.param("control/odom_timeout", odom_timeout_, 0.5);
+  pnh_.param("control/dynamics_timeout", dynamics_timeout_, 0.5);
   pnh_.param("control/trajectory_timeout", trajectory_timeout_, 5.0);
 
   // direction_velocity_epsilon보다 작은 속도는 정지점으로 보고 이전 기어 구간에 붙인다.
@@ -361,6 +392,19 @@ void ControlNode::odomCallback(const nav_msgs::OdometryConstPtr& msg)
   odom_received_ = true;
 }
 
+void ControlNode::dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg)
+{
+  if (!msg) {
+    ROS_WARN_THROTTLE(1.0, "Received null DynamicsInfo message.");
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(dynamics_mutex_);
+  latest_dynamics_ = *msg;
+  last_dynamics_time_ = ros::Time::now();
+  dynamics_received_ = true;
+}
+
 std::vector<ControlNode::PathSegment>
 ControlNode::splitTrajectory(const carmaker_msgs::TrajectoryPath& msg) const
 {
@@ -453,6 +497,37 @@ ControlNode::makePathPoint(const carmaker_msgs::TrajectoryPoint& msg, int direct
 
 bool ControlNode::getCurrentState(Pose2D& pose, double& signed_speed) const
 {
+  if (state_source_ == "dynamics") {
+    carmaker_msgs::DynamicsInfo dynamics;
+    ros::Time last_dynamics_time;
+    bool has_dynamics = false;
+    {
+      std::lock_guard<std::mutex> lock(dynamics_mutex_);
+      has_dynamics = dynamics_received_;
+      dynamics = latest_dynamics_;
+      last_dynamics_time = last_dynamics_time_;
+    }
+
+    if (!has_dynamics) {
+      ROS_WARN_THROTTLE(1.0, "Waiting for DynamicsInfo on %s.", dynamics_topic_.c_str());
+      return false;
+    }
+
+    if ((ros::Time::now() - last_dynamics_time).toSec() > dynamics_timeout_) {
+      ROS_WARN_THROTTLE(1.0, "CarMaker DynamicsInfo timeout.");
+      return false;
+    }
+
+    // DynamicsInfo의 Car_* 값은 CarMaker GT 상태다.
+    // planning의 GT start pose도 Car_x/Car_y/Car_Yaw를 기준으로 rear axle 보정을 하므로,
+    // control trajectory pose와 비교할 때는 Car_x/Car_y/Car_Yaw를 그대로 current pose로 쓴다.
+    pose.x = dynamics.Car_x;
+    pose.y = dynamics.Car_y;
+    pose.yaw = normalizeAngle(dynamics.Car_Yaw);
+    signed_speed = dynamics.Car_vx;
+    return true;
+  }
+
   nav_msgs::Odometry odom;
   ros::Time last_odom_time;
   bool has_odom = false;
