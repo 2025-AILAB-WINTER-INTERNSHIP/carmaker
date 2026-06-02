@@ -579,14 +579,14 @@ cte_term = cte_gain * atan2(k * cte, abs(velocity) + k_soft)
 feedback_steer = heading_gain * heading_error + cte_term
 ```
 
-여기에 trajectory가 제공하는 `curvature` 기반 feedforward를 더한다.
+여기에 lookahead/target point에서 읽은 trajectory `curvature` 기반 feedforward를 더한다.
 
 ```text
 curvature_ff = curvature_ff_gain * atan(wheelbase * trajectory_curvature)
 steer = feedback_steer + curvature_ff
 ```
 
-feedback은 경로 오차가 생긴 뒤 보정하는 성격이고, curvature feedforward는 path 곡률을 보고 미리 꺾는 성격이다. 주차처럼 곡률이 큰 path에서는 feedforward가 조향 반응 지연을 줄인다. 최종 조향각은 타이어 조향 한계 안으로 clamp된다.
+feedback은 nearest point 기준 경로 오차가 생긴 뒤 보정하는 성격이고, curvature feedforward는 lookahead point의 path 곡률을 보고 미리 꺾는 성격이다. 주차처럼 곡률이 큰 path에서는 feedforward가 조향 반응 지연을 줄인다. 최종 조향각은 타이어 조향 한계 안으로 clamp된다.
 
 ### 7. 후진 segment 처리
 
@@ -737,7 +737,7 @@ Add -> Path
 | `/control/debug/target_speed` | `std_msgs/Float64` | lookahead point의 목표 속도 |
 | `/control/debug/speed_error` | `std_msgs/Float64` | `target_speed - current_speed` |
 | `/control/debug/steer_command` | `std_msgs/Float64` | 최종 `/carmaker/control_signal/steerangle`로 나가는 조향 명령 |
-| `/control/debug/curvature_feedforward` | `std_msgs/Float64` | trajectory curvature에서 미리 더한 조향 명령 성분 |
+| `/control/debug/curvature_feedforward` | `std_msgs/Float64` | lookahead trajectory curvature에서 미리 더한 조향 명령 성분 |
 | `/control/debug/steer_saturated` | `std_msgs/Int32` | `1`: 조향 명령이 `max_steer_command` 근처에서 포화됨, `0`: 비포화 |
 | `/control/debug/cross_track_error` | `std_msgs/Float64` | nearest point 기준 lateral error |
 | `/control/debug/heading_error` | `std_msgs/Float64` | nearest point 기준 yaw error |
@@ -978,7 +978,7 @@ atan(2.97 / 5.5) = 28.4 deg
 
 후진 조향은 전진 Stanley 결과 전체를 단순히 뒤집지 않는다. trajectory pose yaw는 차량 자세 기준으로 유지하고, 후진에서는 heading error 항만 반대로 적용한다. lateral error 항은 path 좌우 기준을 유지하며, `reverse_steering_scale`은 후진 lateral error 보정 강도를 조절하는 값으로 보면 된다.
 
-`curvature_ff_gain`은 trajectory curvature를 이용한 선제 조향 비율이다. `0`이면 순수 feedback Stanley에 가깝고, 값을 키우면 큰 곡률에서 path를 따라 미리 꺾는다. 후진 feedforward는 차량 yaw dynamics가 전진과 반대이므로 `reverse_curvature_ff_sign: -1.0`을 기본값으로 둔다.
+`curvature_ff_gain`은 lookahead trajectory curvature를 이용한 선제 조향 비율이다. `0`이면 순수 feedback Stanley에 가깝고, 값을 키우면 큰 곡률에서 path를 따라 미리 꺾는다. 후진 feedforward는 차량 yaw dynamics가 전진과 반대이므로 `reverse_curvature_ff_sign: -1.0`을 기본값으로 둔다.
 
 ### CarMaker 조향 입력 범위
 

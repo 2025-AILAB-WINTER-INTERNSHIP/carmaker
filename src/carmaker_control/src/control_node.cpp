@@ -136,7 +136,8 @@ private:
   Pose2D toSteeringControlPose(const Pose2D& pose) const;
   PathPoint toSteeringControlPoint(const PathPoint& point) const;
   double computeSteeringCommand(const Pose2D& pose,
-                                const PathPoint& reference,
+                                const PathPoint& feedback_reference,
+                                const PathPoint& feedforward_reference,
                                 double speed,
                                 int direction) const;
   double selectTargetSpeed(const PathSegment& segment, std::size_t target_index) const;
@@ -734,7 +735,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
     return;
   }
 
-  // 속도 목표는 lookahead point에서 읽고, Stanley 조향은 nearest point 기준 오차로 계산한다.
+  // 속도 목표와 curvature feedforward는 lookahead point에서 읽고,
+  // Stanley feedback 오차는 nearest point 기준으로 계산한다.
   // 코너에서 너무 앞 점만 보면 lateral error가 늦게 반영될 수 있어서 둘을 분리한다.
   const double lookahead =
       clamp(lookahead_distance_ + lookahead_time_ * current_speed,
@@ -745,6 +747,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   const double accel_command = speed_pid_.calculate(target_speed, current_speed, dt);
   const double steer_command =
       computeSteeringCommand(pose, active_segment.points[nearest_index],
+                             active_segment.points[target_index],
                              std::max(current_speed, target_speed), active_segment.direction);
 
   publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
@@ -843,21 +846,24 @@ ControlNode::PathPoint ControlNode::toSteeringControlPoint(const PathPoint& poin
 }
 
 double ControlNode::computeSteeringCommand(const Pose2D& pose,
-                                           const PathPoint& reference,
+                                           const PathPoint& feedback_reference,
+                                           const PathPoint& feedforward_reference,
                                            double speed,
                                            int direction) const
 {
   const Pose2D control_pose = toSteeringControlPose(pose);
-  const PathPoint control_reference = toSteeringControlPoint(reference);
+  const PathPoint control_feedback_reference = toSteeringControlPoint(feedback_reference);
+  const PathPoint control_feedforward_reference = toSteeringControlPoint(feedforward_reference);
 
   // cte 부호 규약:
   // 경로 yaw 기준 차량이 왼쪽에 있으면 cte가 음수가 된다.
   // CarMaker/teleop 기준 positive steer가 좌회전이므로, 왼쪽으로 벗어난 차량은 음수 조향으로
   // 오른쪽 복귀를 하게 된다.
-  const double dx = control_pose.x - control_reference.x;
-  const double dy = control_pose.y - control_reference.y;
-  const double cte = std::sin(control_reference.yaw) * dx - std::cos(control_reference.yaw) * dy;
-  const double heading_error = normalizeAngle(control_reference.yaw - control_pose.yaw);
+  const double dx = control_pose.x - control_feedback_reference.x;
+  const double dy = control_pose.y - control_feedback_reference.y;
+  const double cte = std::sin(control_feedback_reference.yaw) * dx -
+                     std::cos(control_feedback_reference.yaw) * dy;
+  const double heading_error = normalizeAngle(control_feedback_reference.yaw - control_pose.yaw);
 
   const double tire_steer =
       stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
@@ -865,7 +871,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
       direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
   const double curvature_ff =
       curvature_ff_gain_ * ff_direction_sign *
-      std::atan(wheelbase_ * control_reference.curvature);
+      std::atan(wheelbase_ * control_feedforward_reference.curvature);
   const double steer_command =
       steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 
@@ -1043,6 +1049,7 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     const PathPoint& nearest_point = segment->points[nearest];
     const PathPoint& target_point = segment->points[target];
     const PathPoint control_nearest_point = toSteeringControlPoint(nearest_point);
+    const PathPoint control_target_point = toSteeringControlPoint(target_point);
     distance_to_end = distance2D(pose, segment->points.back());
 
     publishPoseDebug(debug_nearest_pose_pub_,
@@ -1062,7 +1069,7 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
         direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
     curvature_ff =
         steering_command_sign_ * steering_ratio_ * curvature_ff_gain_ *
-        ff_direction_sign * std::atan(wheelbase_ * control_nearest_point.curvature);
+        ff_direction_sign * std::atan(wheelbase_ * control_target_point.curvature);
     steer_saturated =
         std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
