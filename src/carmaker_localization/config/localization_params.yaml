@@ -86,9 +86,13 @@ svm:
 ekf:
   dimension: 2 # 2D (추후 3D 전환 시 3으로 변경)
   frequency: 100.0 # ekf state 업데이트 주기 [Hz]
-  enable_zupt: false # 정지 상태 감지 및 강제 규제(ZUPT) 활성화 여부
-
   # initial_state: [0.0, 0.0, 0.0]  # 초기 상태 설정: [x(m), y(m), yaw(deg)]. GT 사용 시 주석 처리
+
+  rate_limiter:
+    max_position_step: 0.15 # [m] - 단일 EKF 스텝(10ms)당 최대 허용 위치 보정량 (부드러운 수렴)
+    max_yaw_step: 0.05 # [rad] - 단일 EKF 스텝(10ms)당 최대 허용 요각 보정량 (~2.8 deg)
+
+  enable_zupt: false # 정지 상태 감지 및 강제 규제(ZUPT) 활성화 여부
 
   imu:
     imu_id: 0 # 0 또는 1 선택 (0: 차량 중심, 1: 차량 앞 바퀴 축)
@@ -110,3 +114,7 @@ map_matcher:
   min_search_radius: 5.0 # 최소 ICP 탐색 반경 [m] (초기 위치 오차 극복용)
   fitness_threshold: 0.35 # 매칭 유효 판정 임계값
   max_iterations: 50 # ICP 반복 횟수
+
+  validation_gate:
+    max_position_dev: 1.0 # [m] - EKF 예측치 기준 최대 허용 매칭 위치 편차 (오매칭 필터 차단)
+    max_yaw_dev: 0.25 # [rad] - EKF 예측치 기준 최대 허용 매칭 요각 편차 (~14.3 deg)

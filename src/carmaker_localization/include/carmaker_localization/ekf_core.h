@@ -60,7 +60,8 @@ public:
     void prediction(double timestamp, const PredictionInput& u = {});
 
     // Multi-Sensor Corrections
-    void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp);
+    void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,
+                     double max_pos_step = 999.0, double max_yaw_step = 999.0);
     void correctImu(double ax, double ay, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
     void correctWheel(double vx, double vy, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
 

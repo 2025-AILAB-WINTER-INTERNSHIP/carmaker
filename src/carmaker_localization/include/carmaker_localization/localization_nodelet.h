@@ -145,6 +145,12 @@ private:
     double imu_acc_std_ = 0.1;
     double imu_gyro_std_ = 0.01;
 
+    // EKF Rate Limiter & Validation Gate Config
+    double max_position_step_ = 0.15;
+    double max_yaw_step_ = 0.05;
+    double max_position_dev_ = 1.0;
+    double max_yaw_dev_ = 0.25;
+
     // EKF Initial State Config
     bool use_manual_initial_state_ = false;
     double init_x_ = 0.0;

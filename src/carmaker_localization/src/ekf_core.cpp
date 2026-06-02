@@ -154,7 +154,8 @@ void EkfCore::prediction(double timestamp, const PredictionInput& u) {
     last_time_ = timestamp;
 }
 
-void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp) {
+void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,
+                          double max_pos_step, double max_yaw_step) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -177,7 +178,19 @@ void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d&
     Eigen::MatrixXd S = H * P_ * H.transpose() + R;
     Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
 
-    x_ += K * y_res;
+    Eigen::VectorXd dx_state = K * y_res;
+
+    // 최대 단일 보정 한계치 설정 (설정 파라미터 적용)을 통해 급격한 차량 튐(Jump) 제어
+    double pos_step = dx_state.segment<2>(X).norm();
+    if (pos_step > max_pos_step) {
+        dx_state.segment<2>(X) *= (max_pos_step / pos_step);
+    }
+    double yaw_step = std::abs(dx_state(YAW));
+    if (yaw_step > max_yaw_step) {
+        dx_state(YAW) *= (max_yaw_step / yaw_step);
+    }
+
+    x_ += dx_state;
 
     // 수치적 안정성을 위한 Joseph Form 공분산 업데이트: P = (I - KH) * P * (I - KH)^T + K * R * K^T
     Eigen::MatrixXd I_KH = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H;

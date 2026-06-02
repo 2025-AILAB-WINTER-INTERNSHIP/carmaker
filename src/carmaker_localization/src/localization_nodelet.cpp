@@ -71,6 +71,11 @@ bool LocalizationNodelet::loadParameters() {
     r_max_ = pnh.param("feature_extractor/extraction/r_max", 15.0);
     cov_k_ = pnh.param("feature_extractor/extraction/covariance_k", 1.0);
 
+    max_position_step_ = pnh.param("ekf/rate_limiter/max_position_step", 0.15);
+    max_yaw_step_ = pnh.param("ekf/rate_limiter/max_yaw_step", 0.05);
+    max_position_dev_ = pnh.param("map_matcher/validation_gate/max_position_dev", 1.0);
+    max_yaw_dev_ = pnh.param("map_matcher/validation_gate/max_yaw_dev", 0.25);
+
     pnh.param<double>("diagnostic_period", diag_period_, 1.0);
 
     // Manual Initial State Configuration
@@ -883,8 +888,25 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             while (z(2) > M_PI) z(2) -= 2.0 * M_PI;
             while (z(2) < -M_PI) z(2) += 2.0 * M_PI;
 
-            // 범퍼 기준 위치로 EKF 상태 보정
-            ekf_core_->correctPose(z(0), z(1), z(2), R_map, current_time);
+            // EKF 상태와 지연 보상된 매칭 결과의 편차 검증 (Validation Gate)
+            // 급격한 점프 및 오매칭(False Positive)으로 인한 필터 오염 방지
+            double dx = z(0) - current_state(X);
+            double dy = z(1) - current_state(Y);
+            double dist = std::hypot(dx, dy);
+
+            double dyaw = z(2) - current_state(YAW);
+            while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+            while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+
+            // 최대 허용 편차 검증 (설정 파일 기반 Validation Gate)
+            if (dist > max_position_dev_ || std::abs(dyaw) > max_yaw_dev_) {
+                ROS_WARN_THROTTLE(2.0, "performCorrection: Match rejected by validation gate. Dev: %.3fm, %.1f deg (limits: %.2fm, %.1f deg). Skipping correction.", 
+                                  dist, std::abs(dyaw) * 180.0 / M_PI, max_position_dev_, max_yaw_dev_ * 180.0 / M_PI);
+                return;
+            }
+
+            // 범퍼 기준 위치로 EKF 상태 보정 (속도 한계 조절 적용)
+            ekf_core_->correctPose(z(0), z(1), z(2), R_map, current_time, max_position_step_, max_yaw_step_);
         }
 
         // Correction Hz 추적: 첫 correction 시각을 기록하고 횟수 누적
