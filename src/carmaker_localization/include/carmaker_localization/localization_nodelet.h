@@ -91,15 +91,19 @@ private:
     bool getMapCallback(nav_msgs::GetMap::Request& req, nav_msgs::GetMap::Response& res);
 
     // Helpers
+    void initLocalization(double current_time, const carmaker_msgs::DynamicsInfo& current_dynamics);
+    void resetLocalization();
+    bool unpackBundle(const carmaker_msgs::CameraBundleConstPtr& msg,
+                      std::array<sensor_msgs::ImageConstPtr, 4>& imgs,
+                      std::array<sensor_msgs::CameraInfoConstPtr, 4>& infos);
     void processImages(
         const std::array<sensor_msgs::ImageConstPtr, 4>& imgs,
         const std::array<sensor_msgs::CameraInfoConstPtr, 4>& infos);
+    void updateEstimation(double current_time, const carmaker_msgs::DynamicsInfo& dynamics);
     void performCorrection(const carmaker_msgs::LocalFeatures& features);
     void correctionWorkerLoop();
     void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
-    void resetLocalization();
-    void initLocalization(double current_time, const carmaker_msgs::DynamicsInfo& current_dynamics);
 
     // =========================================================================
     // 1. Hardware Constants
@@ -150,6 +154,11 @@ private:
     double max_yaw_step_ = 0.05;
     double max_position_dev_ = 1.0;
     double max_yaw_dev_ = 0.25;
+
+    // Wheel Slip Detection Config
+    double slip_threshold_long_ = 0.5;
+    double slip_threshold_lat_ = 0.1;
+    double slip_detect_min_vx_ = 0.5; ///< 저속 구간 횡방향 슬립 감지 최소 속도 [m/s]
 
     // EKF Initial State Config
     bool use_manual_initial_state_ = false;
@@ -213,6 +222,7 @@ private:
     std::mutex dyn_mutex_;
     carmaker_msgs::DynamicsInfo latest_dynamics_;
     bool dynamics_received_ = false;
+    long long last_processed_cycleno_ = -1;
 
     // Correction Hz tracking
     uint64_t correction_count_          = 0;

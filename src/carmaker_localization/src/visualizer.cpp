@@ -178,8 +178,8 @@ void Visualizer::publishObservation(const std::string& channel_name, const carma
         q.setRPY(0, 0, angle);
         cov.pose.orientation = tf2::toMsg(q);
 
-        cov.scale.x = sigma_major * 2.0;
-        cov.scale.y = sigma_minor * 2.0;
+        cov.scale.x = sigma_major * 4.0;
+        cov.scale.y = sigma_minor * 4.0;
         cov.scale.z = 0.0025;
 
         cov.color = m.color;
@@ -236,8 +236,8 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
     cov.pose.orientation = tf2::toMsg(q);
 
     cov.color.r = 0.0; cov.color.g = 1.0; cov.color.b = 0.0; cov.color.a = 0.3;
-    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 2.0;
-    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 2.0;
+    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 4.0;
+    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 4.0;
     cov.scale.z = 0.01;
     marker_array.markers.push_back(cov);
 
@@ -296,8 +296,8 @@ void Visualizer::publishCorrection(const geometry_msgs::PoseWithCovarianceStampe
     cov.pose.orientation = tf2::toMsg(q);
 
     cov.color.r = 1.0; cov.color.g = 0.0; cov.color.b = 0.0; cov.color.a = 0.3;
-    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 2.0;
-    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 2.0;
+    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 4.0;
+    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 4.0;
     cov.scale.z = 0.01;
     marker_array.markers.push_back(cov);
 

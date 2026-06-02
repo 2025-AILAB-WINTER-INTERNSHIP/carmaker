@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <cmath>
+#include <Eigen/Eigenvalues>
 
 namespace carmaker_localization {
 
@@ -41,11 +42,12 @@ static double maxEigenvalue2x2(double a, double b, double c) {
 // ─────────────────────────────────────────────────────────────────────────────
 // IcpRegistration
 // ─────────────────────────────────────────────────────────────────────────────
-IcpRegistration::IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius)
+IcpRegistration::IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius, double max_covariance)
     : fitness_threshold_(fitness_threshold),
       max_iterations_(max_iterations),
       vision_base_std_(vision_base_std),
-      min_search_radius_(min_search_radius) {}
+      min_search_radius_(min_search_radius),
+      max_covariance_(max_covariance) {}
 
 RegistrationResult IcpRegistration::align(
     const std::vector<LocalFeature>& observed,
@@ -283,15 +285,31 @@ RegistrationResult IcpRegistration::align(
         result.success   = true;
         result.transform = transform;
 
-        // 정합 스코어와 비전 센서의 기본 노이즈를 결합한 스케일 팩터 계산
-        double base_var   = vision_base_std_ * vision_base_std_;
+        // 정합 스코어에 의한 공분산 인플레이션 계수 계산 (이중 스케일링 방지)
         double confidence = static_cast<double>(inliers) * result.fitness_score;
-        double scale      = base_var / std::max(confidence, 1.0);
+        double scale      = 1.0 / std::max(confidence, 1.0);
 
         H += Eigen::Matrix3d::Identity() * 1e-6;
 
-        // 최종 공분산 행렬 = 정보 행렬(H)의 역행렬 * 신뢰도 스케일
-        result.covariance = H.inverse() * scale;
+        // SVD 기반 pseudo-inverse 및 unconstrained 방향에 대한 분산 상한 제한 (Max Variance Capping)
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(H);
+        if (eigensolver.info() == Eigen::Success) {
+            Eigen::Vector3d eigenvalues = eigensolver.eigenvalues();
+            Eigen::Matrix3d eigenvectors = eigensolver.eigenvectors();
+            Eigen::Vector3d capped_cov_eigenvalues = Eigen::Vector3d::Zero();
+
+            const double max_variance = max_covariance_; // unconstrained 방향에 대한 최대 분산 값 (m^2 또는 rad^2)
+            for (int i = 0; i < 3; ++i) {
+                if (eigenvalues(i) > 1e-9) {
+                    capped_cov_eigenvalues(i) = std::min(scale / eigenvalues(i), max_variance);
+                } else {
+                    capped_cov_eigenvalues(i) = max_variance;
+                }
+            }
+            result.covariance = eigenvectors * capped_cov_eigenvalues.asDiagonal() * eigenvectors.transpose();
+        } else {
+            result.covariance = Eigen::Matrix3d::Identity() * max_covariance_;
+        }
     }
 
     return result;

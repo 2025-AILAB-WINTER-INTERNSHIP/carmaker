@@ -7,7 +7,7 @@ namespace carmaker_localization {
 
 class IcpRegistration : public RegistrationBase {
 public:
-    IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius = 0.5);
+    IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius = 0.5, double max_covariance = 10.0);
     virtual ~IcpRegistration() = default;
 
     virtual RegistrationResult align(
@@ -20,6 +20,7 @@ private:
     int max_iterations_;
     double vision_base_std_;
     double min_search_radius_;
+    double max_covariance_; ///< Eigen-capping 최대 분산 상한값 [m^2 or rad^2]
 };
 
 } // namespace carmaker_localization
