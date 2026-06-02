@@ -357,7 +357,8 @@ void LocalizationNodelet::setupRosIo() {
                 NODELET_FATAL("input_topic is required when use_bundle is false!");
                 return;
             }
-            seg_subs_[i] = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh, ch.input_topic, 5);
+            // 비전 메시지가 대기하지 않고 네트워크 레이어에서 즉시 유실 처리
+            seg_subs_[i] = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh, ch.input_topic, 1, ros::TransportHints().tcpNoDelay());
             info_subs_[i] = nh.subscribe<sensor_msgs::CameraInfo>(ch.info_topic, 1, boost::bind(&LocalizationNodelet::infoCallback, this, _1, i));
         }
 
@@ -366,12 +367,13 @@ void LocalizationNodelet::setupRosIo() {
 
     if (!use_bundle_) {
         sync_all_ = std::make_unique<message_filters::Synchronizer<SyncPolicy4>>(
-            SyncPolicy4(10),
+            SyncPolicy4(1), // 대기 큐 크기 최소화하여 최신 프레임 활용
             *seg_subs_[0], *seg_subs_[1], *seg_subs_[2], *seg_subs_[3]);
 
         sync_all_->registerCallback(boost::bind(&LocalizationNodelet::imagesCallback, this, _1, _2, _3, _4));
     } else {
-        bundle_sub_ = nh.subscribe(topic_bundle, 10, &LocalizationNodelet::bundleCallback, this);
+        // 대기 큐 크기를 1로 제한하고 tcpNoDelay()를 적용해 네트워크 버퍼링 지연 제거
+        bundle_sub_ = nh.subscribe(topic_bundle, 1, &LocalizationNodelet::bundleCallback, this, ros::TransportHints().tcpNoDelay());
         NODELET_INFO("Subscribed to CameraBundle topic: %s", topic_bundle.c_str());
     }
 
@@ -838,7 +840,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         double img_time = features.header.stamp.toSec();
         double dt = current_time - img_time;
 
-        if (dt < 0.0 || dt >= 0.5) {
+        if (dt < 0.0 || dt >= 1.5) {
             ROS_WARN_THROTTLE(2.0, "performCorrection: Measurement latency too high (%.3f s) or negative. Skipping EKF correction.", dt);
             return;
         }
