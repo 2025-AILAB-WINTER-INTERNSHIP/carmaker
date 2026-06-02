@@ -23,8 +23,8 @@
 #include "carmaker_localization/feature_extractor.h"
 #include "carmaker_localization/ekf_core.h"
 #include "carmaker_localization/visualizer.h"
-#include "carmaker_localization/map_loader_base.h"
-#include "carmaker_localization/matcher_base.h"
+#include "carmaker_localization/feature_loader_base.h"
+#include "carmaker_localization/registration_base.h"
 #include <carmaker_msgs/LocalFeatures.h>
 #include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/CameraBundle.h>
@@ -91,15 +91,19 @@ private:
     bool getMapCallback(nav_msgs::GetMap::Request& req, nav_msgs::GetMap::Response& res);
 
     // Helpers
+    void initLocalization(double current_time, const carmaker_msgs::DynamicsInfo& current_dynamics);
+    void resetLocalization();
+    bool unpackBundle(const carmaker_msgs::CameraBundleConstPtr& msg,
+                      std::array<sensor_msgs::ImageConstPtr, 4>& imgs,
+                      std::array<sensor_msgs::CameraInfoConstPtr, 4>& infos);
     void processImages(
         const std::array<sensor_msgs::ImageConstPtr, 4>& imgs,
         const std::array<sensor_msgs::CameraInfoConstPtr, 4>& infos);
+    void updateEstimation(double current_time, const carmaker_msgs::DynamicsInfo& dynamics);
     void performCorrection(const carmaker_msgs::LocalFeatures& features);
     void correctionWorkerLoop();
     void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
-    void resetLocalization();
-    void initLocalization(double current_time, const carmaker_msgs::DynamicsInfo& current_dynamics);
 
     // =========================================================================
     // 1. Hardware Constants
@@ -127,21 +131,34 @@ private:
     double r_max_ = 15.0;
     double cov_k_ = 1.0;
 
-    // Map Loader / Map Matcher Config
+    // Feature Loader & Registration Config
     double resolution_ = 0.05;
-    bool map_matcher_enabled_ = true;  // map_matcher/enable 파라미터로 제어
+    bool feature_registration_enabled_ = true;  // feature_registration/enable 파라미터로 제어
     double search_radius_ = 20.0;
     double fitness_threshold_ = 0.5;
 
     // Vehicle Kinematics
-    double tire_radius_ = 0.327;
-    double track_width_ = 1.655;
-    double rear_axle_x_ = 0.79;
+    double tire_radius_ = 0.298;
+    double track_width_ = 1.634;
+    double rear_axle_x_ = 0.82;
+    double wheelbase_ = 2.97;
+    double steering_ratio_ = 1.0;  // Steer_WhlAng → road wheel angle conversion ratio
 
     // EKF Noise Config
     double wheel_speed_std_ = 0.05;
     double imu_acc_std_ = 0.1;
     double imu_gyro_std_ = 0.01;
+
+    // EKF Rate Limiter & Validation Gate Config
+    double max_position_step_ = 0.15;
+    double max_yaw_step_ = 0.05;
+    double max_position_dev_ = 1.0;
+    double max_yaw_dev_ = 0.25;
+
+    // Wheel Slip Detection Config
+    double slip_threshold_long_ = 0.5;
+    double slip_threshold_lat_ = 0.1;
+    double slip_detect_min_vx_ = 0.5; ///< 저속 구간 횡방향 슬립 감지 최소 속도 [m/s]
 
     // EKF Initial State Config
     bool use_manual_initial_state_ = false;
@@ -188,8 +205,8 @@ private:
     // 4. Algorithm Core Engines
     // =========================================================================
     std::shared_ptr<EkfCore> ekf_core_;
-    std::shared_ptr<MapLoaderBase> map_loader_;
-    std::shared_ptr<MatcherBase> matcher_;
+    std::shared_ptr<FeatureLoaderBase> feature_loader_;
+    std::shared_ptr<RegistrationBase> registration_engine_;
 
     // =========================================================================
     // 5. Runtime Shared States & Sync Buffers
@@ -205,6 +222,7 @@ private:
     std::mutex dyn_mutex_;
     carmaker_msgs::DynamicsInfo latest_dynamics_;
     bool dynamics_received_ = false;
+    long long last_processed_cycleno_ = -1;
 
     // Correction Hz tracking
     uint64_t correction_count_          = 0;

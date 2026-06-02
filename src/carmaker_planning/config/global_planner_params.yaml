@@ -7,6 +7,7 @@ topics:
     debug:
       map: "/planning/debug/occupancy_grid"
       path: "/planning/debug/global_path"
+      pose: "/planning/debug/global_pose"
       tree: "/planning/debug/search_tree"
       velocity: "/planning/debug/velocity_profile"
   subscribe:
@@ -20,34 +21,34 @@ setting:
 
   use_gt_pose: false # Set to true to use GT pose, false to use EKF pose from TF
   use_manual_pose:
-    enabled: true    # Set to true for offline testing (no simulator). Overrides TF lookup.
-    topic: "/planning/start"  # geometry_msgs/PoseWithCovarianceStamped — publish via RViz "2D Pose Estimate" tool
+    enabled: true # Set to true for offline testing (no simulator). Overrides TF lookup.
+    topic: "/planning/start" # geometry_msgs/PoseWithCovarianceStamped — publish via RViz "2D Pose Estimate" tool
 
 # Frame configurations matching carmaker_localization
 frames:
   global: "Fr0"
-  ego: "Fr1A_pred"   # Use "base_footprint" for GT frame, "Fr1A_pred" for EKF prediction frame
+  ego: "Fr1A_pred" # Use "base_footprint" for GT frame, "Fr1A_pred" for EKF prediction frame
 
 # Vehicle geometry and kinematic parameters
 vehicle:
-  width: 1.89       # meters
-  length: 4.635     # meters
-  wheelbase: 2.97   # meters
+  width: 1.89 # meters
+  length: 4.635 # meters
+  wheelbase: 2.97 # meters
   rear_axle_offset: 0.82 # meters (Rear Bumper to Rear Axle)
   min_turning_radius: 5.5 # meters
   # Ioniq 5 wheelbase/min_turning_radius 기준: atan(2.97 / 5.5) = 28.4 deg
   max_steer_angle_deg: 28.4 # degrees
 
   limits:
-    max_vel: 10.0     # m/s
-    max_accel: 3.0    # m/s^2
-    max_decel: 3.0    # m/s^2
-    max_jerk: 2.0     # m/s^3
-    max_lat_acc: 1.5  # m/s^2
+    max_vel: 10.0 # m/s
+    max_accel: 3.0 # m/s^2
+    max_decel: 3.0 # m/s^2
+    max_jerk: 2.0 # m/s^3
+    max_lat_acc: 1.5 # m/s^2
 
   collision_circles:
     offsets: [0.0, 1.5, 3.0]
-    radii:   [1.1, 1.1, 1.1]
+    radii: [1.1, 1.1, 1.1]
 
 # Costmap representation parameters
 global_costmap:
@@ -71,8 +72,8 @@ global_planner:
   analytic_expansion_ratio: 10 # Check Reeds-Shepp shot every 10 iterations
   weights:
     turn: 2.0
-    reverse: 5.0      # Enable reverse paths by lowering penalty
-    change_dir: 15.0   # Direction transition penalty
+    reverse: 5.0 # Enable reverse paths by lowering penalty
+    change_dir: 15.0 # Direction transition penalty
     heuristic: 1.0
 
 # Post processing pipeline parameters
@@ -95,10 +96,13 @@ global_post_processing:
     max_iterations: 500
   resampler:
     resolution: 0.1
+    yaw_blending_width: 5 # number of points for blending at cusp transitions
+    use_spline: true # Set to true to use Cubic Spline resampling, false for Linear
   profiler:
-    max_vel: 2.0      # m/s 7.2 km/h
-    max_accel: 0.8    # m/s^2
-    max_decel: 0.8    # m/s^2
-    max_jerk: 1.5     # m/s^3
-    max_lat_acc: 0.8  # m/s^2
+    max_vel: 2.0 # m/s 7.2 km/h
+    max_accel: 0.8 # m/s^2
+    max_decel: 0.8 # m/s^2
+    max_jerk: 1.5 # m/s^3
+    max_lat_acc: 0.8 # m/s^2
     goal_vel: 0.0
+    gear_shift_duration: 1.0 # seconds (delay at forward/reverse transitions)

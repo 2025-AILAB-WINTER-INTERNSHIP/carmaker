@@ -1,18 +1,19 @@
-#include "carmaker_localization/icp_matcher.h"
+#include "carmaker_localization/icp_registration.h"
 #include "carmaker_localization/nanoflann.hpp"
 
 #include <map>
 #include <memory>
 #include <cmath>
+#include <Eigen/Eigenvalues>
 
 namespace carmaker_localization {
 
 // ─────────────────────────────────────────────────────────────────────────────
-// nanoflann point-cloud adapter for MapFeature (2D: x, y)
+// nanoflann point-cloud adapter for ReferenceFeature (2D: x, y)
 // ─────────────────────────────────────────────────────────────────────────────
-struct MapFeatureCloud {
-    const std::vector<MapFeature>& pts;
-    explicit MapFeatureCloud(const std::vector<MapFeature>& p) : pts(p) {}
+struct ReferenceFeatureCloud {
+    const std::vector<ReferenceFeature>& pts;
+    explicit ReferenceFeatureCloud(const std::vector<ReferenceFeature>& p) : pts(p) {}
 
     // nanoflann interface
     inline size_t kdtree_get_point_count() const { return pts.size(); }
@@ -24,8 +25,8 @@ struct MapFeatureCloud {
 };
 
 using KDTree2D = nanoflann::KDTreeSingleIndexAdaptor<
-    nanoflann::L2_Simple_Adaptor<double, MapFeatureCloud>,
-    MapFeatureCloud,
+    nanoflann::L2_Simple_Adaptor<double, ReferenceFeatureCloud>,
+    ReferenceFeatureCloud,
     2 /* dims */>;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,20 +40,21 @@ static double maxEigenvalue2x2(double a, double b, double c) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IcpMatcher
+// IcpRegistration
 // ─────────────────────────────────────────────────────────────────────────────
-IcpMatcher::IcpMatcher(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius)
+IcpRegistration::IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius, double max_covariance)
     : fitness_threshold_(fitness_threshold),
       max_iterations_(max_iterations),
       vision_base_std_(vision_base_std),
-      min_search_radius_(min_search_radius) {}
+      min_search_radius_(min_search_radius),
+      max_covariance_(max_covariance) {}
 
-MatchResult IcpMatcher::match(
+RegistrationResult IcpRegistration::align(
     const std::vector<LocalFeature>& observed,
-    const std::vector<MapFeature>&   reference,
-    const Eigen::Isometry2d&         initial_guess) {
+    const std::vector<ReferenceFeature>& reference,
+    const Eigen::Isometry2d& initial_guess) {
 
-    MatchResult result;
+    RegistrationResult result;
     result.success = false;
     if (observed.empty() || reference.size() < 3) return result;
 
@@ -67,19 +69,19 @@ MatchResult IcpMatcher::match(
         observed_used = observed;
     }
 
-    // Group map features by class for class-specific matching
-    std::map<int, std::vector<MapFeature>> map_by_class;
+    // Group reference features by class for class-specific matching
+    std::map<int, std::vector<ReferenceFeature>> ref_by_class;
     for (const auto& ref : reference)
-        map_by_class[ref.class_id].push_back(ref);
+        ref_by_class[ref.class_id].push_back(ref);
 
     // ── 클래스별 KD-tree 구축 (ICP 반복 루프 시작 전 1회) ─────────────────────
-    //   KDTree2D 는 참조(reference)를 보관하므로 map_by_class 의 수명 내에서만 사용
-    std::map<int, std::unique_ptr<MapFeatureCloud>> clouds;
+    //   KDTree2D 는 참조(reference)를 보관하므로 ref_by_class 의 수명 내에서만 사용
+    std::map<int, std::unique_ptr<ReferenceFeatureCloud>> clouds;
     std::map<int, std::unique_ptr<KDTree2D>>        kdtrees;
 
-    for (const auto& kv : map_by_class) {
+    for (const auto& kv : ref_by_class) {
         int cid   = kv.first;
-        auto cloud = std::make_unique<MapFeatureCloud>(kv.second);
+        auto cloud = std::make_unique<ReferenceFeatureCloud>(kv.second);
         auto tree  = std::make_unique<KDTree2D>(
                          2, *cloud,
                          nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf size */));
@@ -97,7 +99,7 @@ MatchResult IcpMatcher::match(
         double current_error      = 0.0;
         double total_error_weight = 0.0;
 
-        // 1:1 유니크 매칭 테이블: class_id → (ref_idx → {LocalFeature, min_dist²})
+        // 1:1 유니크 정합 테이블: class_id → (ref_idx → {LocalFeature, min_dist²})
         std::map<int, std::map<size_t, std::pair<LocalFeature, double>>> best_matches;
         Eigen::Matrix2d R_curr = transform.linear();
 
@@ -137,7 +139,7 @@ MatchResult IcpMatcher::match(
             int    best_ref_idx = -1;
 
             for (const auto& m : ret_matches) {
-                const auto& ref = map_by_class[obs.class_id][m.first];
+                const auto& ref = ref_by_class[obs.class_id][m.first];
                 Eigen::Vector2d dp(ref.x - pt_map_guess.x(), ref.y - pt_map_guess.y());
                 double d2 = dp.transpose() * Info_map * dp;
                 if (d2 < min_dist_sq) {
@@ -146,7 +148,7 @@ MatchResult IcpMatcher::match(
                 }
             }
 
-            // 4. 1:1 유니크 매칭 강제 (이미 할당된 맵 포인트가 있다면 더 가까운 것만 생존)
+            // 4. 1:1 유니크 정합 강제 (이미 할당된 맵 포인트가 있다면 더 가까운 것만 생존)
             if (best_ref_idx != -1) {
                 auto& class_matches = best_matches[obs.class_id];
                 if (class_matches.find(best_ref_idx) == class_matches.end() ||
@@ -156,7 +158,7 @@ MatchResult IcpMatcher::match(
             }
         }
 
-        // 생존한 1:1 매칭 쌍들만 SVD 연산 배열에 수집
+        // SVD 연산 배열에 1:1 대응 관계 수집
         std::vector<LocalFeature> src_feats;
         for (const auto& class_pair : best_matches) {
             int class_id = class_pair.first;
@@ -165,8 +167,8 @@ MatchResult IcpMatcher::match(
                 const auto& feat = ref_pair.second.first;
                 double w = 1.0 / (feat.cov_xx + feat.cov_yy + 1e-4);
                 src_feats.push_back(feat);
-                dst_pts.push_back(Eigen::Vector2d(map_by_class[class_id][ref_idx].x,
-                                                  map_by_class[class_id][ref_idx].y));
+                dst_pts.push_back(Eigen::Vector2d(ref_by_class[class_id][ref_idx].x,
+                                                  ref_by_class[class_id][ref_idx].y));
                 current_error       += w * ref_pair.second.second;
                 total_error_weight  += w;
             }
@@ -235,12 +237,12 @@ MatchResult IcpMatcher::match(
         Eigen::Vector2d p_rot  = R_final * p_obs;          // 회전만 적용된 좌표 (Jacobian 계산용)
         Eigen::Vector2d pt_map = p_rot + transform.translation(); // 최종 맵 좌표
 
-        // 매칭 루프와 동일한 마할라노비스 메트릭 재사용 (일관성 보장)
+        // 정합 루프와 동일한 마할라노비스 메트릭 재사용 (일관성 보장)
         Eigen::Matrix2d C_obs;
         C_obs << obs.cov_xx, obs.cov_xy, obs.cov_xy, obs.cov_yy;
         Eigen::Matrix2d C_map = R_final * C_obs * R_final.transpose();
         C_map(0,0) += 1e-3; C_map(1,1) += 1e-3;
-        Eigen::Matrix2d Info_map = C_map.inverse(); // 이 매칭점의 가중치 행렬(W) 역할
+        Eigen::Matrix2d Info_map = C_map.inverse(); // 이 정합점의 가중치 행렬(W) 역할
 
         double lambda_max       = maxEigenvalue2x2(C_map(0,0), C_map(0,1), C_map(1,1));
         double search_radius_sq = 9.0 * lambda_max;
@@ -252,24 +254,22 @@ MatchResult IcpMatcher::match(
         kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
 
         for (const auto& m : ret_matches) {
-            const auto& ref = map_by_class[obs.class_id][m.first];
+            const auto& ref = ref_by_class[obs.class_id][m.first];
             Eigen::Vector2d dp(ref.x - pt_map.x(), ref.y - pt_map.y());
 
             // 인라이어(Inlier) 판정
             if (dp.transpose() * Info_map * dp < 9.0) {
                 inliers++;
 
-                // 매칭 쌍의 기하학적 제약 조건을 Hessian에 누적
+                // 정합 쌍의 기하학적 제약 조건을 Hessian에 누적
                 // 상태 벡터: x = [tx, ty, theta]^T
-                // 자코비안 J (2x3): 매칭점의 위치가 x, y, theta 변화에 어떻게 반응하는가?
+                // 자코비안 J (2x3)
                 // J = [ I_2x2 | dR/d(theta) * p_obs ]
                 Eigen::Matrix<double, 2, 3> J;
                 J << 1.0, 0.0, -p_rot.y(),
                      0.0, 1.0,  p_rot.x();
 
                 // H += J^T * W * J (가중치 W로 Info_map 사용)
-                // 차선과 같이 한쪽 방향의 불확실성이 큰 경우, Info_map이 그 기하학적 특성을 
-                // 반영하므로 H 행렬 역시 해당 방향의 정보량을 0에 가깝게 만듭니다.
                 H += J.transpose() * Info_map * J;
                 break;
             }
@@ -285,19 +285,31 @@ MatchResult IcpMatcher::match(
         result.success   = true;
         result.transform = transform;
 
-        // 매칭 스코어와 비전 센서의 기본 노이즈를 결합한 스케일 팩터 계산
-        double base_var   = vision_base_std_ * vision_base_std_;
+        // 정합 스코어에 의한 공분산 인플레이션 계수 계산 (이중 스케일링 방지)
         double confidence = static_cast<double>(inliers) * result.fitness_score;
-        double scale      = base_var / std::max(confidence, 1.0);
+        double scale      = 1.0 / std::max(confidence, 1.0);
 
-        // 최종 공분산 도출, 등방성(Identity) -> 비등방성(Anisotropic) 타원체
-        // 특징점이 부족하거나(직선 구간 등) 한 방향의 제약이 없을 때 역행렬이 발산(Singular)
-        // 하는 것을 방지하기 위해 최소한의 안정화(Regularization) 값 추가
         H += Eigen::Matrix3d::Identity() * 1e-6;
 
-        // 최종 공분산 행렬 = 정보 행렬(H)의 역행렬 * 신뢰도 스케일
-        // 직선 차선일 경우 종방향 정보량이 0에 가까우므로, 역행렬 계산 시 종방향 공분산(불확실성)이 매우 증가
-        result.covariance = H.inverse() * scale;
+        // SVD 기반 pseudo-inverse 및 unconstrained 방향에 대한 분산 상한 제한 (Max Variance Capping)
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigensolver(H);
+        if (eigensolver.info() == Eigen::Success) {
+            Eigen::Vector3d eigenvalues = eigensolver.eigenvalues();
+            Eigen::Matrix3d eigenvectors = eigensolver.eigenvectors();
+            Eigen::Vector3d capped_cov_eigenvalues = Eigen::Vector3d::Zero();
+
+            const double max_variance = max_covariance_; // unconstrained 방향에 대한 최대 분산 값 (m^2 또는 rad^2)
+            for (int i = 0; i < 3; ++i) {
+                if (eigenvalues(i) > 1e-9) {
+                    capped_cov_eigenvalues(i) = std::min(scale / eigenvalues(i), max_variance);
+                } else {
+                    capped_cov_eigenvalues(i) = max_variance;
+                }
+            }
+            result.covariance = eigenvectors * capped_cov_eigenvalues.asDiagonal() * eigenvectors.transpose();
+        } else {
+            result.covariance = Eigen::Matrix3d::Identity() * max_covariance_;
+        }
     }
 
     return result;

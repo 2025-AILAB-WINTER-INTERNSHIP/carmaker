@@ -17,10 +17,12 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
   path_topic_ = pnh.param("topics/publish/debug/path", std::string("/planning/debug/global_path"));
   tree_topic_ = pnh.param("topics/publish/debug/tree", std::string("/planning/debug/search_tree"));
   velocity_topic_ = pnh.param("topics/publish/debug/velocity", std::string("/planning/debug/velocity_profile"));
+  pose_array_topic_ = pnh.param("topics/publish/debug/pose", std::string("/planning/debug/global_pose"));
 
   path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 1, true);
   tree_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(tree_topic_, 1, true);
   velocity_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(velocity_topic_, 1, true);
+  pose_array_pub_ = nh_.advertise<geometry_msgs::PoseArray>(pose_array_topic_, 1, true);
 }
 
 void Visualizer::publishPath(const Path& path, const std::string& frame_id, double rear_axle_offset) {
@@ -107,6 +109,33 @@ void Visualizer::publishPath(const Path& path, const std::string& frame_id, doub
     velocity_markers.markers.push_back(m);
   }
   velocity_pub_.publish(velocity_markers);
+
+  // 3. Publish PoseArray for Yaw Arrows
+  geometry_msgs::PoseArray pose_array_msg;
+  pose_array_msg.header.frame_id = frame_id;
+  pose_array_msg.header.stamp = now;
+
+  const size_t stride = 5; // Visualize every 5th point to avoid clutter (0.5m spacing at 0.1m resolution)
+  pose_array_msg.poses.reserve(path.size() / stride + 1);
+
+  for (size_t i = 0; i < path.size(); i += stride) {
+    const auto& pt = path[i];
+    geometry_msgs::Pose pose;
+
+    // Translate planned path point (rear axle center) backward to rear bumper to match path visualization
+    pose.position.x = pt.x - rear_axle_offset * std::cos(pt.theta);
+    pose.position.y = pt.y - rear_axle_offset * std::sin(pt.theta);
+    pose.position.z = 0.02; // Small height offset above the path line
+
+    double half_theta = pt.theta * 0.5;
+    pose.orientation.x = 0.0;
+    pose.orientation.y = 0.0;
+    pose.orientation.z = std::sin(half_theta);
+    pose.orientation.w = std::cos(half_theta);
+
+    pose_array_msg.poses.push_back(pose);
+  }
+  pose_array_pub_.publish(pose_array_msg);
 }
 
 void Visualizer::publishTree(const std::vector<State>& tree,
@@ -195,6 +224,11 @@ void Visualizer::clear() {
 
   tree_pub_.publish(clear_msg);
   velocity_pub_.publish(clear_msg);
+
+  geometry_msgs::PoseArray clear_pose_array;
+  clear_pose_array.header.frame_id = "Fr0";
+  clear_pose_array.header.stamp = ros::Time::now();
+  pose_array_pub_.publish(clear_pose_array);
 }
 
 } // namespace carmaker_planning

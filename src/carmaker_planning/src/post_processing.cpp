@@ -230,50 +230,97 @@ bool PathResampler::resampleSegment(const Path& input_segment, Path& output_path
     s_vals.push_back(segment_len);
   }
 
+  std::vector<double> x_orig(input_segment.size());
+  std::vector<double> y_orig(input_segment.size());
+  for (size_t i = 0; i < input_segment.size(); ++i) {
+    x_orig[i] = input_segment[i].x;
+    y_orig[i] = input_segment[i].y;
+  }
+
+  bool use_spline = false;
+  if (config_.resampler.use_spline && input_segment.size() >= 3) {
+    use_spline = spline_x_.fit(s_vals, x_orig) && spline_y_.fit(s_vals, y_orig);
+  }
+
   const double step_size = config_.resampler.resolution;
   const int num_steps = std::floor(segment_len / step_size);
 
-  size_t current_idx = 0;
+  const int direction = input_segment[0].direction;
+
   for (int i = 0; i <= num_steps; ++i) {
     double s_req = i * step_size;
-
-    while (current_idx < s_vals.size() - 1 && s_vals[current_idx + 1] < s_req) {
-      current_idx++;
-    }
-
-    if (current_idx >= s_vals.size() - 1) {
-      break;
-    }
-
-    double s0 = s_vals[current_idx];
-    double s1 = s_vals[current_idx + 1];
-    double denominator = s1 - s0;
-    double ratio = (std::abs(denominator) > 1e-6) ? (s_req - s0) / denominator : 0.0;
-
-    const auto& p0 = input_segment[current_idx];
-    const auto& p1 = input_segment[current_idx + 1];
-
     PathPoint p;
-    p.x = p0.x + ratio * (p1.x - p0.x);
-    p.y = p0.y + ratio * (p1.y - p0.y);
-
-    double d_theta = wrap_to_pi(p1.theta - p0.theta);
-    p.theta = wrap_to_pi(p0.theta + ratio * d_theta);
-    p.direction = p0.direction;
+    p.direction = direction;
     p.s = 0.0;
+
+    if (use_spline) {
+      double x_val, dx_ds, d2x_ds2;
+      double y_val, dy_ds, d2y_ds2;
+      spline_x_.evaluate(s_req, x_val, dx_ds, d2x_ds2);
+      spline_y_.evaluate(s_req, y_val, dy_ds, d2y_ds2);
+
+      p.x = x_val;
+      p.y = y_val;
+
+      double raw_yaw = std::atan2(dy_ds, dx_ds);
+      if (direction == -1) {
+        raw_yaw = wrap_to_pi(raw_yaw + PI);
+      }
+      p.theta = raw_yaw;
+
+      double denom = std::pow(dx_ds * dx_ds + dy_ds * dy_ds, 1.5);
+      p.kappa = (denom > 1e-9) ? (dx_ds * d2y_ds2 - dy_ds * d2x_ds2) / denom : 0.0;
+    } else {
+      size_t current_idx = 0;
+      while (current_idx < s_vals.size() - 1 && s_vals[current_idx + 1] < s_req) {
+        current_idx++;
+      }
+      if (current_idx >= s_vals.size() - 1) {
+        break;
+      }
+      double s0 = s_vals[current_idx];
+      double s1 = s_vals[current_idx + 1];
+      double denominator = s1 - s0;
+      double ratio = (std::abs(denominator) > 1e-6) ? (s_req - s0) / denominator : 0.0;
+
+      const auto& p0 = input_segment[current_idx];
+      const auto& p1 = input_segment[current_idx + 1];
+
+      p.x = p0.x + ratio * (p1.x - p0.x);
+      p.y = p0.y + ratio * (p1.y - p0.y);
+      p.theta = wrap_to_pi(p0.theta + ratio * wrap_to_pi(p1.theta - p0.theta));
+      p.kappa = p0.kappa + ratio * (p1.kappa - p0.kappa);
+    }
 
     output_path.push_back(p);
   }
 
   const auto& last_pt = input_segment.back();
+  PathPoint p_last = last_pt;
+  if (use_spline) {
+    double x_val, dx_ds, d2x_ds2;
+    double y_val, dy_ds, d2y_ds2;
+    spline_x_.evaluate(segment_len, x_val, dx_ds, d2x_ds2);
+    spline_y_.evaluate(segment_len, y_val, dy_ds, d2y_ds2);
+    p_last.x = x_val;
+    p_last.y = y_val;
+    double raw_yaw = std::atan2(dy_ds, dx_ds);
+    if (direction == -1) {
+      raw_yaw = wrap_to_pi(raw_yaw + PI);
+    }
+    p_last.theta = raw_yaw;
+    double denom = std::pow(dx_ds * dx_ds + dy_ds * dy_ds, 1.5);
+    p_last.kappa = (denom > 1e-9) ? (dx_ds * d2y_ds2 - dy_ds * d2x_ds2) / denom : 0.0;
+  }
+
   if (output_path.empty()) {
-    output_path.push_back(last_pt);
+    output_path.push_back(p_last);
   } else {
-    double d = dist(output_path.back().x, output_path.back().y, last_pt.x, last_pt.y);
+    double d = dist(output_path.back().x, output_path.back().y, p_last.x, p_last.y);
     if (d > 1e-3) {
-      output_path.push_back(last_pt);
+      output_path.push_back(p_last);
     } else {
-      output_path.back() = last_pt;
+      output_path.back() = p_last;
     }
   }
 
@@ -350,35 +397,42 @@ bool PathResampler::resample(const Path& path, Path& resampled_path) {
     resampled_path[i].s = s;
   }
 
-  // Recalculate kappa (curvature) using Menger curvature for the resampled path.
-  int n_res = resampled_path.size();
-  if (n_res < 3) {
-    for (auto& pt : resampled_path) {
-      pt.kappa = 0.0;
-    }
-  } else {
-    for (int i = 1; i < n_res - 1; ++i) {
-      if (resampled_path[i-1].direction != resampled_path[i].direction || 
-          resampled_path[i+1].direction != resampled_path[i].direction) {
-        resampled_path[i].kappa = 0.0;
-      } else {
-        resampled_path[i].kappa = mengerCurvature(
-          resampled_path[i - 1].x, resampled_path[i - 1].y,
-          resampled_path[i].x,     resampled_path[i].y,
-          resampled_path[i + 1].x, resampled_path[i + 1].y);
+  // Align and blend yaw at direction change cusps
+  for (size_t i = 1; i < resampled_path.size(); ++i) {
+    if (resampled_path[i-1].direction != resampled_path[i].direction) {
+      double theta_e = resampled_path[i-1].theta;
+      const int target_dir = resampled_path[i].direction;
+      const int N = config_.resampler.yaw_blending_width;
+      if (N > 0) {
+        // Blend heading (yaw)
+        for (int k = 0; k < N; ++k) {
+          if (i + k < resampled_path.size() && resampled_path[i+k].direction == target_dir) {
+            double weight = static_cast<double>(k) / N;
+            double diff = wrap_to_pi(resampled_path[i+k].theta - theta_e);
+            resampled_path[i+k].theta = wrap_to_pi(theta_e + weight * diff);
+          }
+        }
+        // Update curvature (kappa = dtheta / ds) for the blended window to maintain geometric consistency
+        for (int k = 1; k <= N; ++k) {
+          size_t idx = i + k;
+          if (idx < resampled_path.size() && resampled_path[idx].direction == target_dir) {
+            double ds = dist(resampled_path[idx].x, resampled_path[idx].y, resampled_path[idx-1].x, resampled_path[idx-1].y);
+            if (ds > 1e-4) {
+              resampled_path[idx].kappa = wrap_to_pi(resampled_path[idx].theta - resampled_path[idx-1].theta) / ds;
+            } else {
+              resampled_path[idx].kappa = 0.0;
+            }
+          }
+        }
       }
     }
-    // Handle boundaries/cusps
-    resampled_path[0].kappa = (resampled_path[0].direction == resampled_path[1].direction) ? resampled_path[1].kappa : 0.0;
-    resampled_path[n_res - 1].kappa = (resampled_path[n_res - 1].direction == resampled_path[n_res - 2].direction) ? resampled_path[n_res - 2].kappa : 0.0;
-    
-    // Fill in endpoints of segments that were adjacent to direction changes
-    for (int i = 1; i < n_res - 1; ++i) {
-      if (resampled_path[i-1].direction != resampled_path[i].direction) {
-        resampled_path[i].kappa = resampled_path[i+1].kappa;
-      } else if (resampled_path[i+1].direction != resampled_path[i].direction) {
-        resampled_path[i].kappa = resampled_path[i-1].kappa;
-      }
+  }
+
+  // Clear curvature at exact cusp points for safety (where speed is 0)
+  for (size_t i = 1; i < resampled_path.size(); ++i) {
+    if (resampled_path[i-1].direction != resampled_path[i].direction) {
+      resampled_path[i-1].kappa = 0.0;
+      resampled_path[i].kappa = 0.0;
     }
   }
 
@@ -433,8 +487,8 @@ bool VelocityProfiler::profile(Path& path, double start_vel) {
     if (j > 0) {
       size_t prev_end = segments[j - 1].second;
       double ds = dist(path[prev_end].x, path[prev_end].y, path[seg_start].x, path[seg_start].y);
-      // Since velocity is 0 at both sides of the cusp, we use a default speed (e.g. 0.1) for transition
-      double dt = (ds > 1e-6) ? ds / 0.1 : 0.1;
+      // Use configurable gear_shift_duration for the stationary transition time at the cusp
+      double dt = (ds > 1e-6) ? ds / 0.1 : config_.profiler.gear_shift_duration;
       current_time_offset = path[prev_end].t + dt;
     }
 

@@ -1,23 +1,25 @@
 #include "carmaker_localization/ekf_core.h"
 #include <cmath>
 #include <algorithm>
-#include <iostream>
+#include <sstream>
 
 namespace carmaker_localization {
 
 EkfCore::EkfCore()
-    : is_initialized_(false), last_time_(0.0) {
-    x_ = Eigen::VectorXd::Zero(STATE_DIM);
-    P_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 1.0;
-    Q_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 0.01;
+    : is_initialized_(false), last_time_(0.0), wheelbase_(2.97), rear_axle_offset_(0.82), imu_offset_x_(0.0), imu_offset_y_(0.0) {
+    x_.setZero();
+    P_.setIdentity();
+    Q_.setIdentity();
+    Q_ *= 0.01;
 
-    // Process noise tuning for motion vs bias
-    Q_.block<2, 2>(X, X) *= 0.01;         // Position is very smooth
-    Q_.block<2, 2>(VX, VX) *= 0.1;        // Velocity can change
-    Q_.block<2, 2>(AX, AX) *= 1.0;        // Accel can change rapidly
+    // 위치, 속도, 가속도, 요각 및 편향 상태 전파에 따른 공정 노이즈 튜닝
+    Q_.block<2, 2>(X, X) *= 0.01;         // 위치 상태는 매우 부드럽게 유지되도록 설정
+    Q_.block<2, 2>(VX, VX) *= 0.1;        // 속도는 완만하게 변화하도록 설정
+    Q_.block<2, 2>(AX, AX) *= 1.0;        // 가속도는 급격한 변화를 감안해 크게 설정
     Q_(YAW, YAW) *= 0.01;
     Q_(YAW_RATE, YAW_RATE) *= 0.1;
-    Q_.block<3, 3>(B_AX, B_AX) *= 0.0001; // Biases change very slowly
+    Q_(YAW_ACC, YAW_ACC) *= 10.0;         // 각가속도는 민첩하게 반응하도록 크게 설정
+    Q_.block<3, 3>(B_AX, B_AX) *= 0.0001; // 센서 바이어스는 아주 느리게 변화하도록 설정
 }
 
 void EkfCore::initialize(double x, double y, double yaw, double timestamp, double vx, double vy) {
@@ -37,135 +39,209 @@ void EkfCore::initialize(double x, double y, double yaw, double timestamp, doubl
     is_initialized_ = true;
 }
 
-void EkfCore::setProcessNoise(const Eigen::MatrixXd& Q) {
+void EkfCore::setProcessNoise(const StateMatrix& Q) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (Q.rows() == STATE_DIM && Q.cols() == STATE_DIM) {
-        Q_ = Q;
+    Q_ = Q;
+}
+
+void EkfCore::setWheelbase(double wheelbase) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (wheelbase > 0.0) {
+        wheelbase_ = wheelbase;
+        if (log_info_) {
+            std::ostringstream oss;
+            oss << "[EkfCore] Wheelbase set to: " << wheelbase_ << " m";
+            log_info_(oss.str());
+        }
     }
 }
 
-void EkfCore::prediction(double timestamp) {
+void EkfCore::setRearAxleOffset(double offset) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (offset >= 0.0) {
+        rear_axle_offset_ = offset;
+        if (log_info_) {
+            std::ostringstream oss;
+            oss << "[EkfCore] Rear axle offset set to: " << rear_axle_offset_ << " m";
+            log_info_(oss.str());
+        }
+    }
+}
+
+void EkfCore::setImuOffsets(double offset_x, double offset_y) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    imu_offset_x_ = offset_x;
+    imu_offset_y_ = offset_y;
+    if (log_info_) {
+        std::ostringstream oss;
+        oss << "[EkfCore] IMU offsets set to: x=" << imu_offset_x_ << " m, y=" << imu_offset_y_ << " m";
+        log_info_(oss.str());
+    }
+}
+
+void EkfCore::setVyDecayTimeConst(double tau) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    vy_decay_time_const_ = tau;
+}
+
+void EkfCore::setLogCallbacks(std::function<void(const std::string&)> info,
+                               std::function<void(const std::string&)> warn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    log_info_ = std::move(info);
+    log_warn_ = std::move(warn);
+}
+
+void EkfCore::prediction(double timestamp, const PredictionInput& u) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
     double dt = timestamp - last_time_;
 
-    // Detect Time Jump (Forward > 1s or any Backward jump)
+    // 시간 도약 감지 (전방 1초 초과 또는 후방 시간 도약 시 필터 상태 초기화 방지용 분기)
     if (dt > 1.0 || dt < -0.05) {
         handleTimeJump(timestamp);
         return;
     }
 
-    if (dt <= 1e-4) return; // Ignore too small intervals
+    if (dt <= 1e-4) return; // 너무 작은 시간 간격은 연산 생략
 
-    // --- State Transition (Constant Acceleration Model) ---
-    double yaw = x_(YAW);
+    // --- 12차원 차량 기구학 모델 기반 예측 ---
     double vx = x_(VX);
     double vy = x_(VY);
     double ax = x_(AX);
     double ay = x_(AY);
+    double yaw = x_(YAW);
     double yaw_rate = x_(YAW_RATE);
+    double yaw_acc = x_(YAW_ACC);
 
-    // Global Position Update
-    double cos_y = std::cos(yaw);
-    double sin_y = std::sin(yaw);
-    double v_global_x = vx * cos_y - vy * sin_y;
-    double v_global_y = vx * sin_y + vy * cos_y;
+    double cos_yaw = std::cos(yaw);
+    double sin_yaw = std::sin(yaw);
 
-    x_(X) += v_global_x * dt + 0.5 * (ax * cos_y - ay * sin_y) * dt * dt;
-    x_(Y) += v_global_y * dt + 0.5 * (ax * sin_y + ay * cos_y) * dt * dt;
+    // VY 소프트 NHC 감쇠: vy(t+dt) = vy_NHC + (vy - vy_NHC)*decay + ay*dt
+    // vy_NHC = -yaw_rate * rear_axle_offset (선회시 범퍼 기준점의 기구학적 횡속도)
+    // decay < 1: 슬립 성분(vy - vy_NHC)이 시간에 따라 0으로 수렴
+    // decay = 1 (비활성화): vy += ay*dt (기존 동작 동일)
+    const double vy_decay = (vy_decay_time_const_ > 1e-4) ? std::max(0.0, std::min(1.0, std::exp(-dt / vy_decay_time_const_))) : 1.0;
+    const double vy_nhc = -yaw_rate * rear_axle_offset_;
 
-    // Local Velocity Update (Coriolis terms for rotating body frame)
-    x_(VX) += (ax + yaw_rate * vy) * dt;
-    x_(VY) += (ay - yaw_rate * vx) * dt;
+    // 상태 전파 (위치 상태에 대한 2차 적분 적용 및 횡속도/각가속도 전파)
+    x_(X) += (vx * cos_yaw - vy * sin_yaw) * dt + 0.5 * (ax * cos_yaw - ay * sin_yaw) * dt * dt;
+    x_(Y) += (vx * sin_yaw + vy * cos_yaw) * dt + 0.5 * (ax * sin_yaw + ay * cos_yaw) * dt * dt;
+    x_(VX) += ax * dt;
+    x_(VY) = vy_nhc + (vy - vy_nhc) * vy_decay + ay * dt;
+    x_(AX) = ax;
+    x_(AY) = ay;
+    x_(YAW) += yaw_rate * dt + 0.5 * yaw_acc * dt * dt;
+    x_(YAW_RATE) += yaw_acc * dt;
+    x_(YAW_ACC) = yaw_acc;
 
-    // Heading Update
-    x_(YAW) += yaw_rate * dt;
-    // Yaw normalization
+    // 자코비안 F 행렬 [12x12]
+    StateMatrix F = StateMatrix::Identity();
+
+    // 위치 상태 변수에 대한 미분
+    F(X, VX)  = cos_yaw * dt;
+    F(X, VY)  = -sin_yaw * dt;
+    F(X, AX)  = 0.5 * cos_yaw * dt * dt;
+    F(X, AY)  = -0.5 * sin_yaw * dt * dt;
+    F(X, YAW) = (-vx * sin_yaw - vy * cos_yaw) * dt - 0.5 * (ax * sin_yaw + ay * cos_yaw) * dt * dt;
+
+    F(Y, VX)  = sin_yaw * dt;
+    F(Y, VY)  = cos_yaw * dt;
+    F(Y, AX)  = 0.5 * sin_yaw * dt * dt;
+    F(Y, AY)  = 0.5 * cos_yaw * dt * dt;
+    F(Y, YAW) = (vx * cos_yaw - vy * sin_yaw) * dt + 0.5 * (ax * cos_yaw - ay * sin_yaw) * dt * dt;
+
+    // 속도 상태 변수에 대한 미분
+    F(VX, AX) = dt;
+    // VY: 소프트 NHC 감쇠에 의한 F 행렬 업데이트
+    // vy(t+dt) = vy * decay + yaw_rate * d * (decay - 1) + ay * dt
+    // → F(VY, VY) = decay,  F(VY, YAW_RATE) = d * (decay - 1),  F(VY, AY) = dt
+    F(VY, VY)       = vy_decay;
+    F(VY, AY)       = dt;
+    F(VY, YAW_RATE) = rear_axle_offset_ * (vy_decay - 1.0); // 새 cross-term: 비활성화시 0
+
+    // 요 및 각속도 상태 변수에 대한 미분
+    F(YAW, YAW_RATE) = dt;
+    F(YAW, YAW_ACC) = 0.5 * dt * dt;
+    F(YAW_RATE, YAW_ACC) = dt;
+
+    // 요각 정규화 (모델 독립적)
     while (x_(YAW) > M_PI) x_(YAW) -= 2.0 * M_PI;
     while (x_(YAW) < -M_PI) x_(YAW) += 2.0 * M_PI;
 
-    // --- Jacobian Matrix F [11x11] ---
-    Eigen::MatrixXd F = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM);
-    F(X, YAW) = (-vx * sin_y - vy * cos_y) * dt + 0.5 * (-ax * sin_y - ay * cos_y) * dt * dt;
-    F(X, VX) = cos_y * dt;
-    F(X, VY) = -sin_y * dt;
-    F(X, AX) = 0.5 * cos_y * dt * dt;
-    F(X, AY) = -0.5 * sin_y * dt * dt;
-
-    F(Y, YAW) = (vx * cos_y - vy * sin_y) * dt + 0.5 * (ax * cos_y - ay * sin_y) * dt * dt;
-    F(Y, VX) = sin_y * dt;
-    F(Y, VY) = cos_y * dt;
-    F(Y, AX) = 0.5 * sin_y * dt * dt;
-    F(Y, AY) = 0.5 * cos_y * dt * dt;
-
-    // Coriolis Jacobian: d(VX)/d(VY), d(VX)/d(YAW_RATE), d(VY)/d(VX), d(VY)/d(YAW_RATE)
-    F(VX, VY) = yaw_rate * dt;
-    F(VX, YAW_RATE) = vy * dt;
-    F(VX, AX) = dt;
-    F(VY, VX) = -yaw_rate * dt;
-    F(VY, YAW_RATE) = -vx * dt;
-    F(VY, AY) = dt;
-    F(YAW, YAW_RATE) = dt;
-
-    // --- Covariance Propagation ---
+    // --- 오차 공분산 전파 ---
     P_ = F * P_ * F.transpose() + Q_ * dt;
 
-    // Symmetry check
+    // 수치적 대칭성 보장
     P_ = (P_ + P_.transpose()) * 0.5;
 
     last_time_ = timestamp;
 }
 
-void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp) {
+void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,
+                          double max_pos_step, double max_yaw_step) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // NOTE: Retroactive correction via state buffer was intentionally removed.
-    // The CarMaker simulation pipeline delivers vision measurements with
-    // sub-100ms latency, well within one 100 Hz prediction cycle. Applying
-    // measurements to the current state is empirically more stable than
-    // rewinding history, which introduced oscillation at higher vehicle speeds.
-    // If sustained latency ever exceeds ~200 ms, reconsider this decision.
+    // 주의: 상태 버퍼를 통한 과거 시점 소급 보정은 의도적으로 제외
+    // CarMaker 시뮬레이션 환경에서는 비전 정합 지연이 100ms 이내로 매우 낮아,
+    // 과거 포즈를 역추적하는 것보다 현재 시점 상태에 직접 보정하는 것이 주행 시 안정성에 더 유리
+    // 지연 시간이 200ms를 초과하게 될 경우에만 소급 보정 버퍼의 재활성화 검토
 
-    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, STATE_DIM);
+    Eigen::Matrix<double, 3, STATE_DIM> H = Eigen::Matrix<double, 3, STATE_DIM>::Zero();
     H(0, X) = 1.0; H(1, Y) = 1.0; H(2, YAW) = 1.0;
 
     Eigen::Vector3d z(x, y, yaw);
     Eigen::Vector3d h(x_(X), x_(Y), x_(YAW));
 
-    // Residual with yaw wrapping
+    // 잔차 계산 및 요각 범위 제한
     Eigen::Vector3d y_res = z - h;
     while (y_res(2) > M_PI) y_res(2) -= 2.0 * M_PI;
     while (y_res(2) < -M_PI) y_res(2) += 2.0 * M_PI;
 
-    Eigen::MatrixXd S = H * P_ * H.transpose() + R;
-    Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
+    Eigen::Matrix3d S = H * P_ * H.transpose() + R;
+    Eigen::Matrix<double, STATE_DIM, 3> K = P_ * H.transpose() * S.inverse();
 
-    x_ += K * y_res;
+    StateVector dx_state = K * y_res;
 
-    // Joseph Form covariance update for numerical stability: P = (I - KH) * P * (I - KH)^T + K * R * K^T
-    Eigen::MatrixXd I_KH = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H;
+    // 최대 단일 보정 한계치 설정 (설정 파라미터 적용)을 통해 급격한 차량 튐(Jump) 제어
+    double pos_step = dx_state.segment<2>(X).norm();
+    if (pos_step > max_pos_step) {
+        dx_state.segment<2>(X) *= (max_pos_step / pos_step);
+    }
+    double yaw_step = std::abs(dx_state(YAW));
+    if (yaw_step > max_yaw_step) {
+        dx_state(YAW) *= (max_yaw_step / yaw_step);
+    }
+
+    x_ += dx_state;
+
+    // 수치적 안정성을 위한 Joseph Form 공분산 업데이트: P = (I - KH) * P * (I - KH)^T + K * R * K^T
+    StateMatrix I_KH = StateMatrix::Identity() - K * H;
     P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
-void EkfCore::correctWheel(double vx, double vy, double yaw_rate, const Eigen::Matrix3d& R, double timestamp) {
+void EkfCore::correctWheel(double vx, double vy_nhc, double yaw_rate, const Eigen::Matrix3d& R, double timestamp) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, STATE_DIM);
-    H(0, VX) = 1.0; H(1, VY) = 1.0; H(2, YAW_RATE) = 1.0;
+    // 휠 속도 오보도메트리 관측 및 후륜 축 중심 비홀로노믹 구속(NHC) 결합 모델
+    // h(x) = [ vx, vy + w_z * rear_axle_offset_, w_z ]
+    Eigen::Matrix<double, 3, STATE_DIM> H = Eigen::Matrix<double, 3, STATE_DIM>::Zero();
+    H(0, VX) = 1.0;
+    H(1, VY) = 1.0; H(1, YAW_RATE) = rear_axle_offset_;
+    H(2, YAW_RATE) = 1.0;
 
-    Eigen::Vector3d z(vx, vy, yaw_rate);
-    Eigen::Vector3d h(x_(VX), x_(VY), x_(YAW_RATE));
+    Eigen::Vector3d z(vx, vy_nhc, yaw_rate);
+    Eigen::Vector3d h(x_(VX), x_(VY) + x_(YAW_RATE) * rear_axle_offset_, x_(YAW_RATE));
 
-    Eigen::MatrixXd S = H * P_ * H.transpose() + R;
-    Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
+    Eigen::Matrix3d S = H * P_ * H.transpose() + R;
+    Eigen::Matrix<double, STATE_DIM, 3> K = P_ * H.transpose() * S.inverse();
 
     x_ += K * (z - h);
 
-    // Joseph Form covariance update for numerical stability: P = (I - KH) * P * (I - KH)^T + K * R * K^T
-    Eigen::MatrixXd I_KH = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H;
+    // 수치적 안정성을 위한 Joseph Form 공분산 업데이트: P = (I - KH) * P * (I - KH)^T + K * R * K^T
+    StateMatrix I_KH = StateMatrix::Identity() - K * H;
     P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
@@ -173,23 +249,43 @@ void EkfCore::correctImu(double ax_raw, double ay_raw, double yaw_rate_raw, cons
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Observation model: z_raw = state + bias
-    // So h(x) = [ax + b_ax, ay + b_ay, yaw_rate + b_yaw_rate]
-    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, STATE_DIM);
-    H(0, AX) = 1.0; H(0, B_AX) = 1.0;
-    H(1, AY) = 1.0; H(1, B_AY) = 1.0;
-    H(2, YAW_RATE) = 1.0; H(2, B_YAW_RATE) = 1.0;
+    // 관측 모델: 레버암 변환이 결합된 원시 IMU 데이터 직접 관측
+    // h(x) = [ ax - alpha * ry - w^2 * rx + b_ax,
+    //          ay + alpha * rx - w^2 * ry + b_ay,
+    //          w + b_yaw_rate ]
+    double rx = imu_offset_x_ - rear_axle_offset_;
+    double ry = imu_offset_y_;
+    double w = x_(YAW_RATE);
+    double alpha = x_(YAW_ACC);
 
     Eigen::Vector3d z(ax_raw, ay_raw, yaw_rate_raw);
-    Eigen::Vector3d h(x_(AX) + x_(B_AX), x_(AY) + x_(B_AY), x_(YAW_RATE) + x_(B_YAW_RATE));
+    Eigen::Vector3d h(
+        x_(AX) - alpha * ry - w * w * rx + x_(B_AX),
+        x_(AY) + alpha * rx - w * w * ry + x_(B_AY),
+        w + x_(B_YAW_RATE)
+    );
 
-    Eigen::MatrixXd S = H * P_ * H.transpose() + R;
-    Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
+    Eigen::Matrix<double, 3, STATE_DIM> H = Eigen::Matrix<double, 3, STATE_DIM>::Zero();
+    H(0, AX) = 1.0;
+    H(0, YAW_RATE) = -2.0 * w * rx;
+    H(0, YAW_ACC) = -ry;
+    H(0, B_AX) = 1.0;
+
+    H(1, AY) = 1.0;
+    H(1, YAW_RATE) = -2.0 * w * ry;
+    H(1, YAW_ACC) = rx;
+    H(1, B_AY) = 1.0;
+
+    H(2, YAW_RATE) = 1.0;
+    H(2, B_YAW_RATE) = 1.0;
+
+    Eigen::Matrix3d S = H * P_ * H.transpose() + R;
+    Eigen::Matrix<double, STATE_DIM, 3> K = P_ * H.transpose() * S.inverse();
 
     x_ += K * (z - h);
 
-    // Joseph Form covariance update for numerical stability: P = (I - KH) * P * (I - KH)^T + K * R * K^T
-    Eigen::MatrixXd I_KH = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) - K * H;
+    // 수치적 안정성을 위한 Joseph Form 공분산 업데이트: P = (I - KH) * P * (I - KH)^T + K * R * K^T
+    StateMatrix I_KH = StateMatrix::Identity() - K * H;
     P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
@@ -199,21 +295,24 @@ StateFrame EkfCore::getState() const {
 }
 
 void EkfCore::handleTimeJump(double timestamp) {
-    std::cout << "\033[1;33m[EkfCore] Time jump detected (dt: " << (timestamp - last_time_) << "s). Resetting filter state.\033[0m" << std::endl;
+    if (log_warn_) {
+        std::ostringstream oss;
+        oss << "[EkfCore] Time jump detected (dt: " << (timestamp - last_time_) << "s). Resetting filter state.";
+        log_warn_(oss.str());
+    }
 
     last_time_ = timestamp;
 
-    // Reset covariance to initial state to allow re-convergence
+    // 재수렴을 허용하기 위해 공분산을 초기 상태로 리셋
     P_.setIdentity();
     P_.block<2, 2>(X, X) *= 0.5;
     P_(YAW, YAW) *= 0.1;
 
-    // Maintain current state but clear velocities and biases after the jump
+    // 타임점프 후 현재 상태는 유지하되 속도와 바이어스는 클리어
     x_(VX) = 0.0; x_(VY) = 0.0;
     x_(AX) = 0.0; x_(AY) = 0.0;
-    x_(YAW_RATE) = 0.0;
-    // Reset IMU biases: a time jump (bag-loop / sim restart) invalidates
-    // previously converged bias estimates, so start fresh.
+    x_(YAW_RATE) = 0.0; x_(YAW_ACC) = 0.0;
+    // IMU 바이어스 리셋: 시간 점프(백 루프 / 시뮬레이션 재시작)는 이전 바이어스 추정치를 무효화하므로 처음부터 다시 시작
     x_(B_AX) = 0.0; x_(B_AY) = 0.0; x_(B_YAW_RATE) = 0.0;
 }
 

@@ -4,7 +4,7 @@
   <version>0.0.1</version>
   <description>
     Vision-IMU-Wheel localization for CarMaker.
-    Modules: FeatureExtractor, EKF SensorFusion, MapMatcher, Visualizer.
+    Modules: FeatureExtractor, EKF SensorFusion, Feature Registration, Visualizer.
   </description>
 
   <maintainer email="admin@example.com">admin</maintainer>

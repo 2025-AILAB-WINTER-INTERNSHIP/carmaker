@@ -1,4 +1,4 @@
-#include "carmaker_localization/osm_map_loader.h"
+#include "carmaker_localization/osm_feature_loader.h"
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -9,14 +9,14 @@
 
 namespace carmaker_localization {
 
-OsmMapLoader::OsmMapLoader(double resolution)
+OsmFeatureLoader::OsmFeatureLoader(double resolution)
     : resolution_(resolution) {
 }
 
-bool OsmMapLoader::load(const std::string& path) {
+bool OsmFeatureLoader::load(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "[OsmMapLoader] Failed to open OSM map file: " << path << std::endl;
+        std::cerr << "[OsmFeatureLoader] Failed to open OSM map file: " << path << std::endl;
         return false;
     }
 
@@ -132,7 +132,7 @@ bool OsmMapLoader::load(const std::string& path) {
     // Voxel Grid Sampling
     // Each way is rasterised onto the resolution_ grid.
     //   Class 1 (lane / parking_spot): polyline with 0.1m physical width
-    //   Class 2 (ev_charging):         filled polygon
+    //   Class 2 (ev_charging):         polyline boundary segments (edge-to-edge)
     //   Class 3 (boundary):            filled polygon (inside is free space)
     // ----------------------------------------------------------------
     features_.clear();
@@ -162,15 +162,20 @@ bool OsmMapLoader::load(const std::string& path) {
                 sampleSegment(a, b, 0.05, resolution_, lane_voxels);
             }
         } else if (class_id == 2 && way.nodes.size() >= 3) {
-            // Landmark: sample the entire filled polygon
-            std::vector<Point2d> poly;
-            poly.reserve(way.nodes.size());
-            for (int nid : way.nodes) {
-                auto it = node_map.find(nid);
-                if (it != node_map.end())
-                    poly.push_back({it->second.x, it->second.y});
+            // Landmark: sample only the boundary segments of the polygon (edge-to-edge)
+            size_t num_segments = way.nodes.size();
+            if (way.nodes.front() == way.nodes.back()) {
+                num_segments--;
             }
-            samplePolygon(poly, resolution_, landmark_voxels);
+            for (size_t i = 0; i < num_segments; ++i) {
+                auto it_a = node_map.find(way.nodes[i]);
+                auto it_b = node_map.find(way.nodes[(i + 1) % way.nodes.size()]);
+                if (it_a == node_map.end() || it_b == node_map.end()) continue;
+
+                Point2d a{it_a->second.x, it_a->second.y};
+                Point2d b{it_b->second.x, it_b->second.y};
+                sampleSegment(a, b, 0.05, resolution_, landmark_voxels);
+            }
         } else if (class_id == 3 && way.nodes.size() >= 3) {
             // Boundary: sample the entire filled polygon (inside)
             std::vector<Point2d> poly;
@@ -235,16 +240,16 @@ bool OsmMapLoader::load(const std::string& path) {
         occupancy_grid_.data = std::move(grid_data);
     }
 
-    std::cout << "[OsmMapLoader] Loaded " << features_.size()
+    std::cout << "[OsmFeatureLoader] Loaded " << features_.size()
               << " features, boundary map: " << occupancy_grid_.info.width << "x" << occupancy_grid_.info.height
               << " (voxel resolution: " << resolution_ << " m) from OSM map." << std::endl;
     return true;
 }
 
-std::vector<MapFeature> OsmMapLoader::queryNear(double x, double y, double radius) const {
+std::vector<ReferenceFeature> OsmFeatureLoader::queryNear(double x, double y, double radius) const {
     if (radius < 0.0) return features_;
 
-    std::vector<MapFeature> result;
+    std::vector<ReferenceFeature> result;
     result.reserve(features_.size() / 10);
 
     double r_sq = radius * radius;
@@ -255,7 +260,7 @@ std::vector<MapFeature> OsmMapLoader::queryNear(double x, double y, double radiu
     return result;
 }
 
-nav_msgs::OccupancyGrid OsmMapLoader::getOccupancyGrid() const {
+nav_msgs::OccupancyGrid OsmFeatureLoader::getOccupancyGrid() const {
     return occupancy_grid_;
 }
 

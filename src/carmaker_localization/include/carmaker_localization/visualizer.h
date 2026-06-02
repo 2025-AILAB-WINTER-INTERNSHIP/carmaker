@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <carmaker_msgs/LocalFeatures.h>
-#include "carmaker_localization/map_loader_base.h"
+#include "carmaker_localization/feature_loader_base.h"
 
 namespace carmaker_localization {
 
@@ -28,10 +28,10 @@ public:
     void publishObservation(const std::string& channel_name, const carmaker_msgs::LocalFeatures& features);
     void publishSvmImage(const cv::Mat& svm_image, const std::vector<cv::Point>& seam_line_points = {});
     void publishBevImage(const std::string& camera_name, const cv::Mat& bev_image, const std::string& type);
-    void publishMapFeatures(const std::vector<MapFeature>& map_features);
+    void publishReferenceFeatures(const std::vector<ReferenceFeature>& reference_features);
     void clearCorrection();
     void clearEstimation();
-    void clearMapFeatures();
+    void clearReferenceFeatures();
     void clearObservation(const std::string& channel_name);
     void reset();
 
