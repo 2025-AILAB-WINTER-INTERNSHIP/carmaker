@@ -31,7 +31,7 @@ graph TD
     subgraph "carmaker_localization"
         EB["EKF Buffer<br/>(Rewind & Replay)"]
         FE["FeatureExtractor<br/>(Anisotropic Model)"]
-        MM["MapMatcher<br/>(ICP)"]
+        MM["FeatureRegistration<br/>(ICP)"]
     end
 
     IMU -->|Prediction| EB
@@ -46,9 +46,9 @@ graph TD
 | 항목 | 결정 | 근거 |
 | --- | --- | --- |
 | **보정 방식** | 독립 비동기 업데이트 | Single Point of Failure 방지 및 처리 지연(Latency) 최소화 |
-| **지연 보상** | Rewind & Replay | 비전 처리 지연(100ms+) 동안 발생한 이동량을 과거 시점에서 정확히 보정 |
+| **지연 보상** | Rewind & Replay / Kinematic bicycle 선도 보상 | 비전 처리 지연 동안 발생한 차량 이동량을 후륜 축 기준 기구학 모델로 과거 시점부터 선도 보상 |
 | **공분산 모델** | 동적 비등방성 모델 | 카메라 설치 각도 및 거리에 따른 투영 오차의 기하학적 반영 |
-| **안정성 가드** | Trace 기반 발산 감지 | 센서 이상치나 매칭 실패로 인한 필터 붕괴 시 자가 치유(Self-healing) |
+| **안정성 가드** | Validation Gate, Rate Limiter, Trace 발산 감지 | 오정합 차단(Validation Gate), 급격한 거동 도약 방지(Rate Limiter), 필터 오염 자가 치유(Trace 리셋) |
 
 ---
 
@@ -65,7 +65,7 @@ graph TD
 ### 2.2 측정치 단위 공분산 (Update-level)
 
 - **휠 속도 노이즈 ($R_{wheel}$):** 추정 속도($V_x$)와 휠 속도의 차이가 `slip_threshold`를 넘을 경우 노이즈를 10배 인플레이션.
-- **비전 보정 노이즈 ($R_{vision}$):** ICP 매칭에 성공한 인라이어(Inlier) 특징점들의 공분산을 평균하여 산출. 인라이어가 적을수록 불확실성이 자동으로 증가.
+- **비전 보정 노이즈 ($R_{vision}$):** ICP 정합에 성공한 인라이어(Inlier) 특징점들의 정보 행렬(Hessian) 역행렬에 정합 신뢰도를 반영하여 산출. 정합 품질이 낮거나 방향성 제약이 없을 경우 공분산 자동 인플레이션.
 
 ---
 
@@ -73,9 +73,11 @@ graph TD
 
 ### 3.1 EKF Sensor Fusion (EkfCore)
 
-**상태 벡터 (11-state):** $\mathbf{x} = [x, y, \psi, v_x, v_y, \dot\psi, b_{ax}, b_{ay}, b_{gz}, \delta, s_w]^T$
+**상태 벡터 (11-state):** $\mathbf{x} = [x, y, v_x, v_y, a_x, a_y, \psi, \dot\psi, b_{ax}, b_{ay}, b_{\dot\psi}]^T$
 
-- **$s_w$ (Scale Factor):** 휠 속도 계수를 상태 변수에 포함하여 온라인 캘리브레이션 수행.
+- **기준 좌표계 설정:**
+  - 위치($x, y$), 속도($v_x, v_y$), 요각($\psi$), 요레이트($\dot\psi$)는 차량 후방 범퍼 중앙(**Fr1A**) 기준.
+  - 가속도($a_x, a_y$)는 기구학 구속 조건의 수치적 안정성(강체 회전으로 인한 외력 영향 배제)을 위해 **후륜 축(Rear Axle) 중심** 기준.
 
 **수학적 최적화 및 강건성:**
 
@@ -85,12 +87,16 @@ graph TD
    - 비전 데이터 수신 시 타임스탬프 기반 과거 상태 조회.
    - 해당 시점에서 보정 업데이트 수행.
    - 업데이트 시점부터 현재까지 버퍼링된 입력을 재적용(Re-propagation)하여 최신 상태 도출.
+4. **보정치 변화율 제한기 (Rate Limiter):**
+   - EKF 보정 갱신값($dx$)이 급격하게 업데이트되어 차량 위치가 도약(Jump)하는 현상을 막기 위해, 스텝당 최대 허용 위치 보정량(`max_position_step`) 및 요각 보정량(`max_yaw_step`)을 설정하여 갱신량을 클램핑(Clamping)함으로써 부드러운 수렴을 보장.
 
-### 3.2 FeatureExtractor & MapMatcher
+### 3.2 FeatureExtractor & FeatureRegistration
 
 - **Fisheye 모델 대응:** 시뮬레이터 환경의 특성을 고려하여 왜곡 계수 $D=0$ (Ideal 모델) 적용.
 - **Single-pass Remap:** 왜곡 보정과 BEV 투영을 단일 LUT로 통합하여 연산 효율 최적화.
-- **Independent Match:** 각 카메라 채널은 독립적인 ICP Matcher를 소유하며, 타 채널의 지연에 간섭받지 않고 보정 데이터 발행.
+- **Independent Registration:** 각 카메라 채널은 독립적인 ICP Registration Engine을 소유하며, 타 채널의 지연에 간섭받지 않고 보정 데이터 발행.
+- **유효성 검증 게이트 (Validation Gate):**
+  - EKF 예측치 기준 최대 허용 정합 위치 편차(`max_position_dev`) 및 요각 편차(`max_yaw_dev`)를 설정하여, 로컬 미니마 오정합(Outlier/False Positive) 발생 시 보정치를 완전히 기각(Reject)함으로써 필터 안정성을 보호.
 
 ---
 
