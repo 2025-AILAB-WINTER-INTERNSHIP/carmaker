@@ -44,6 +44,8 @@ GlobalPlanningResult GlobalPlanner::plan(
   const auto planning_start = Clock::now();
   result.status = hybrid_astar_->plan(start, goal, map);
   result.planning_time = elapsedSeconds(planning_start);
+  result.expanded_nodes = hybrid_astar_->getExpandedNodes();
+  result.search_iterations = hybrid_astar_->getSearchIterations();
 
   if (!result.success()) {
     result.total_time = elapsedSeconds(total_start);

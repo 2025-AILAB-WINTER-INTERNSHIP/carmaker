@@ -641,6 +641,18 @@ TrajectoryDiagnostic PostProcessor::validateTrajectory(const Path& path, std::ve
     return diag;
   }
 
+  // Initialize to clean slate (no violations) for a non-empty trajectory
+  diag.is_valid = true;
+  diag.curvature_ok = true;
+  diag.yaw_ok = true;
+  diag.time_ok = true;
+  diag.curv_violations = 0;
+  diag.yaw_violations = 0;
+  diag.time_violations = 0;
+  diag.max_curv_violation = 0.0;
+  diag.max_yaw_error_rad = 0.0;
+  diag.max_time_error_sec = 0.0;
+
   validateCurvature(path, diag, logs);
   validateYawAlignment(path, diag, logs);
   validateTimestamps(path, diag, logs);
@@ -662,7 +674,7 @@ void PostProcessor::validateCurvature(const Path& path, TrajectoryDiagnostic& di
   if (!diag.curvature_ok) {
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-      "Curvature check failed: %zu points exceeded max curvature limit (max_kappa: %.4f). Max violation: %.4f rad/m.",
+      "Curvature check failed: %d points exceeded max curvature limit (max_kappa: %.4f). Max violation: %.4f rad/m.",
       diag.curv_violations, max_kappa_, diag.max_curv_violation);
     logs.push_back({"WARN", std::string(buf)});
   }
@@ -728,7 +740,7 @@ void PostProcessor::validateYawAlignment(const Path& path, TrajectoryDiagnostic&
   if (!diag.yaw_ok) {
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-      "Yaw alignment check failed: %zu points exceeded tolerance of %.1f deg. Max error: %.2f deg.",
+      "Yaw alignment check failed: %d points exceeded tolerance of %.1f deg. Max error: %.2f deg.",
       diag.yaw_violations, rad2deg(yaw_tol), rad2deg(diag.max_yaw_error_rad));
     logs.push_back({"WARN", std::string(buf)});
   }
@@ -766,7 +778,7 @@ void PostProcessor::validateTimestamps(const Path& path, TrajectoryDiagnostic& d
   if (!diag.time_ok) {
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-      "Timestamp consistency check failed: %zu points had non-monotonic or inconsistent timestamps. Max time error: %.4f s.",
+      "Timestamp consistency check failed: %d points had non-monotonic or inconsistent timestamps. Max time error: %.4f s.",
       diag.time_violations, diag.max_time_error_sec);
     logs.push_back({"WARN", std::string(buf)});
   }

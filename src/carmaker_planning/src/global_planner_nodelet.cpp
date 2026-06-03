@@ -273,8 +273,17 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
 
     double len = result.path.empty() ? 0.0 : result.path.back().s;
 
-    NODELET_INFO("Plan success! Planning: %.3f s, Smoothing: %.3f s, Total: %.3f s, Path Length: %.2f m",
-                 result.planning_time, result.smoothing_time, result.total_time, len);
+    double post_time = 0.0;
+    if (result.resampling_time > 0.0) post_time += result.resampling_time;
+    if (result.smoothing_time > 0.0) post_time += result.smoothing_time;
+    if (result.profiling_time > 0.0) post_time += result.profiling_time;
+
+    NODELET_INFO("Plan success! Planning (A*): %.2f ms, Post-Process: %.2f ms (Resample: %.2f ms, Smooth: %.2f ms, Profile: %.2f ms), Total: %.2f ms, Path Length: %.2f m",
+                 result.planning_time * 1000.0, post_time * 1000.0,
+                 (result.resampling_time > 0.0 ? result.resampling_time : 0.0) * 1000.0,
+                 (result.smoothing_time > 0.0 ? result.smoothing_time : 0.0) * 1000.0,
+                 (result.profiling_time > 0.0 ? result.profiling_time : 0.0) * 1000.0,
+                 result.total_time * 1000.0, len);
 
     // Publish path and search tree
     publishVisualization(result.path);
@@ -315,15 +324,15 @@ void GlobalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStat
   stat.add("Total Plans Requested", total_plans_.load());
   stat.add("Successful Plans", successful_plans_.load());
   stat.add("Failed Plans", failed_plans_.load());
-  stat.add("Last Planning Time (s)", p_time);
-  stat.add("Last Path Length (m)", p_len);
   stat.add("Last Status", status);
+  stat.add("Last Path Length (m)", p_len);
+  stat.add("Last Planning Time (s)", p_time);
   stat.add("A* Search Time (s)", last_res.planning_time);
-  stat.add("Smoothing Time (s)", last_res.smoothing_time);
   stat.add("Resampling Time (s)", last_res.resampling_time);
+  stat.add("Smoothing Time (s)", last_res.smoothing_time);
   stat.add("Velocity Profiling Time (s)", last_res.profiling_time);
-  stat.add("Expanded Nodes", last_res.expanded_nodes);
   stat.add("Search Iterations", last_res.search_iterations);
+  stat.add("Expanded Nodes", last_res.expanded_nodes);
 
   // Expose structured trajectory physical violation metrics to ROS Diagnostics
   stat.add("Trajectory Valid", last_res.diagnostic.is_valid ? "True" : "False");
@@ -331,7 +340,7 @@ void GlobalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStat
   stat.add("Yaw Violations Count", last_res.diagnostic.yaw_violations);
   stat.add("Timestamp Violations Count", last_res.diagnostic.time_violations);
   stat.add("Max Curvature Violation (rad/m)", last_res.diagnostic.max_curv_violation);
-  stat.add("Max Yaw Error (deg)", last_res.diagnostic.max_yaw_error_rad * 180.0 / M_PI);
+  stat.add("Max Yaw Error (deg)", last_res.diagnostic.max_yaw_error_rad < 0.0 ? -1.0 : last_res.diagnostic.max_yaw_error_rad * 180.0 / M_PI);
   stat.add("Max Time Error (s)", last_res.diagnostic.max_time_error_sec);
 }
 

@@ -124,25 +124,25 @@ inline const char* statusString(PlanningStatus s) {
 }
 
 struct TrajectoryDiagnostic {
-  bool is_valid = true;
-  bool curvature_ok = true;
-  bool yaw_ok = true;
-  bool time_ok = true;
-  size_t curv_violations = 0;
-  size_t yaw_violations = 0;
-  size_t time_violations = 0;
-  double max_curv_violation = 0.0;
-  double max_yaw_error_rad = 0.0;
-  double max_time_error_sec = 0.0;
+  bool is_valid = false;
+  bool curvature_ok = false;
+  bool yaw_ok = false;
+  bool time_ok = false;
+  int curv_violations = -1;
+  int yaw_violations = -1;
+  int time_violations = -1;
+  double max_curv_violation = -1.0;
+  double max_yaw_error_rad = -1.0;
+  double max_time_error_sec = -1.0;
 };
 
 struct GlobalPlanningResult {
   PlanningStatus status = PlanningStatus::INVALID;
   Path path;
   Path raw_path;
-  double planning_time = 0.0, smoothing_time = 0.0;
-  double resampling_time = 0.0, profiling_time = 0.0, total_time = 0.0;
-  int expanded_nodes = 0, search_iterations = 0;
+  double planning_time = -1.0, smoothing_time = -1.0;
+  double resampling_time = -1.0, profiling_time = -1.0, total_time = -1.0;
+  int expanded_nodes = -1, search_iterations = -1;
   std::vector<std::pair<std::string, std::string>> logs;
   TrajectoryDiagnostic diagnostic;
 
@@ -163,14 +163,14 @@ struct GlobalPlanningResult {
 
 struct GlobalPlanningDiagnostic {
   PlanningStatus status = PlanningStatus::INVALID;
-  double total_time = 0.0;
-  double planning_time = 0.0;
-  double smoothing_time = 0.0;
-  double resampling_time = 0.0;
-  double profiling_time = 0.0;
-  int expanded_nodes = 0;
-  int search_iterations = 0;
-  double path_length = 0.0;
+  double total_time = -1.0;
+  double planning_time = -1.0;
+  double smoothing_time = -1.0;
+  double resampling_time = -1.0;
+  double profiling_time = -1.0;
+  int expanded_nodes = -1;
+  int search_iterations = -1;
+  double path_length = -1.0;
   TrajectoryDiagnostic diagnostic;
 
   GlobalPlanningDiagnostic() = default;
@@ -185,7 +185,7 @@ struct GlobalPlanningDiagnostic {
       profiling_time(res.profiling_time),
       expanded_nodes(res.expanded_nodes),
       search_iterations(res.search_iterations),
-      path_length(res.path.empty() ? 0.0 : res.path.back().s),
+      path_length(res.path.empty() ? -1.0 : res.path.back().s),
       diagnostic(res.diagnostic) {}
 
   const char* statusString() const { return carmaker_planning::statusString(status); }

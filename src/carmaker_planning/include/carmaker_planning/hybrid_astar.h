@@ -102,6 +102,8 @@ public:
   const Path& getPath() const { return path_; }
   std::vector<State> getSearchTree() const;
   std::vector<std::pair<State, State>> getTreeBranches() const;
+  int getSearchIterations() const { return search_iterations_; }
+  int getExpandedNodes() const { return expanded_nodes_; }
 
 private:
   void resetSearch(GlobalMap& map);
@@ -127,6 +129,8 @@ private:
   Path path_;
   int width_=0, height_=0, angle_size_=0;
   double theta_res_;
+  int search_iterations_ = -1;
+  int expanded_nodes_ = -1;
 };
 
 } // namespace carmaker_planning

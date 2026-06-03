@@ -248,6 +248,8 @@ HybridAStar::HybridAStar(const GlobalMainConfig & config, const std::string& log
 PlanningStatus HybridAStar::plan(const State & start, const State & goal, GlobalMap & map)
 {
   resetSearch(map);
+  search_iterations_ = -1;
+  expanded_nodes_ = -1;
 
   GlobalNode3D * start_node = initializeStartNode(start, goal, map);
   if (!start_node) {
@@ -259,9 +261,12 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
   double min_h = start_node->h_cost;
 
   int iter = 0;
+  int closed_count = 0;
   const int max_iter = config_.max_iterations;
   const double max_time = config_.max_planning_time;
   auto start_clock = std::chrono::steady_clock::now();
+
+  PlanningStatus status = PlanningStatus::FAILURE_NO_PATH;
 
   while (!open_set_.empty() && iter < max_iter) {
     iter++;
@@ -271,7 +276,8 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
       if (std::chrono::duration<double>(current_clock - start_clock).count() > max_time) {
         std::cerr << "[HybridAStar] Timeout reached (" << max_time << "s)" << std::endl;
         tracePath(best_node);
-        return PlanningStatus::FAILURE_TIMEOUT;
+        status = PlanningStatus::FAILURE_TIMEOUT;
+        break;
       }
     }
 
@@ -280,6 +286,7 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
 
     if (current->is_closed) {continue;}
     current->is_closed = true;
+    closed_count++;
 
     if (current->h_cost < min_h) {
       min_h = current->h_cost;
@@ -291,25 +298,39 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
 
     if (dist_to_goal < config_.goal_tolerance.xy && angle_to_goal < config_.goal_tolerance.theta) {
       tracePath(current);
-      return PlanningStatus::SUCCESS_OPTIMAL;
+      status = PlanningStatus::SUCCESS_OPTIMAL;
+      break;
     }
 
     if (iter % config_.analytic_expansion_ratio == 0) {
       double dummy_f;
       if (tryAnalyticExpansion(current, goal, map, dummy_f)) {
-        return PlanningStatus::SUCCESS_OPTIMAL;
+        status = PlanningStatus::SUCCESS_OPTIMAL;
+        break;
       }
     }
 
     expandNode(current, goal, map);
   }
 
-  std::cerr << "[HybridAStar] Goal not reached. Returning Best-Effort path (min_h: " << min_h << "m)" << std::endl;
-  tracePath(best_node);
+  if (status != PlanningStatus::SUCCESS_OPTIMAL) {
+    std::cerr << "[HybridAStar] Goal not reached. Returning Best-Effort path (min_h: " << min_h << "m)" << std::endl;
+    tracePath(best_node);
+    if (best_node != start_node) {
+      status = PlanningStatus::SUCCESS_BEST_EFFORT;
+    } else if (status == PlanningStatus::FAILURE_TIMEOUT || iter >= max_iter) {
+      status = PlanningStatus::FAILURE_TIMEOUT;
+    } else {
+      status = PlanningStatus::FAILURE_NO_PATH;
+    }
+  }
 
-  if (iter >= max_iter) return PlanningStatus::FAILURE_TIMEOUT;
-  if (open_set_.empty()) return PlanningStatus::FAILURE_NO_PATH;
-  return PlanningStatus::SUCCESS_BEST_EFFORT;
+  if (iter > 0) {
+    expanded_nodes_ = closed_count;
+    search_iterations_ = iter;
+  }
+
+  return status;
 }
 
 void HybridAStar::resetSearch(GlobalMap & map)

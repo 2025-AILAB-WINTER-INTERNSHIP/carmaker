@@ -70,7 +70,7 @@ global_planner:
   heuristic_scale: 2
   step_size: 0.5
   next_node_num: 7
-  analytic_expansion_ratio: 10 # Check Reeds-Shepp shot every 10 iterations
+  analytic_expansion_ratio: 1000 # Check Reeds-Shepp shot every 1000 iterations
   weights:
     turn: 2.0
     reverse: 5.0 # Enable reverse paths by lowering penalty
