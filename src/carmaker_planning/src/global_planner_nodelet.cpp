@@ -339,9 +339,17 @@ void GlobalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStat
   stat.add("Curvature Violations Count", last_res.diagnostic.curv_violations);
   stat.add("Yaw Violations Count", last_res.diagnostic.yaw_violations);
   stat.add("Timestamp Violations Count", last_res.diagnostic.time_violations);
+  stat.add("Velocity Violations Count", last_res.diagnostic.vel_violations);
+  stat.add("Acceleration Violations Count", last_res.diagnostic.acc_violations);
+  stat.add("Jerk Violations Count", last_res.diagnostic.jerk_violations);
+  stat.add("Steering Velocity Violations Count", last_res.diagnostic.steer_vel_violations);
   stat.add("Max Curvature Violation (rad/m)", last_res.diagnostic.max_curv_violation);
   stat.add("Max Yaw Error (deg)", last_res.diagnostic.max_yaw_error_rad < 0.0 ? -1.0 : last_res.diagnostic.max_yaw_error_rad * 180.0 / M_PI);
   stat.add("Max Time Error (s)", last_res.diagnostic.max_time_error_sec);
+  stat.add("Max Velocity Violation (m/s)", last_res.diagnostic.max_vel_violation);
+  stat.add("Max Acceleration Violation (m/s^2)", last_res.diagnostic.max_acc_violation);
+  stat.add("Max Jerk Violation (m/s^3)", last_res.diagnostic.max_jerk_violation);
+  stat.add("Max Steering Velocity Violation (rad/s)", last_res.diagnostic.max_steer_vel_violation);
 }
 
 void GlobalPlannerNodelet::diagTimerCallback(const ros::WallTimerEvent&) {

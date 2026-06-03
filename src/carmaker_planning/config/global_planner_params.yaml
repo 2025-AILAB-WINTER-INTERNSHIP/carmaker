@@ -98,7 +98,7 @@ global_post_processing:
   resampler:
     resolution: 0.1
     yaw_blending_width: 5 # number of points for blending at cusp transitions
-    use_spline: true # Set to true to use Cubic Spline resampling, false for Linear
+    use_spline: false # Set to true to use Cubic Spline resampling, false for Linear
     cusp_angular_threshold_deg: 20.0 # Heading difference limit (in deg) to skip yaw blending at cusp transitions
   profiler:
     max_vel: 2.0 # m/s 7.2 km/h

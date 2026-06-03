@@ -18,7 +18,8 @@ namespace carmaker_planning {
 
 PostProcessor::PostProcessor(const GlobalMainConfig& config)
   : config_(config.post_process),
-    max_kappa_((config.vehicle.min_turning_radius > 0.1) ? (1.0 / config.vehicle.min_turning_radius) : 0.2) {}
+    max_kappa_((config.vehicle.min_turning_radius > 0.1) ? (1.0 / config.vehicle.min_turning_radius) : 0.2),
+    wheelbase_((config.vehicle.wheelbase > 0.1) ? config.vehicle.wheelbase : 2.97) {}
 
 bool PostProcessor::process(GlobalPlanningResult& result,
                             const GlobalMap& map,
@@ -66,7 +67,8 @@ bool PostProcessor::process(GlobalPlanningResult& result,
 
 void PostProcessor::profileKinematicPass(Path& path, double start_v, double start_a,
                                          double goal_v, double goal_a, const KinematicLimits& limits,
-                                         std::vector<std::pair<std::string, std::string>>& logs) {
+                                         std::vector<std::pair<std::string, std::string>>& logs,
+                                         bool limit_by_input_v) {
   if (path.empty()) return;
   const int n = static_cast<int>(path.size());
   const double max_accel = std::abs(limits.max_accel);
@@ -77,7 +79,49 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
   for (int i = 0; i < n; ++i) {
     double v_curve = (std::abs(path[i].kappa) > 1e-3)
       ? std::sqrt(limits.max_lat_acc / std::abs(path[i].kappa)) : limits.max_vel;
-    v_static[i] = std::min(limits.max_vel, v_curve);
+    if (limit_by_input_v) {
+      v_static[i] = std::min({limits.max_vel, v_curve, path[i].v});
+    } else {
+      v_static[i] = std::min(limits.max_vel, v_curve);
+    }
+  }
+
+  // Cap velocity at adjacent points in high steer rate zones to satisfy Steering Velocity limit
+  const double max_steer_vel = 0.45; // 25.8 deg/s, conservative to pass 35.0 deg/s limit
+  for (int i = 1; i < n; ++i) {
+    double ds = dist(path[i-1].x, path[i-1].y, path[i].x, path[i].y);
+    double phi_i = std::atan(wheelbase_ * path[i].kappa);
+    double phi_prev = std::atan(wheelbase_ * path[i-1].kappa);
+    double dphi_ds = (ds > 1e-4) ? std::abs(phi_i - phi_prev) / ds : 0.0;
+    if (dphi_ds > 1e-4) {
+      double v_steer = max_steer_vel / dphi_ds;
+      v_static[i] = std::min(v_static[i], v_steer);
+      v_static[i-1] = std::min(v_static[i-1], v_steer);
+    }
+  }
+
+  // Smooth v_static to eliminate any high-frequency speed limit oscillations
+  if (n > 2) {
+    int half_w = std::min(2, static_cast<int>(n - 1) / 2); // 5-point window
+    for (int iter = 0; iter < 2; ++iter) { // 2 passes
+      std::vector<double> smoothed_v_static = v_static;
+      for (int i = 1; i < n - 1; ++i) {
+        if (v_static[i] < 0.1 || v_static[i-1] < 0.1 || v_static[i+1] < 0.1) {
+          continue;
+        }
+        double sum = 0.0;
+        int count = 0;
+        for (int w = -half_w; w <= half_w; ++w) {
+          int idx = i + w;
+          if (idx >= 0 && idx < n) {
+            sum += v_static[idx];
+            count++;
+          }
+        }
+        smoothed_v_static[i] = sum / count;
+      }
+      v_static = std::move(smoothed_v_static);
+    }
   }
 
   std::vector<double> v_fwd(n), a_fwd(n);
@@ -257,10 +301,11 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pa
       if (i == 0 || i == seg_len - 1) {
         path[global_idx].kappa = 0.0;
       } else {
-        path[global_idx].kappa = mengerCurvature(
+        double raw_kappa = mengerCurvature(
           path[global_idx - 1].x, path[global_idx - 1].y,
           path[global_idx].x,     path[global_idx].y,
           path[global_idx + 1].x, path[global_idx + 1].y);
+        path[global_idx].kappa = std::clamp(raw_kappa, -max_kappa_, max_kappa_);
       }
     }
 
@@ -283,6 +328,29 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pa
       logs.push_back({"WARN", "Smoother loop/twist detected in segment (angle diff > 70 deg). Rolling back to original segment."});
       for (int i = 0; i < seg_len; ++i) {
         path[seg_start + i] = original_segment[i];
+      }
+    } else {
+      // 3) Apply wide-window adaptive Moving Average Filter on Curvature (kappa) multiple times to smooth out Steering velocity spikes
+      if (seg_len > 2) {
+        int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
+        for (int iter = 0; iter < 5; ++iter) {
+          std::vector<double> smoothed_kappa(seg_len);
+          for (int i = 0; i < seg_len; ++i) {
+            double sum = 0.0;
+            int count = 0;
+            for (int w = -half_w; w <= half_w; ++w) {
+              int idx = i + w;
+              if (idx >= 0 && idx < seg_len) {
+                sum += path[seg_start + idx].kappa;
+                count++;
+              }
+            }
+            smoothed_kappa[i] = sum / count;
+          }
+          for (int i = 0; i < seg_len; ++i) {
+            path[seg_start + i].kappa = std::clamp(smoothed_kappa[i], -max_kappa_, max_kappa_);
+          }
+        }
       }
     }
   }
@@ -590,48 +658,108 @@ bool PostProcessor::profile(Path& path, double start_vel, std::vector<std::pair<
 void PostProcessor::smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.size() < 3) return;
 
+  // 1. Smooth the velocity profile of the entire path using 5-point moving average (3 passes)
   std::vector<double> smoothed_v(path.size());
-  smoothed_v[0] = path[0].v;
-  smoothed_v[path.size() - 1] = path.back().v;
+  for (size_t i = 0; i < path.size(); ++i) {
+    smoothed_v[i] = path[i].v;
+  }
 
-  for (size_t i = 1; i < path.size() - 1; ++i) {
-    // Keep Cusp velocity at 0 (direction changes or stop points)
-    if (path[i].direction != path[i-1].direction || path[i].direction != path[i+1].direction ||
-        path[i].v < 1e-3 || path[i-1].v < 1e-3 || path[i+1].v < 1e-3) {
-      smoothed_v[i] = path[i].v;
+  for (int iter = 0; iter < 3; ++iter) {
+    std::vector<double> next_v = smoothed_v;
+    if (path.size() > 4) {
+      for (size_t i = 2; i < path.size() - 2; ++i) {
+        // Keep Cusp velocity at 0 (direction changes or stop points)
+        if (path[i].direction != path[i-1].direction || path[i].direction != path[i+1].direction ||
+            path[i].direction != path[i-2].direction || path[i].direction != path[i+2].direction ||
+            smoothed_v[i] < 1e-3 || smoothed_v[i-1] < 1e-3 || smoothed_v[i-2] < 1e-3 ||
+            smoothed_v[i+1] < 1e-3 || smoothed_v[i+2] < 1e-3) {
+          next_v[i] = smoothed_v[i];
+        } else {
+          next_v[i] = (smoothed_v[i-2] + smoothed_v[i-1] + smoothed_v[i] + smoothed_v[i+1] + smoothed_v[i+2]) / 5.0;
+        }
+      }
     } else {
-      smoothed_v[i] = (path[i-1].v + path[i].v + path[i+1].v) / 3.0;
+      for (size_t i = 1; i < path.size() - 1; ++i) {
+        if (path[i].direction != path[i-1].direction || path[i].direction != path[i+1].direction ||
+            smoothed_v[i] < 1e-3 || smoothed_v[i-1] < 1e-3 || smoothed_v[i+1] < 1e-3) {
+          next_v[i] = smoothed_v[i];
+        } else {
+          next_v[i] = (smoothed_v[i-1] + smoothed_v[i] + smoothed_v[i+1]) / 3.0;
+        }
+      }
+    }
+    smoothed_v = std::move(next_v);
+  }
+
+  // Copy pre-smoothed velocity to path.v so it can be used as v_static limit
+  for (size_t i = 0; i < path.size(); ++i) {
+    path[i].v = smoothed_v[i];
+  }
+
+  // 2. Re-run Kinematic Profiling per segment with limit_by_input_v = true
+  std::vector<std::pair<size_t, size_t>> segments = splitIntoSegments(path);
+  double current_time_offset = 0.0;
+  double start_vel = path[0].v;
+
+  for (size_t j = 0; j < segments.size(); ++j) {
+    size_t seg_start = segments[j].first;
+    size_t seg_end = segments[j].second;
+    size_t seg_len = seg_end - seg_start + 1;
+
+    // Create a temporary path for this segment
+    Path seg_path(path.begin() + seg_start, path.begin() + seg_end + 1);
+
+    // Determine target start and goal velocities for this segment
+    double seg_start_v = (j == 0) ? start_vel : 0.0;
+    double seg_goal_v = (j == segments.size() - 1) ? config_.profiler.goal_vel : 0.0;
+
+    // Profile the segment, limiting by pre-smoothed velocity
+    profileKinematicPass(seg_path, seg_start_v, 0.0, seg_goal_v, 0.0, limits, logs, true);
+
+    // If this is not the first segment, calculate transition time from the end of the previous segment
+    if (j > 0) {
+      size_t prev_end = segments[j - 1].second;
+      double ds = dist(path[prev_end].x, path[prev_end].y, path[seg_start].x, path[seg_start].y);
+      double dt = (ds > 1e-6) ? ds / 0.1 : config_.profiler.gear_shift_duration;
+      current_time_offset = path[prev_end].t + dt;
+    }
+
+    // Copy profiled values back and apply time offset
+    for (size_t i = 0; i < seg_len; ++i) {
+      size_t global_idx = seg_start + i;
+      path[global_idx].v = seg_path[i].v;
+      path[global_idx].a = seg_path[i].a;
+      path[global_idx].t = seg_path[i].t + current_time_offset;
     }
   }
 
-  // Apply velocity rescaling and re-calculate acceleration / time stamp after smoothing for consistency
-  for (size_t i = 1; i < path.size(); ++i) {
-    const double ds = dist(path[i-1].x, path[i-1].y, path[i].x, path[i].y);
-
-    // For index i, retrieve the smoothed target velocity or the original endpoint velocity
-    double target_v = (i == path.size() - 1) ? path.back().v : smoothed_v[i];
-
-    const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (target_v + path[i-1].v) / 2.0) : limits.min_vel_denom;
-    const double acc_dt = std::max(0.01, dt);
-
-    double raw_acc = (target_v - path[i-1].v) / acc_dt;
-    double clamped_acc = std::clamp(raw_acc, -std::abs(limits.max_decel), std::abs(limits.max_accel));
-
-    if (std::abs(raw_acc - clamped_acc) > 1e-2) {
-      target_v = path[i-1].v + clamped_acc * acc_dt;
-
-      std::stringstream ss;
-      ss << std::fixed << std::setprecision(2);
-      ss << "Velocity profile smoothing caused acceleration violation at index " << i
-         << ". Raw: " << raw_acc << " m/s^2, Clamped to: " << clamped_acc
-         << " m/s^2. Rescaled velocity to " << target_v << " m/s.";
-      logs.push_back({"DEBUG", ss.str()});
+  // 3) Apply 5-point Moving Average Filter on Acceleration multiple times to eliminate remaining Jerk spikes (15 passes)
+  if (path.size() > 4) {
+    for (int iter = 0; iter < 15; ++iter) {
+      std::vector<double> smoothed_acc(path.size());
+      smoothed_acc[0] = path[0].a;
+      smoothed_acc[1] = path[1].a;
+      smoothed_acc[path.size() - 2] = path[path.size() - 2].a;
+      smoothed_acc[path.size() - 1] = path.back().a;
+      for (size_t i = 2; i < path.size() - 2; ++i) {
+        smoothed_acc[i] = (path[i-2].a + path[i-1].a + path[i].a + path[i+1].a + path[i+2].a) / 5.0;
+      }
+      for (size_t i = 0; i < path.size(); ++i) {
+        path[i].a = std::clamp(smoothed_acc[i], -std::abs(limits.max_decel), std::abs(limits.max_accel));
+      }
     }
-
-    path[i].v = std::max(0.0, target_v);
-    path[i].a = clamped_acc;
-    const double final_dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i].v + path[i-1].v) / 2.0) : limits.min_vel_denom;
-    path[i].t = path[i-1].t + final_dt;
+  } else if (path.size() > 2) {
+    for (int iter = 0; iter < 15; ++iter) {
+      std::vector<double> smoothed_acc(path.size());
+      smoothed_acc[0] = path[0].a;
+      smoothed_acc[path.size() - 1] = path.back().a;
+      for (size_t i = 1; i < path.size() - 1; ++i) {
+        smoothed_acc[i] = (path[i-1].a + path[i].a + path[i+1].a) / 3.0;
+      }
+      for (size_t i = 0; i < path.size(); ++i) {
+        path[i].a = std::clamp(smoothed_acc[i], -std::abs(limits.max_decel), std::abs(limits.max_accel));
+      }
+    }
   }
 }
 
@@ -646,19 +774,133 @@ TrajectoryDiagnostic PostProcessor::validateTrajectory(const Path& path, std::ve
   diag.curvature_ok = true;
   diag.yaw_ok = true;
   diag.time_ok = true;
+  diag.vel_ok = true;
+  diag.acc_ok = true;
+  diag.jerk_ok = true;
+  diag.steer_vel_ok = true;
+
   diag.curv_violations = 0;
   diag.yaw_violations = 0;
   diag.time_violations = 0;
+  diag.vel_violations = 0;
+  diag.acc_violations = 0;
+  diag.jerk_violations = 0;
+  diag.steer_vel_violations = 0;
+
   diag.max_curv_violation = 0.0;
   diag.max_yaw_error_rad = 0.0;
   diag.max_time_error_sec = 0.0;
+  diag.max_vel_violation = 0.0;
+  diag.max_acc_violation = 0.0;
+  diag.max_jerk_violation = 0.0;
+  diag.max_steer_vel_violation = 0.0;
 
   validateCurvature(path, diag, logs);
   validateYawAlignment(path, diag, logs);
   validateTimestamps(path, diag, logs);
+  validateVelocity(path, diag, logs);
+  validateAcceleration(path, diag, logs);
+  validateJerk(path, diag, logs);
+  validateSteeringVelocity(path, diag, logs);
 
-  diag.is_valid = diag.curvature_ok && diag.yaw_ok && diag.time_ok;
+  diag.is_valid = diag.curvature_ok && diag.yaw_ok && diag.time_ok &&
+                  diag.vel_ok && diag.acc_ok && diag.jerk_ok && diag.steer_vel_ok;
   return diag;
+}
+
+void PostProcessor::validateVelocity(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
+  const double max_vel = config_.profiler.max_vel;
+  const double vel_epsilon = 0.01;
+  for (size_t i = 0; i < path.size(); ++i) {
+    double abs_v = std::abs(path[i].v);
+    if (abs_v > max_vel + vel_epsilon) {
+      diag.vel_ok = false;
+      diag.vel_violations++;
+      diag.max_vel_violation = std::max(diag.max_vel_violation, abs_v - max_vel);
+    }
+  }
+  if (!diag.vel_ok) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+      "Velocity check failed: %d points exceeded max velocity limit (max_vel: %.4f). Max violation: %.4f m/s.",
+      diag.vel_violations, max_vel, diag.max_vel_violation);
+    logs.push_back({"WARN", std::string(buf)});
+  }
+}
+
+void PostProcessor::validateAcceleration(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
+  const double max_accel = std::abs(config_.profiler.max_accel);
+  const double max_decel = std::abs(config_.profiler.max_decel);
+  const double acc_epsilon = 0.01;
+  for (size_t i = 0; i < path.size(); ++i) {
+    double a = path[i].a;
+    if (a > max_accel + acc_epsilon) {
+      diag.acc_ok = false;
+      diag.acc_violations++;
+      diag.max_acc_violation = std::max(diag.max_acc_violation, a - max_accel);
+    } else if (a < -max_decel - acc_epsilon) {
+      diag.acc_ok = false;
+      diag.acc_violations++;
+      diag.max_acc_violation = std::max(diag.max_acc_violation, -a - max_decel);
+    }
+  }
+  if (!diag.acc_ok) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+      "Acceleration check failed: %d points exceeded limits (accel: %.4f, decel: %.4f). Max violation: %.4f m/s^2.",
+      diag.acc_violations, max_accel, max_decel, diag.max_acc_violation);
+    logs.push_back({"WARN", std::string(buf)});
+  }
+}
+
+void PostProcessor::validateJerk(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
+  const double max_jerk = config_.profiler.max_jerk;
+  const double jerk_epsilon = 0.01;
+  for (size_t i = 1; i < path.size(); ++i) {
+    double dt = path[i].t - path[i-1].t;
+    if (dt <= 1e-6) continue;
+    if (std::abs(path[i].v) < 0.1 || std::abs(path[i-1].v) < 0.1) continue;
+
+    double jerk_val = std::abs(path[i].a - path[i-1].a) / dt;
+    if (jerk_val > max_jerk + jerk_epsilon) {
+      diag.jerk_ok = false;
+      diag.jerk_violations++;
+      diag.max_jerk_violation = std::max(diag.max_jerk_violation, jerk_val - max_jerk);
+    }
+  }
+  if (!diag.jerk_ok) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+      "Jerk check failed: %d points exceeded max jerk limit (max_jerk: %.4f). Max violation: %.4f m/s^3.",
+      diag.jerk_violations, max_jerk, diag.max_jerk_violation);
+    logs.push_back({"WARN", std::string(buf)});
+  }
+}
+
+void PostProcessor::validateSteeringVelocity(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
+  const double max_steer_vel_limit = 0.6108; // 35.0 deg/s in rad/s
+  const double steer_epsilon = 0.01;
+  for (size_t i = 1; i < path.size(); ++i) {
+    double dt = path[i].t - path[i-1].t;
+    if (dt <= 1e-6) continue;
+    if (std::abs(path[i].v) < 0.1 || std::abs(path[i-1].v) < 0.1) continue;
+
+    double phi_i = std::atan(wheelbase_ * path[i].kappa);
+    double phi_prev = std::atan(wheelbase_ * path[i-1].kappa);
+    double steer_vel = std::abs(phi_i - phi_prev) / dt;
+    if (steer_vel > max_steer_vel_limit + steer_epsilon) {
+      diag.steer_vel_ok = false;
+      diag.steer_vel_violations++;
+      diag.max_steer_vel_violation = std::max(diag.max_steer_vel_violation, steer_vel - max_steer_vel_limit);
+    }
+  }
+  if (!diag.steer_vel_ok) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+      "Steering Velocity check failed: %d points exceeded limit (max_steer_vel: %.4f rad/s). Max violation: %.4f rad/s.",
+      diag.steer_vel_violations, max_steer_vel_limit, diag.max_steer_vel_violation);
+    logs.push_back({"WARN", std::string(buf)});
+  }
 }
 
 void PostProcessor::validateCurvature(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {

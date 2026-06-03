@@ -128,12 +128,26 @@ struct TrajectoryDiagnostic {
   bool curvature_ok = false;
   bool yaw_ok = false;
   bool time_ok = false;
+  bool vel_ok = false;
+  bool acc_ok = false;
+  bool jerk_ok = false;
+  bool steer_vel_ok = false;
+
   int curv_violations = -1;
   int yaw_violations = -1;
   int time_violations = -1;
+  int vel_violations = -1;
+  int acc_violations = -1;
+  int jerk_violations = -1;
+  int steer_vel_violations = -1;
+
   double max_curv_violation = -1.0;
   double max_yaw_error_rad = -1.0;
   double max_time_error_sec = -1.0;
+  double max_vel_violation = -1.0;
+  double max_acc_violation = -1.0;
+  double max_jerk_violation = -1.0;
+  double max_steer_vel_violation = -1.0;
 };
 
 struct GlobalPlanningResult {

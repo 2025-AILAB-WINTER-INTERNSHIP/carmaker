@@ -146,16 +146,23 @@ private:
   bool resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs);
   bool profile(Path& path, double start_vel, std::vector<std::pair<std::string, std::string>>& logs);
   void profileKinematicPass(Path& path, double start_v, double start_a,
-                            double goal_v, double goal_a, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs);
+                            double goal_v, double goal_a, const KinematicLimits& limits,
+                            std::vector<std::pair<std::string, std::string>>& logs,
+                            bool limit_by_input_v = false);
   void smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs);
   TrajectoryDiagnostic validateTrajectory(const Path& path, std::vector<std::pair<std::string, std::string>>& logs) const;
   void validateCurvature(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
   void validateYawAlignment(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
   void validateTimestamps(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
+  void validateVelocity(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
+  void validateAcceleration(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
+  void validateJerk(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
+  void validateSteeringVelocity(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
   std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) const;
 
   GlobalPostProcessConfig config_;
   double max_kappa_ = 0.2;
+  double wheelbase_ = 2.97;
   CubicSpline spline_x_;
   CubicSpline spline_y_;
 };
