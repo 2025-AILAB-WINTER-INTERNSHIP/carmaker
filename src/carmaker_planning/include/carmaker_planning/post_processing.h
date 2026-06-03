@@ -148,6 +148,10 @@ private:
   void profileKinematicPass(Path& path, double start_v, double start_a,
                             double goal_v, double goal_a, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs);
   void smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs);
+  TrajectoryDiagnostic validateTrajectory(const Path& path, std::vector<std::pair<std::string, std::string>>& logs) const;
+  void validateCurvature(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
+  void validateYawAlignment(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
+  void validateTimestamps(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
   std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) const;
 
   GlobalPostProcessConfig config_;

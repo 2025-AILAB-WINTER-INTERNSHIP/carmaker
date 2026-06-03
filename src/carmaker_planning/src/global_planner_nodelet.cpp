@@ -110,9 +110,9 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
     double qz = pose.pose.orientation.z;
     double qw = pose.pose.orientation.w;
     double yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
-    // Translate from rear bumper to rear axle center
-    start_state.x = pose.pose.position.x + config_.vehicle.rear_axle_offset * std::cos(yaw);
-    start_state.y = pose.pose.position.y + config_.vehicle.rear_axle_offset * std::sin(yaw);
+    // Use manual start pose directly as rear axle center (no translation)
+    start_state.x = pose.pose.position.x;
+    start_state.y = pose.pose.position.y;
     start_state.theta = yaw;
   }
   else {
@@ -152,15 +152,16 @@ State GlobalPlannerNodelet::getGoalState(const geometry_msgs::PoseStamped& msg) 
   double gqw = msg.pose.orientation.w;
   double goal_yaw = std::atan2(2.0 * (gqw * gqz + gqx * gqy), 1.0 - 2.0 * (gqy * gqy + gqz * gqz));
 
-  goal_state.x = msg.pose.position.x + config_.vehicle.rear_axle_offset * std::cos(goal_yaw);
-  goal_state.y = msg.pose.position.y + config_.vehicle.rear_axle_offset * std::sin(goal_yaw);
+  // Use manual goal pose directly as rear axle center (no translation)
+  goal_state.x = msg.pose.position.x;
+  goal_state.y = msg.pose.position.y;
   goal_state.theta = goal_yaw;
   return goal_state;
 }
 
 void GlobalPlannerNodelet::publishVisualization(const Path& path) {
   visualizer_->visualize(path, planner_->getSearchTree(), planner_->getTreeBranches(),
-                         global_frame_, config_.vehicle.rear_axle_offset, config_.vehicle.min_turning_radius);
+                         global_frame_, config_.vehicle.min_turning_radius);
 }
 
 void GlobalPlannerNodelet::publishTrajectory(const Path& path) {
@@ -172,12 +173,9 @@ void GlobalPlannerNodelet::publishTrajectory(const Path& path) {
   for (const auto& pt : path) {
     carmaker_msgs::TrajectoryPoint tp;
 
-    // Translate planned path point (rear axle center) backward to rear bumper
-    double bx = pt.x - config_.vehicle.rear_axle_offset * std::cos(pt.theta);
-    double by = pt.y - config_.vehicle.rear_axle_offset * std::sin(pt.theta);
-
-    tp.pose.position.x = bx;
-    tp.pose.position.y = by;
+    // Publish trajectory referred directly to the rear axle center (no bumper shift)
+    tp.pose.position.x = pt.x;
+    tp.pose.position.y = pt.y;
     tp.pose.position.z = 0.0;
 
     double half_theta = pt.theta * 0.5;
@@ -253,19 +251,8 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
 
   total_plans_++;
   {
-    GlobalPlanningDiagnostic diag;
-    diag.status = result.status;
-    diag.total_time = result.total_time;
-    diag.path_length = result.path.empty() ? 0.0 : result.path.back().s;
-    diag.planning_time = result.planning_time;
-    diag.smoothing_time = result.smoothing_time;
-    diag.resampling_time = result.resampling_time;
-    diag.profiling_time = result.profiling_time;
-    diag.expanded_nodes = result.expanded_nodes;
-    diag.search_iterations = result.search_iterations;
-
     std::lock_guard<std::mutex> d_lock(diag_mutex_);
-    last_diag_ = diag;
+    last_diag_ = GlobalPlanningDiagnostic(result);
   }
 
   // Log bubbled diagnostic messages from core planner & post-processor via Nodelet logger
@@ -337,6 +324,15 @@ void GlobalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStat
   stat.add("Velocity Profiling Time (s)", last_res.profiling_time);
   stat.add("Expanded Nodes", last_res.expanded_nodes);
   stat.add("Search Iterations", last_res.search_iterations);
+
+  // Expose structured trajectory physical violation metrics to ROS Diagnostics
+  stat.add("Trajectory Valid", last_res.diagnostic.is_valid ? "True" : "False");
+  stat.add("Curvature Violations Count", last_res.diagnostic.curv_violations);
+  stat.add("Yaw Violations Count", last_res.diagnostic.yaw_violations);
+  stat.add("Timestamp Violations Count", last_res.diagnostic.time_violations);
+  stat.add("Max Curvature Violation (rad/m)", last_res.diagnostic.max_curv_violation);
+  stat.add("Max Yaw Error (deg)", last_res.diagnostic.max_yaw_error_rad * 180.0 / M_PI);
+  stat.add("Max Time Error (s)", last_res.diagnostic.max_time_error_sec);
 }
 
 void GlobalPlannerNodelet::diagTimerCallback(const ros::WallTimerEvent&) {

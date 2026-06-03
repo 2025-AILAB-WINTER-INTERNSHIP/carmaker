@@ -66,7 +66,7 @@ Visualization Manager:
     - Class: rviz/MarkerArray
       Enabled: true
       Marker Topic: /localization/debug/map_features
-      Name: Map
+      Name: Features(Landmark)
       Namespaces:
         map_landmarks: true
         map_lanes: true
@@ -96,12 +96,37 @@ Visualization Manager:
       Topic: /planning/debug/global_path
       Unreliable: false
       Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /planning/debug/curvature_path
+      Name: Curvatures
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: true
+    - Alpha: 1
+      Arrow Length: 0.30000001192092896
+      Axes Length: 0.30000001192092896
+      Axes Radius: 0.009999999776482582
+      Class: rviz/PoseArray
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.07000000029802322
+      Head Radius: 0.029999999329447746
+      Name: Pose
+      Queue Size: 10
+      Shaft Length: 0.23000000417232513
+      Shaft Radius: 0.009999999776482582
+      Shape: Arrow (Flat)
+      Topic: /planning/debug/global_pose
+      Unreliable: false
+      Value: true
     - Class: rviz/MarkerArray
       Enabled: true
       Marker Topic: /planning/debug/velocity_profile
       Name: velocity
       Namespaces:
-        velocity: true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
@@ -140,7 +165,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 19.513914108276367
+      Distance: 23.511817932128906
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -156,9 +181,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5397963523864746
+      Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
-      Yaw: 4.693580150604248
+      Yaw: 4.718580722808838
     Saved: ~
 Window Geometry:
   Displays:
@@ -176,5 +201,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1200
-  X: -32
-  Y: 609
+  X: 1419
+  Y: 161

@@ -108,6 +108,34 @@ enum class PlanningStatus {
   FAILURE_INVALID_MAP
 };
 
+inline const char* statusString(PlanningStatus s) {
+  switch (s) {
+    case PlanningStatus::SUCCESS_OPTIMAL:        return "SUCCESS_OPTIMAL";
+    case PlanningStatus::SUCCESS_BEST_EFFORT:    return "SUCCESS_BEST_EFFORT";
+    case PlanningStatus::FAILURE_NO_PATH:        return "FAILURE_NO_PATH";
+    case PlanningStatus::FAILURE_TIMEOUT:        return "FAILURE_TIMEOUT";
+    case PlanningStatus::FAILURE_COLLISION:      return "FAILURE_COLLISION";
+    case PlanningStatus::FAILURE_COLLISION_START: return "FAILURE_COLLISION_START";
+    case PlanningStatus::FAILURE_COLLISION_GOAL:  return "FAILURE_COLLISION_GOAL";
+    case PlanningStatus::FAILURE_POST_PROCESSING: return "FAILURE_POST_PROCESSING";
+    case PlanningStatus::FAILURE_INVALID_MAP:    return "FAILURE_INVALID_MAP";
+    default: return "UNKNOWN";
+  }
+}
+
+struct TrajectoryDiagnostic {
+  bool is_valid = true;
+  bool curvature_ok = true;
+  bool yaw_ok = true;
+  bool time_ok = true;
+  size_t curv_violations = 0;
+  size_t yaw_violations = 0;
+  size_t time_violations = 0;
+  double max_curv_violation = 0.0;
+  double max_yaw_error_rad = 0.0;
+  double max_time_error_sec = 0.0;
+};
+
 struct GlobalPlanningResult {
   PlanningStatus status = PlanningStatus::INVALID;
   Path path;
@@ -116,6 +144,7 @@ struct GlobalPlanningResult {
   double resampling_time = 0.0, profiling_time = 0.0, total_time = 0.0;
   int expanded_nodes = 0, search_iterations = 0;
   std::vector<std::pair<std::string, std::string>> logs;
+  TrajectoryDiagnostic diagnostic;
 
   void addLog(const std::string& level, const std::string& msg) {
     logs.push_back({level, msg});
@@ -129,47 +158,37 @@ struct GlobalPlanningResult {
     return status == PlanningStatus::SUCCESS_OPTIMAL ||
            status == PlanningStatus::SUCCESS_BEST_EFFORT;
   }
-  const char* statusString() const {
-    switch (status) {
-      case PlanningStatus::SUCCESS_OPTIMAL:       return "SUCCESS_OPTIMAL";
-      case PlanningStatus::SUCCESS_BEST_EFFORT:    return "SUCCESS_BEST_EFFORT";
-      case PlanningStatus::FAILURE_NO_PATH:       return "FAILURE_NO_PATH";
-      case PlanningStatus::FAILURE_TIMEOUT:       return "FAILURE_TIMEOUT";
-      case PlanningStatus::FAILURE_COLLISION:     return "FAILURE_COLLISION";
-      case PlanningStatus::FAILURE_COLLISION_START: return "FAILURE_COLLISION_START";
-      case PlanningStatus::FAILURE_COLLISION_GOAL:  return "FAILURE_COLLISION_GOAL";
-      case PlanningStatus::FAILURE_POST_PROCESSING: return "FAILURE_POST_PROCESSING";
-      case PlanningStatus::FAILURE_INVALID_MAP:    return "FAILURE_INVALID_MAP";
-      default: return "UNKNOWN";
-    }
-  }
+  const char* statusString() const { return carmaker_planning::statusString(status); }
 };
 
 struct GlobalPlanningDiagnostic {
   PlanningStatus status = PlanningStatus::INVALID;
   double total_time = 0.0;
-  double path_length = 0.0;
   double planning_time = 0.0;
   double smoothing_time = 0.0;
   double resampling_time = 0.0;
   double profiling_time = 0.0;
   int expanded_nodes = 0;
   int search_iterations = 0;
-  
-  const char* statusString() const {
-    switch (status) {
-      case PlanningStatus::SUCCESS_OPTIMAL:       return "SUCCESS_OPTIMAL";
-      case PlanningStatus::SUCCESS_BEST_EFFORT:    return "SUCCESS_BEST_EFFORT";
-      case PlanningStatus::FAILURE_NO_PATH:       return "FAILURE_NO_PATH";
-      case PlanningStatus::FAILURE_TIMEOUT:       return "FAILURE_TIMEOUT";
-      case PlanningStatus::FAILURE_COLLISION:     return "FAILURE_COLLISION";
-      case PlanningStatus::FAILURE_COLLISION_START: return "FAILURE_COLLISION_START";
-      case PlanningStatus::FAILURE_COLLISION_GOAL:  return "FAILURE_COLLISION_GOAL";
-      case PlanningStatus::FAILURE_POST_PROCESSING: return "FAILURE_POST_PROCESSING";
-      case PlanningStatus::FAILURE_INVALID_MAP:    return "FAILURE_INVALID_MAP";
-      default: return "UNKNOWN";
-    }
-  }
+  double path_length = 0.0;
+  TrajectoryDiagnostic diagnostic;
+
+  GlobalPlanningDiagnostic() = default;
+
+  // Lightweight conversion constructor to avoid deep-copying heavy path vectors
+  explicit GlobalPlanningDiagnostic(const GlobalPlanningResult& res)
+    : status(res.status),
+      total_time(res.total_time),
+      planning_time(res.planning_time),
+      smoothing_time(res.smoothing_time),
+      resampling_time(res.resampling_time),
+      profiling_time(res.profiling_time),
+      expanded_nodes(res.expanded_nodes),
+      search_iterations(res.search_iterations),
+      path_length(res.path.empty() ? 0.0 : res.path.back().s),
+      diagnostic(res.diagnostic) {}
+
+  const char* statusString() const { return carmaker_planning::statusString(status); }
 };
 
 struct GlobalGridIndex { int x=0, y=0, theta=0; };
@@ -271,11 +290,11 @@ inline void loadVehicleSpec(const ros::NodeHandle& nh, VehicleSpec& spec,
   nh.param(ns + "/width",             spec.width,            1.9);
   nh.param(ns + "/length",            spec.length,           4.635);
   nh.param(ns + "/wheelbase",         spec.wheelbase,        3.0);
-  
+
   if (!nh.getParam(ns + "/rear_axle_offset", spec.rear_axle_offset)) {
     nh.param(ns + "/rear_axle_offset_x", spec.rear_axle_offset, 0.79);
   }
-  
+
   nh.param(ns + "/min_turning_radius", spec.min_turning_radius, 5.2);
 
   double steer_deg = 30.0;
@@ -304,10 +323,10 @@ inline void loadGlobalCostmapConfig(const ros::NodeHandle& nh, GlobalCostmapConf
                                     const std::string& ns = "global_costmap") {
   nh.param(ns + "/grid_map/lethal_threshold",  cfg.grid_map.lethal_threshold,  50);
   nh.param(ns + "/grid_map/unknown_cost_free", cfg.grid_map.unknown_cost_free, true);
-  int uv = 255; 
+  int uv = 255;
   nh.param(ns + "/grid_map/unknown_value", uv, uv);
   cfg.grid_map.unknown_value = static_cast<uint8_t>(uv);
-  int ov = 100; 
+  int ov = 100;
   nh.param(ns + "/grid_map/occupancy_value", ov, ov);
   cfg.grid_map.occupancy_value = static_cast<uint8_t>(ov);
 }
@@ -317,19 +336,19 @@ inline void loadGlobalPlannerConfig(const ros::NodeHandle& nh, GlobalPlannerConf
   nh.param(ns + "/max_iterations",          cfg.max_iterations,         10000);
   nh.param(ns + "/max_planning_time",       cfg.max_planning_time,      2.0);
   nh.param(ns + "/xy_resolution",           cfg.xy_resolution,          0.05);
-  
+
   double theta_deg = 5.0;
   nh.param(ns + "/theta_resolution_deg",   theta_deg, theta_deg);
   cfg.theta_resolution = deg2rad(theta_deg);
-  
+
   nh.param(ns + "/step_size",               cfg.step_size,              0.5);
   nh.param(ns + "/next_node_num",           cfg.next_node_num,          7);
   nh.param(ns + "/goal_tolerance_xy",       cfg.goal_tolerance.xy,      0.2);
-  
+
   double goal_theta_deg = 11.5;
   nh.param(ns + "/goal_tolerance_theta_deg", goal_theta_deg, goal_theta_deg);
   cfg.goal_tolerance.theta = deg2rad(goal_theta_deg);
-  
+
   nh.param(ns + "/analytic_expansion_ratio", cfg.analytic_expansion_ratio, 5);
   nh.param(ns + "/heuristic_scale",         cfg.heuristic_scale,        2);
   nh.param(ns + "/weights/turn",            cfg.weights.turn,           2.0);

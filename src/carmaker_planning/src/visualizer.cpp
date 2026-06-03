@@ -33,20 +33,19 @@ void Visualizer::visualize(const Path& path,
                            const std::vector<State>& tree,
                            const std::vector<std::pair<State, State>>& branches,
                            const std::string& frame_id,
-                           double rear_axle_offset,
                            double min_turning_radius) {
   if (path.empty()) return;
 
   ros::Time now = ros::Time::now();
 
-  path_pub_.publish(createPathMsg(path, frame_id, rear_axle_offset, now));
-  velocity_pub_.publish(createVelocityMarkers(path, frame_id, rear_axle_offset, now));
-  pose_array_pub_.publish(createPoseArrayMsg(path, frame_id, rear_axle_offset, now));
-  curvature_pub_.publish(createCurvatureMarker(path, frame_id, rear_axle_offset, min_turning_radius, now));
+  path_pub_.publish(createPathMsg(path, frame_id, now));
+  velocity_pub_.publish(createVelocityMarkers(path, frame_id, now));
+  pose_array_pub_.publish(createPoseArrayMsg(path, frame_id, now));
+  curvature_pub_.publish(createCurvatureMarker(path, frame_id, min_turning_radius, now));
   tree_pub_.publish(createTreeMarkers(tree, branches, frame_id, now));
 }
 
-nav_msgs::Path Visualizer::createPathMsg(const Path& path, const std::string& frame_id, double rear_axle_offset, const ros::Time& stamp) {
+nav_msgs::Path Visualizer::createPathMsg(const Path& path, const std::string& frame_id, const ros::Time& stamp) {
   nav_msgs::Path path_msg;
   path_msg.header.frame_id = frame_id;
   path_msg.header.stamp = stamp;
@@ -55,9 +54,8 @@ nav_msgs::Path Visualizer::createPathMsg(const Path& path, const std::string& fr
     geometry_msgs::PoseStamped pose;
     pose.header = path_msg.header;
 
-    // Translate planned path point (rear axle center) backward to rear bumper
-    pose.pose.position.x = pt.x - rear_axle_offset * std::cos(pt.theta);
-    pose.pose.position.y = pt.y - rear_axle_offset * std::sin(pt.theta);
+    pose.pose.position.x = pt.x;
+    pose.pose.position.y = pt.y;
     pose.pose.position.z = 0.0;
 
     // Convert yaw to geometry_msgs::Quaternion
@@ -72,7 +70,7 @@ nav_msgs::Path Visualizer::createPathMsg(const Path& path, const std::string& fr
   return path_msg;
 }
 
-visualization_msgs::MarkerArray Visualizer::createVelocityMarkers(const Path& path, const std::string& frame_id, double rear_axle_offset, const ros::Time& stamp) {
+visualization_msgs::MarkerArray Visualizer::createVelocityMarkers(const Path& path, const std::string& frame_id, const ros::Time& stamp) {
   visualization_msgs::MarkerArray velocity_markers;
 
   // Add DELETEALL marker to clear previous speed cylinders
@@ -93,16 +91,12 @@ visualization_msgs::MarkerArray Visualizer::createVelocityMarkers(const Path& pa
     m.type = visualization_msgs::Marker::CYLINDER;
     m.action = visualization_msgs::Marker::ADD;
 
-    // Bumper-referred coordinate same as path visualization
-    double bx = pt.x - rear_axle_offset * std::cos(pt.theta);
-    double by = pt.y - rear_axle_offset * std::sin(pt.theta);
-
     double speed = std::abs(pt.v);
     double height_scale = 1.0; // Scale velocity visually
     double height = speed * height_scale;
 
-    m.pose.position.x = bx;
-    m.pose.position.y = by;
+    m.pose.position.x = pt.x;
+    m.pose.position.y = pt.y;
     m.pose.position.z = height / 2.0; // bottom touches the ground
     m.pose.orientation.w = 1.0;
 
@@ -124,7 +118,7 @@ visualization_msgs::MarkerArray Visualizer::createVelocityMarkers(const Path& pa
   return velocity_markers;
 }
 
-geometry_msgs::PoseArray Visualizer::createPoseArrayMsg(const Path& path, const std::string& frame_id, double rear_axle_offset, const ros::Time& stamp) {
+geometry_msgs::PoseArray Visualizer::createPoseArrayMsg(const Path& path, const std::string& frame_id, const ros::Time& stamp) {
   geometry_msgs::PoseArray pose_array_msg;
   pose_array_msg.header.frame_id = frame_id;
   pose_array_msg.header.stamp = stamp;
@@ -142,9 +136,8 @@ geometry_msgs::PoseArray Visualizer::createPoseArrayMsg(const Path& path, const 
     if (is_first || is_last || is_cusp_start || is_cusp_end || (pt.s - last_s >= arrow_spacing_meters_)) {
       geometry_msgs::Pose pose;
 
-      // Translate planned path point (rear axle center) backward to rear bumper
-      pose.position.x = pt.x - rear_axle_offset * std::cos(pt.theta);
-      pose.position.y = pt.y - rear_axle_offset * std::sin(pt.theta);
+      pose.position.x = pt.x;
+      pose.position.y = pt.y;
       pose.position.z = 0.03; // Small height offset above the curvature line
 
       double half_theta = pt.theta * 0.5;
@@ -160,7 +153,7 @@ geometry_msgs::PoseArray Visualizer::createPoseArrayMsg(const Path& path, const 
   return pose_array_msg;
 }
 
-visualization_msgs::Marker Visualizer::createCurvatureMarker(const Path& path, const std::string& frame_id, double rear_axle_offset, double min_turning_radius, const ros::Time& stamp) {
+visualization_msgs::Marker Visualizer::createCurvatureMarker(const Path& path, const std::string& frame_id, double min_turning_radius, const ros::Time& stamp) {
   visualization_msgs::Marker curv_line;
   curv_line.header.frame_id = frame_id;
   curv_line.header.stamp = stamp;
@@ -178,8 +171,8 @@ visualization_msgs::Marker Visualizer::createCurvatureMarker(const Path& path, c
 
   for (const auto& pt : path) {
     geometry_msgs::Point p;
-    p.x = pt.x - rear_axle_offset * std::cos(pt.theta);
-    p.y = pt.y - rear_axle_offset * std::sin(pt.theta);
+    p.x = pt.x;
+    p.y = pt.y;
     p.z = 0.01; // Slightly below arrows/cylinders but above road
 
     curv_line.points.push_back(p);
@@ -189,7 +182,8 @@ visualization_msgs::Marker Visualizer::createCurvatureMarker(const Path& path, c
 }
 
 std_msgs::ColorRGBA Visualizer::makeCurvatureColor(double kappa, double max_kappa) {
-  double ratio = std::min(1.0, std::abs(kappa) / (max_kappa > 1e-6 ? max_kappa : 1.0));
+  double raw_ratio = std::abs(kappa) / (max_kappa > 1e-6 ? max_kappa : 1.0);
+  double ratio = std::min(1.0, std::pow(raw_ratio, 2.0)); // Non-linear scaling (square) for gradual transition
   std_msgs::ColorRGBA color;
   color.r = ratio;
   color.g = 1.0 - ratio;
@@ -215,7 +209,7 @@ visualization_msgs::MarkerArray Visualizer::createTreeMarkers(const std::vector<
   nodes_marker.pose.orientation.w = 1.0;
   nodes_marker.scale.x = 0.05;
   nodes_marker.scale.y = 0.05;
-  
+
   // Sleek cyan/green color
   nodes_marker.color.r = 0.0;
   nodes_marker.color.g = 1.0;
@@ -241,7 +235,7 @@ visualization_msgs::MarkerArray Visualizer::createTreeMarkers(const std::vector<
   branches_marker.action = visualization_msgs::Marker::ADD;
   branches_marker.pose.orientation.w = 1.0;
   branches_marker.scale.x = 0.015;
-  
+
   // Glowing cyan
   branches_marker.color.r = 0.0;
   branches_marker.color.g = 0.8;
