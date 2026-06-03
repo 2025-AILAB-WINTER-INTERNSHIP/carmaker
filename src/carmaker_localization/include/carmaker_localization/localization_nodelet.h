@@ -73,9 +73,9 @@ private:
     // Lifecycle functions (SRP breakdown of giant onInit)
     virtual void onInit() override;
     bool loadParameters();
-    void initEkf();
-    void initSvm();
-    void setupRosIo();
+    bool initEkf();
+    bool initSvm();
+    bool setupRosIo();
 
     // Callbacks
     void infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx);

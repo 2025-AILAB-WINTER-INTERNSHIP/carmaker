@@ -85,9 +85,15 @@ void FeatureExtractor::setVehicleFootprint(double x_min, double x_max, double y_
     has_vehicle_footprint_ = true;
 }
 
-void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::vector<double>& D_vec,
+bool FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::vector<double>& D_vec,
                                     const std::string& distortion_model, const cv::Mat& R_base_cam, const cv::Mat& t_base_cam) {
-    if (!is_initialized_) return;
+    lut_initialized_ = false;
+    if (!is_initialized_) return false;
+
+    if (K_vec.size() < 9) {
+        std::cerr << "[" << camera_name_ << " updateLUT] Error: Intrinsic K matrix vector size is less than 9 (" << K_vec.size() << ")\n";
+        return false;
+    }
 
     std::cout << "\n\033[1;33m========== [ DEBUG: " << camera_name_ << " ] ==========\033[0m\n";
 
@@ -189,10 +195,15 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     //  1. 정규화 및 theta 도출: cam_points의 X_c, Y_c, Z_c 값을 이용해 입사각을 계산
     //  2. 왜곡 다항식 대입: 파라미터로 넘겨준 D 행렬(왜곡 계수)을 다항식에 단순 대입하여 왜곡을 적용
     //  3. Intrinsic 매핑: 파라미터로 넘겨받은 카메라 내부 파라미터 행렬 K(f_x, f_y, c_x, c_y)를 곱해 최종 픽셀 위치를 계산
-    if (distortion_model == "equidistant" || distortion_model == "fisheye") {
-        cv::fisheye::projectPoints(cam_points, image_points, rvec, tvec, K, D);
-    } else {
-        cv::projectPoints(cam_points, rvec, tvec, K, D, image_points);
+    try {
+        if (distortion_model == "equidistant" || distortion_model == "fisheye") {
+            cv::fisheye::projectPoints(cam_points, image_points, rvec, tvec, K, D);
+        } else {
+            cv::projectPoints(cam_points, rvec, tvec, K, D, image_points);
+        }
+    } catch (const cv::Exception& e) {
+        std::cerr << "[" << camera_name_ << " updateLUT] OpenCV projectPoints exception: " << e.what() << "\n";
+        return false;
     }
 
     // 카메라 원점 및 광선 방향의 Base 프레임 기준 좌표 사전 계산
@@ -318,10 +329,15 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
         }
 
         std::vector<cv::Point2f> image_points_vis;
-        if (distortion_model == "equidistant" || distortion_model == "fisheye") {
-            cv::fisheye::projectPoints(cam_points_vis, image_points_vis, rvec, tvec, K, D);
-        } else {
-            cv::projectPoints(cam_points_vis, rvec, tvec, K, D, image_points_vis);
+        try {
+            if (distortion_model == "equidistant" || distortion_model == "fisheye") {
+                cv::fisheye::projectPoints(cam_points_vis, image_points_vis, rvec, tvec, K, D);
+            } else {
+                cv::projectPoints(cam_points_vis, rvec, tvec, K, D, image_points_vis);
+            }
+        } catch (const cv::Exception& e) {
+            std::cerr << "[" << camera_name_ << " updateLUT] OpenCV vis projectPoints exception: " << e.what() << "\n";
+            return false;
         }
 
         map1_vis_ = cv::Mat(bev_cfg_vis_.height, bev_cfg_vis_.width, CV_32FC1);
@@ -347,6 +363,7 @@ void FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     }
 
     lut_initialized_ = true;
+    return true;
 }
 
 std::vector<LocalFeature> FeatureExtractor::process(

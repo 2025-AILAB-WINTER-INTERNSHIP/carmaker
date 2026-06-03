@@ -39,9 +39,18 @@ void LocalizationNodelet::onInit() {
         NODELET_ERROR("Failed to load parameters. Aborting initialization to prevent crash.");
         return;
     }
-    initEkf();
-    initSvm();
-    setupRosIo();
+    if (!initEkf()) {
+        NODELET_ERROR("Failed to initialize EKF. Aborting initialization to prevent crash.");
+        return;
+    }
+    if (!initSvm()) {
+        NODELET_ERROR("Failed to initialize SVM. Aborting initialization to prevent crash.");
+        return;
+    }
+    if (!setupRosIo()) {
+        NODELET_ERROR("Failed to setup ROS IO and Feature Loader. Aborting initialization to prevent crash.");
+        return;
+    }
 
     // ICP 정합 처리를 비동기로 수행할 백그라운드 워커 스레드 기동
     correction_worker_thread_ = std::thread(&LocalizationNodelet::correctionWorkerLoop, this);
@@ -191,7 +200,7 @@ bool LocalizationNodelet::loadParameters() {
     return true;
 }
 
-void LocalizationNodelet::initEkf() {
+bool LocalizationNodelet::initEkf() {
     ros::NodeHandle& pnh = getPrivateNodeHandle();
 
     int dim = pnh.param("ekf/dimension", 2);
@@ -199,10 +208,19 @@ void LocalizationNodelet::initEkf() {
         NODELET_WARN("Currently only 2D EKF is supported! Overriding dimension to 2.");
     }
 
+    if (wheelbase_ <= 0.1 || rear_axle_x_ < 0.0) {
+        NODELET_ERROR("Invalid vehicle specifications. wheelbase: %.2f (expected > 0.1), rear_axle_offset_x: %.2f (expected >= 0.0)", wheelbase_, rear_axle_x_);
+        return false;
+    }
+
     // NOTE: ekf/state_buffer_duration is intentionally no longer consumed.
     // The retroactive state-buffer correction was removed; sub-100ms vision
     // latency is now applied directly to the current state (see EkfCore).
     ekf_core_ = std::make_shared<EkfCore>();
+    if (!ekf_core_) {
+        NODELET_ERROR("Failed to allocate EkfCore instance.");
+        return false;
+    }
 
     imu_id_ = pnh.param("ekf/imu/imu_id", 0);
     imu_offset_x_ = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_x", 2.29);
@@ -229,17 +247,31 @@ void LocalizationNodelet::initEkf() {
     );
     NODELET_INFO("EKF Prediction Model: Kinematic Bicycle (wheelbase: %.2fm, rear_axle_offset: %.2fm)", wheelbase_, rear_axle_x_);
     NODELET_INFO("Selected IMU: %d (offset_x: %.2f, offset_y: %.2f)", imu_id_, imu_offset_x_, imu_offset_y_);
+    return true;
 }
 
-void LocalizationNodelet::initSvm() {
+bool LocalizationNodelet::initSvm() {
     ros::NodeHandle& pnh = getPrivateNodeHandle();
 
     svm_res_ = pnh.param("feature_extractor/bev/resolution", 0.05);
+    if (svm_res_ <= 1e-4) {
+        NODELET_ERROR("Invalid SVM resolution parameter: %.4f (expected > 1e-4)", svm_res_);
+        return false;
+    }
     fusion_ = pnh.param("feature_extractor/fusion", false);
 
     int svm_h = std::ceil((svm_x_max_ - svm_x_min_) / svm_res_);
     int svm_w = std::ceil((svm_y_max_ - svm_y_min_) / svm_res_);
-    svm_canvas_ = cv::Mat::zeros(svm_h, svm_w, CV_8UC3);
+    if (svm_h <= 0 || svm_w <= 0) {
+        NODELET_ERROR("Invalid SVM grid dimensions computed: H=%d, W=%d", svm_h, svm_w);
+        return false;
+    }
+    try {
+        svm_canvas_ = cv::Mat::zeros(svm_h, svm_w, CV_8UC3);
+    } catch (const cv::Exception& e) {
+        NODELET_ERROR("OpenCV Exception allocating svm_canvas_: %s", e.what());
+        return false;
+    }
 
     double v_front = pnh.param("vehicle/length", 4.635);
     double v_rear = 0;
@@ -284,9 +316,10 @@ void LocalizationNodelet::initSvm() {
     svm_masks_["right"] = (index_map == 4);
 
     seam_line_points_ = {p_fc, p_l1_fl, p_l2_fl, p_rc, p_l1_rl, p_l2_rl};
+    return true;
 }
 
-void LocalizationNodelet::setupRosIo() {
+bool LocalizationNodelet::setupRosIo() {
     ros::NodeHandle& nh = getNodeHandle();
     ros::NodeHandle& pnh = getPrivateNodeHandle();
 
@@ -296,6 +329,10 @@ void LocalizationNodelet::setupRosIo() {
 
     if (feature_format == "osm") {
         feature_loader_ = std::make_shared<OsmFeatureLoader>(resolution_);
+        if (!feature_loader_) {
+            NODELET_ERROR("Failed to allocate OsmFeatureLoader instance.");
+            return false;
+        }
         if (!feature_file.empty()) {
             if (feature_loader_->load(feature_file)) {
                 NODELET_INFO("Features loaded successfully from: %s", feature_file.c_str());
@@ -304,6 +341,7 @@ void LocalizationNodelet::setupRosIo() {
                 }
             } else {
                 NODELET_ERROR("Failed to load features: %s", feature_file.c_str());
+                return false;
             }
         } else {
             NODELET_WARN("No map_file specified for feature_registration. Reference features will be empty.");
@@ -322,6 +360,10 @@ void LocalizationNodelet::setupRosIo() {
 
     if (registration_type == "icp") {
         registration_engine_ = std::make_shared<IcpRegistration>(fitness_threshold_, max_iterations, vision_base_std, min_search_radius, max_covariance);
+        if (!registration_engine_) {
+            NODELET_ERROR("Failed to allocate IcpRegistration instance.");
+            return false;
+        }
     }
 
     // 정합 활성화 여부 (false 시 EKF 예측만 수행, 디버깅용)
@@ -338,6 +380,10 @@ void LocalizationNodelet::setupRosIo() {
     pose_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_pose, 10);
 
     double ekf_freq = pnh.param("ekf/frequency", 100.0);
+    if (ekf_freq <= 0.1) {
+        NODELET_ERROR("Invalid EKF frequency parameter: %.2f (expected > 0.1)", ekf_freq);
+        return false;
+    }
     prediction_timer_ = nh.createTimer(ros::Duration(1.0 / ekf_freq), &LocalizationNodelet::predictionCallback, this);
 
     std::string topic_estimation_data = pnh.param("topics/publish/data/estimation_pose", std::string("/localization/data/estimation_pose"));
@@ -347,6 +393,10 @@ void LocalizationNodelet::setupRosIo() {
 
     // Setup Diagnostics Updater (publishes directly to the standard /diagnostics topic)
     diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh, pnh);
+    if (!diagnostic_updater_) {
+        NODELET_ERROR("Failed to allocate diagnostic_updater.");
+        return false;
+    }
     diagnostic_updater_->setHardwareID("carmaker_localization");
     diagnostic_updater_->add("Localization Status", this, &LocalizationNodelet::produceDiagnostics);
 
@@ -368,7 +418,7 @@ void LocalizationNodelet::setupRosIo() {
         if (!use_bundle_) {
             if (ch.input_topic.empty()) {
                 NODELET_FATAL("input_topic is required when use_bundle is false!");
-                return;
+                return false;
             }
             // 비전 메시지가 대기하지 않고 네트워크 레이어에서 즉시 유실 처리
             seg_subs_[i] = std::make_unique<message_filters::Subscriber<sensor_msgs::Image>>(nh, ch.input_topic, 1, ros::TransportHints().tcpNoDelay());
@@ -394,6 +444,7 @@ void LocalizationNodelet::setupRosIo() {
     std::string service_get_map = pnh.param("services/get_map", std::string("/localization/get_map"));
     map_srv_ = nh.advertiseService(service_get_map, &LocalizationNodelet::getMapCallback, this);
     NODELET_INFO("Map service advertised: %s", service_get_map.c_str());
+    return true;
 }
 
 void LocalizationNodelet::infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx) {
@@ -670,9 +721,12 @@ void LocalizationNodelet::processImages(
                     }
                 }
 
-                ch.extractor->updateLUT(K, D, distortion_model, R_base_cam, t_base_cam);
-                ch.lut_initialized.store(true, std::memory_order_release);
-                NODELET_INFO("LUT initialized for %s", ch.name.c_str());
+                if (ch.extractor->updateLUT(K, D, distortion_model, R_base_cam, t_base_cam)) {
+                    ch.lut_initialized.store(true, std::memory_order_release);
+                    NODELET_INFO("LUT initialized for %s", ch.name.c_str());
+                } else {
+                    NODELET_ERROR("Failed to initialize LUT for %s. (OpenCV projection or calibration parameters are invalid)", ch.name.c_str());
+                }
             }
         }
     }

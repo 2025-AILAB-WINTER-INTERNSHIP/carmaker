@@ -76,8 +76,9 @@ public:
 
     /**
      * @brief Update projection look-up table using intrinsic and extrinsic data
+     * @return true if success
      */
-    void updateLUT(const std::vector<double>& K, const std::vector<double>& D,
+    bool updateLUT(const std::vector<double>& K, const std::vector<double>& D,
                     const std::string& distortion_model, const cv::Mat& R_base_cam, const cv::Mat& t_base_cam);
 
 private:
