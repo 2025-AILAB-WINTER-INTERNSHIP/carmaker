@@ -16,13 +16,13 @@ namespace carmaker_localization {
  */
 /**
  * @brief EKF 상태 변수별 기준 좌표 프레임 정의
- * - 위치(X, Y), 요각(YAW), 선속도(VX, VY)는 차량 기준점인 Fr1A(후방 범퍼) 기준
+ * - 위치(X, Y), 요각(YAW), 선속도(VX, VY)는 차량 기준점인 Rear Axle (후륜축) 기준
  * - 가속도 상태(AX, AY)는 센서 보정(Lever-arm) 및 자전거 기구학 예측식과의 정합성 (Rigid Body의 각가속도 dwz 항 배제를 통한 수치적 안정성 확보)을 위해 후륜 축(Rear Axle) 중심 기준
  */
 enum StateIdx {
-    X = 0, Y,          // Position (Global Frame) - Fr1A(후방 범퍼) 기준
-    VX, VY,            // Velocity (Vehicle Frame) - Fr1A(후방 범퍼) 기준
-    AX, AY,            // Acceleration (Vehicle Frame) - 후륜 축(Rear Axle) 기준
+    X = 0, Y,          // Position (Global Frame) - Fr1A -> Rear Axle (후륜축) 기준
+    VX, VY,            // Velocity (Vehicle Frame) - Fr1A -> Rear Axle (후륜축) 기준
+    AX, AY,            // Acceleration (Vehicle Frame) - Rear Axle (후륜축) 기준
     YAW, YAW_RATE, YAW_ACC,     // Heading & Turn Rate & Acceleration (강체 전체 공통 - 모든 위치에서 동일)
     B_AX, B_AY,        // IMU Acceleration Bias
     B_YAW_RATE,        // IMU Gyro Bias
@@ -86,7 +86,7 @@ public:
     void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,
                      double max_pos_step = 999.0, double max_yaw_step = 999.0);
     void correctImu(double ax, double ay, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
-    void correctWheel(double vx, double vy, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
+    void correctWheel(double vx, double vy_nhc, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
 
     // Getters
     StateFrame getState() const;

@@ -117,12 +117,11 @@ void EkfCore::prediction(double timestamp, const PredictionInput& u) {
     double cos_yaw = std::cos(yaw);
     double sin_yaw = std::sin(yaw);
 
-    // VY 소프트 NHC 감쇠: vy(t+dt) = vy_NHC + (vy - vy_NHC)*decay + ay*dt
-    // vy_NHC = -yaw_rate * rear_axle_offset (선회시 범퍼 기준점의 기구학적 횡속도)
-    // decay < 1: 슬립 성분(vy - vy_NHC)이 시간에 따라 0으로 수렴
-    // decay = 1 (비활성화): vy += ay*dt (기존 동작 동일)
+    // VY 소프트 NHC 감쇠: 후륜축 접지점에서 횡속도 = 0 (비홀로노믹 구속)
+    // EKF 상태 (X, Y, VX, VY)는 후륜축 기준이므로 vy_NHC = 0
+    // decay 파라미터: VY의 슬립 성분을 0으로 수렴시키는 감쇠 인자
     const double vy_decay = (vy_decay_time_const_ > 1e-4) ? std::max(0.0, std::min(1.0, std::exp(-dt / vy_decay_time_const_))) : 1.0;
-    const double vy_nhc = -yaw_rate * rear_axle_offset_;
+    const double vy_nhc = 0.0;
 
     // 상태 전파 (위치 상태에 대한 2차 적분 적용 및 횡속도/각가속도 전파)
     x_(X) += (vx * cos_yaw - vy * sin_yaw) * dt + 0.5 * (ax * cos_yaw - ay * sin_yaw) * dt * dt;
@@ -154,11 +153,10 @@ void EkfCore::prediction(double timestamp, const PredictionInput& u) {
     // 속도 상태 변수에 대한 미분
     F(VX, AX) = dt;
     // VY: 소프트 NHC 감쇠에 의한 F 행렬 업데이트
-    // vy(t+dt) = vy * decay + yaw_rate * d * (decay - 1) + ay * dt
-    // → F(VY, VY) = decay,  F(VY, YAW_RATE) = d * (decay - 1),  F(VY, AY) = dt
+    // vy(t+dt) = vy * decay + ay * dt  (vy_nhc=0, yaw_rate cross-term 없음)
+    // → F(VY, VY) = decay,  F(VY, AY) = dt
     F(VY, VY)       = vy_decay;
     F(VY, AY)       = dt;
-    F(VY, YAW_RATE) = rear_axle_offset_ * (vy_decay - 1.0); // 새 cross-term: 비활성화시 0
 
     // 요 및 각속도 상태 변수에 대한 미분
     F(YAW, YAW_RATE) = dt;
@@ -225,15 +223,15 @@ void EkfCore::correctWheel(double vx, double vy_nhc, double yaw_rate, const Eige
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // 휠 속도 오보도메트리 관측 및 후륜 축 중심 비홀로노믹 구속(NHC) 결합 모델
-    // h(x) = [ vx, vy + w_z * rear_axle_offset_, w_z ]
+    // 후륜축 기준 휠 속도 관측 및 비홀로노믹 구속(NHC) 결합 모델
+    // h(x) = [ vx, vy, w_z ]  (후륜 접지점 기준: VY_rear_axle = 0)
     Eigen::Matrix<double, 3, STATE_DIM> H = Eigen::Matrix<double, 3, STATE_DIM>::Zero();
     H(0, VX) = 1.0;
-    H(1, VY) = 1.0; H(1, YAW_RATE) = rear_axle_offset_;
+    H(1, VY) = 1.0;
     H(2, YAW_RATE) = 1.0;
 
     Eigen::Vector3d z(vx, vy_nhc, yaw_rate);
-    Eigen::Vector3d h(x_(VX), x_(VY) + x_(YAW_RATE) * rear_axle_offset_, x_(YAW_RATE));
+    Eigen::Vector3d h(x_(VX), x_(VY), x_(YAW_RATE));
 
     Eigen::Matrix3d S = H * P_ * H.transpose() + R;
     Eigen::Matrix<double, STATE_DIM, 3> K = P_ * H.transpose() * S.inverse();
@@ -249,30 +247,34 @@ void EkfCore::correctImu(double ax_raw, double ay_raw, double yaw_rate_raw, cons
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // 관측 모델: 레버암 변환이 결합된 원시 IMU 데이터 직접 관측
-    // h(x) = [ ax - alpha * ry - w^2 * rx + b_ax,
-    //          ay + alpha * rx - w^2 * ry + b_ay,
+    // 관측 모델: 레버암 변환 및 코리올리 가속도가 결합된 원시 IMU 데이터 직접 관측
+    // h(x) = [ ax - w * vy - alpha * ry - w^2 * rx + b_ax,
+    //          ay + w * vx + alpha * rx - w^2 * ry + b_ay,
     //          w + b_yaw_rate ]
     double rx = imu_offset_x_ - rear_axle_offset_;
     double ry = imu_offset_y_;
     double w = x_(YAW_RATE);
     double alpha = x_(YAW_ACC);
+    double vx = x_(VX);
+    double vy = x_(VY);
 
     Eigen::Vector3d z(ax_raw, ay_raw, yaw_rate_raw);
     Eigen::Vector3d h(
-        x_(AX) - alpha * ry - w * w * rx + x_(B_AX),
-        x_(AY) + alpha * rx - w * w * ry + x_(B_AY),
+        x_(AX) - w * vy - alpha * ry - w * w * rx + x_(B_AX),
+        x_(AY) + w * vx + alpha * rx - w * w * ry + x_(B_AY),
         w + x_(B_YAW_RATE)
     );
 
     Eigen::Matrix<double, 3, STATE_DIM> H = Eigen::Matrix<double, 3, STATE_DIM>::Zero();
     H(0, AX) = 1.0;
-    H(0, YAW_RATE) = -2.0 * w * rx;
+    H(0, VY) = -w;
+    H(0, YAW_RATE) = -vy - 2.0 * w * rx;
     H(0, YAW_ACC) = -ry;
     H(0, B_AX) = 1.0;
 
     H(1, AY) = 1.0;
-    H(1, YAW_RATE) = -2.0 * w * ry;
+    H(1, VX) = w;
+    H(1, YAW_RATE) = vx - 2.0 * w * ry;
     H(1, YAW_ACC) = rx;
     H(1, B_AY) = 1.0;
 

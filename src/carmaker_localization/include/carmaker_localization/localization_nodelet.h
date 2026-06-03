@@ -105,6 +105,11 @@ private:
     void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
 
+    // Frame transformation helpers
+    Eigen::Vector3d transformPose(const Eigen::Vector3d& pose_in, double offset_x) const;
+    Eigen::Vector2d transformVelocity(const Eigen::Vector2d& vel_in, double yaw_rate, double offset_x) const;
+    Eigen::Matrix3d propagateCovariance(const Eigen::Matrix3d& cov_in, double yaw, double offset_x) const;
+
     // =========================================================================
     // 1. Hardware Constants
     // =========================================================================
