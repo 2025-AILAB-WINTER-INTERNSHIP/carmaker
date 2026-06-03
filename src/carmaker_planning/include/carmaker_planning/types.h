@@ -115,7 +115,15 @@ struct GlobalPlanningResult {
   double planning_time = 0.0, smoothing_time = 0.0;
   double resampling_time = 0.0, profiling_time = 0.0, total_time = 0.0;
   int expanded_nodes = 0, search_iterations = 0;
-  std::vector<std::string> warnings;
+  std::vector<std::pair<std::string, std::string>> logs;
+
+  void addLog(const std::string& level, const std::string& msg) {
+    logs.push_back({level, msg});
+  }
+  void warn(const std::string& msg) { addLog("WARN", msg); }
+  void info(const std::string& msg) { addLog("INFO", msg); }
+  void error(const std::string& msg) { addLog("ERROR", msg); }
+  void debug(const std::string& msg) { addLog("DEBUG", msg); }
 
   bool success() const {
     return status == PlanningStatus::SUCCESS_OPTIMAL ||

@@ -121,7 +121,7 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
       geometry_msgs::TransformStamped transform = tf_buffer_->lookupTransform(global_frame_, ego_frame_, ros::Time(0));
       double tx = transform.transform.translation.x;
       double ty = transform.transform.translation.y;
-      
+
       // Extract yaw from quaternion
       double qx_rot = transform.transform.rotation.x;
       double gq_y_rot = transform.transform.rotation.y;
@@ -206,7 +206,7 @@ void GlobalPlannerNodelet::goalCallback(const geometry_msgs::PoseStamped::ConstP
   NODELET_INFO("Goal pose received: (%.2f, %.2f, %.2f deg)",
                msg->pose.position.x, msg->pose.position.y,
                quaternionToYaw(msg->pose.orientation) * 180.0 / M_PI);
-  
+
   // 2. Verify that map data is loaded and ready
   if (!has_map_) {
     NODELET_WARN_THROTTLE(1.0, "Map not received yet, dropping goal request.");
@@ -268,14 +268,22 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
     last_diag_ = diag;
   }
 
-  // Log bubbled warnings from core planner & post-processor via Nodelet logger
-  for (const auto& warn_msg : result.warnings) {
-    NODELET_WARN("%s", warn_msg.c_str());
+  // Log bubbled diagnostic messages from core planner & post-processor via Nodelet logger
+  for (const auto& log : result.logs) {
+    if (log.first == "WARN") {
+      NODELET_WARN("%s", log.second.c_str());
+    } else if (log.first == "INFO") {
+      NODELET_INFO("%s", log.second.c_str());
+    } else if (log.first == "ERROR") {
+      NODELET_ERROR("%s", log.second.c_str());
+    } else if (log.first == "DEBUG") {
+      NODELET_DEBUG("%s", log.second.c_str());
+    }
   }
 
   if (result.success()) {
     successful_plans_++;
-    
+
     double len = result.path.empty() ? 0.0 : result.path.back().s;
 
     NODELET_INFO("Plan success! Planning: %.3f s, Smoothing: %.3f s, Total: %.3f s, Path Length: %.2f m",

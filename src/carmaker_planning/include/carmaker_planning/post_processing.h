@@ -141,13 +141,13 @@ public:
                bool enable_profiling);
 
 private:
-  bool smooth(Path& path, const GlobalMap& map, std::vector<std::string>& warnings);
-  bool resample(const Path& path, Path& resampled_path, std::vector<std::string>& warnings);
-  bool resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::string>& warnings);
-  bool profile(Path& path, double start_vel, std::vector<std::string>& warnings);
+  bool smooth(Path& path, const GlobalMap& map, std::vector<std::pair<std::string, std::string>>& logs);
+  bool resample(const Path& path, Path& resampled_path, std::vector<std::pair<std::string, std::string>>& logs);
+  bool resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs);
+  bool profile(Path& path, double start_vel, std::vector<std::pair<std::string, std::string>>& logs);
   void profileKinematicPass(Path& path, double start_v, double start_a,
-                            double goal_v, double goal_a, const KinematicLimits& limits, std::vector<std::string>& warnings);
-  void smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::string>& warnings);
+                            double goal_v, double goal_a, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs);
+  void smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs);
   std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) const;
 
   GlobalPostProcessConfig config_;

@@ -129,7 +129,7 @@ bool GlobalPlanner::postProcess(GlobalPlanningResult& result, const GlobalMap& m
   bool run_profiling = enable_velocity_profiling_;
 
   if (run_profiling && !run_resampling) {
-    result.warnings.push_back("Velocity profiling is enabled but resampling is disabled. Forcing resampling to preserve kinematic consistency!");
+    result.warn("Velocity profiling is enabled but resampling is disabled. Forcing resampling to preserve kinematic consistency!");
     run_resampling = true;
   }
 

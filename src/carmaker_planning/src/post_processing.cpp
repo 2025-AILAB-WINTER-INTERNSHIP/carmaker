@@ -31,7 +31,7 @@ bool PostProcessor::process(GlobalPlanningResult& result,
   // 1. Smoothing
   if (enable_smoothing) {
     const auto start = Clock::now();
-    smooth(result.path, map, result.warnings);
+    smooth(result.path, map, result.logs);
     result.smoothing_time = std::chrono::duration<double>(Clock::now() - start).count();
   }
 
@@ -39,7 +39,7 @@ bool PostProcessor::process(GlobalPlanningResult& result,
   if (enable_resampling) {
     const auto start = Clock::now();
     Path resampled_path;
-    if (resample(result.path, resampled_path, result.warnings)) {
+    if (resample(result.path, resampled_path, result.logs)) {
       result.path = std::move(resampled_path);
     }
     result.resampling_time = std::chrono::duration<double>(Clock::now() - start).count();
@@ -48,7 +48,7 @@ bool PostProcessor::process(GlobalPlanningResult& result,
   // 3. Velocity profiling
   if (enable_profiling) {
     const auto start = Clock::now();
-    profile(result.path, start_vel, result.warnings);
+    profile(result.path, start_vel, result.logs);
     result.profiling_time = std::chrono::duration<double>(Clock::now() - start).count();
   } else {
     for (auto& pt : result.path) {
@@ -63,7 +63,7 @@ bool PostProcessor::process(GlobalPlanningResult& result,
 
 void PostProcessor::profileKinematicPass(Path& path, double start_v, double start_a,
                                          double goal_v, double goal_a, const KinematicLimits& limits,
-                                         std::vector<std::string>& warnings) {
+                                         std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.empty()) return;
   const int n = static_cast<int>(path.size());
   const double max_accel = std::abs(limits.max_accel);
@@ -101,12 +101,12 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
                           : a_bwd[i+1], max_decel, max_accel);
   }
 
-  if (std::abs(v_bwd[0] - start_v) > 0.5) {
+  if (v_bwd[0] < start_v - 0.5) {
     char buf[256];
     std::snprintf(buf, sizeof(buf),
       "Kinematic unreachability detected in segment: start velocity mismatch (v_bwd[0]: %.2f m/s vs start_v: %.2f m/s) exceeds 0.5 m/s threshold.",
       v_bwd[0], start_v);
-    warnings.push_back(std::string(buf));
+    logs.push_back({"WARN", std::string(buf)});
   }
 
   for (int i = 0; i < n; ++i) {
@@ -138,7 +138,7 @@ std::vector<std::pair<size_t, size_t>> PostProcessor::splitIntoSegments(const Pa
   return segments;
 }
 
-bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::string>& warnings) {
+bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.size() < 3) {
     return true;
   }
@@ -260,7 +260,7 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::st
     }
 
     if (loop_detected) {
-      warnings.push_back("Smoother loop/twist detected in segment (angle diff > 70 deg). Rolling back to original segment.");
+      logs.push_back({"WARN", "Smoother loop/twist detected in segment (angle diff > 70 deg). Rolling back to original segment."});
       for (int i = 0; i < seg_len; ++i) {
         path[seg_start + i] = original_segment[i];
       }
@@ -270,7 +270,7 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::st
   return true;
 }
 
-bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::string>& warnings) {
+bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs) {
   if (input_segment.empty()) return false;
 
   std::vector<double> s_vals;
@@ -296,7 +296,7 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
   if (config_.resampler.use_spline && input_segment.size() >= 3) {
     use_spline = spline_x_.fit(s_vals, x_orig) && spline_y_.fit(s_vals, y_orig);
     if (!use_spline) {
-      warnings.push_back("Cubic Spline fitting failed for segment. Fallback to Linear interpolation.");
+      logs.push_back({"WARN", "Cubic Spline fitting failed for segment. Fallback to Linear interpolation."});
     }
   }
 
@@ -388,7 +388,7 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
   return true;
 }
 
-bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector<std::string>& warnings) {
+bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.size() < 2) {
     resampled_path = path;
     return true;
@@ -417,7 +417,7 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
 
     if (direction_changed) {
       Path segment_resampled;
-      resampleSegment(segment, segment_resampled, warnings);
+      resampleSegment(segment, segment_resampled, logs);
 
       if (resampled_path.empty()) {
         resampled_path = segment_resampled;
@@ -439,7 +439,7 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
 
   if (!segment.empty()) {
     Path segment_resampled;
-    resampleSegment(segment, segment_resampled, warnings);
+    resampleSegment(segment, segment_resampled, logs);
 
     if (resampled_path.empty()) {
       resampled_path = segment_resampled;
@@ -493,7 +493,7 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
         } else {
           char buf[128];
           std::snprintf(buf, sizeof(buf), "Cusp heading discontinuity too large (%.2f deg), skipping yaw blending.", rad2deg(cusp_diff));
-          warnings.push_back(std::string(buf));
+          logs.push_back({"WARN", std::string(buf)});
         }
       }
     }
@@ -502,9 +502,9 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
   return true;
 }
 
-bool PostProcessor::profile(Path& path, double start_vel, std::vector<std::string>& warnings) {
+bool PostProcessor::profile(Path& path, double start_vel, std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.empty()) {
-    warnings.push_back("Velocity profiling bypassed: Input path is empty.");
+    logs.push_back({"WARN", "Velocity profiling bypassed: Input path is empty."});
     return false;
   }
 
@@ -541,7 +541,7 @@ bool PostProcessor::profile(Path& path, double start_vel, std::vector<std::strin
     double seg_goal_v = (j == segments.size() - 1) ? config_.profiler.goal_vel : 0.0;
 
     // Profile the segment
-    profileKinematicPass(seg_path, seg_start_v, 0.0, seg_goal_v, 0.0, limits, warnings);
+    profileKinematicPass(seg_path, seg_start_v, 0.0, seg_goal_v, 0.0, limits, logs);
 
     // If this is not the first segment, calculate transition time from the end of the previous segment
     if (j > 0) {
@@ -562,12 +562,12 @@ bool PostProcessor::profile(Path& path, double start_vel, std::vector<std::strin
   }
 
   // Apply velocity profile smoothing and recalculate kinematics
-  smoothVelocityProfile(path, limits, warnings);
+  smoothVelocityProfile(path, limits, logs);
 
   return true;
 }
 
-void PostProcessor::smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::string>& warnings) {
+void PostProcessor::smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.size() < 3) return;
 
   std::vector<double> smoothed_v(path.size());
@@ -595,7 +595,7 @@ void PostProcessor::smoothVelocityProfile(Path& path, const KinematicLimits& lim
     const double acc_dt = std::max(0.01, dt);
     
     double raw_acc = (target_v - path[i-1].v) / acc_dt;
-    double clamped_acc = std::clamp(raw_acc, limits.max_decel, limits.max_accel);
+    double clamped_acc = std::clamp(raw_acc, -std::abs(limits.max_decel), std::abs(limits.max_accel));
 
     if (std::abs(raw_acc - clamped_acc) > 1e-2) {
       target_v = path[i-1].v + clamped_acc * acc_dt;
@@ -605,7 +605,7 @@ void PostProcessor::smoothVelocityProfile(Path& path, const KinematicLimits& lim
       ss << "Velocity profile smoothing caused acceleration violation at index " << i
          << ". Raw: " << raw_acc << " m/s^2, Clamped to: " << clamped_acc
          << " m/s^2. Rescaled velocity to " << target_v << " m/s.";
-      warnings.push_back(ss.str());
+      logs.push_back({"DEBUG", ss.str()});
     }
 
     path[i].v = std::max(0.0, target_v);
