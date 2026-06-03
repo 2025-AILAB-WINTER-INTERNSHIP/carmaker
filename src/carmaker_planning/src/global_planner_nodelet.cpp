@@ -159,8 +159,8 @@ State GlobalPlannerNodelet::getGoalState(const geometry_msgs::PoseStamped& msg) 
 }
 
 void GlobalPlannerNodelet::publishVisualization(const Path& path) {
-  visualizer_->publishPath(path, global_frame_, config_.vehicle.rear_axle_offset);
-  visualizer_->publishTree(planner_->getSearchTree(), planner_->getTreeBranches(), global_frame_);
+  visualizer_->visualize(path, planner_->getSearchTree(), planner_->getTreeBranches(),
+                         global_frame_, config_.vehicle.rear_axle_offset, config_.vehicle.min_turning_radius);
 }
 
 void GlobalPlannerNodelet::publishTrajectory(const Path& path) {
@@ -253,25 +253,30 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
 
   total_plans_++;
   {
+    GlobalPlanningDiagnostic diag;
+    diag.status = result.status;
+    diag.total_time = result.total_time;
+    diag.path_length = result.path.empty() ? 0.0 : result.path.back().s;
+    diag.planning_time = result.planning_time;
+    diag.smoothing_time = result.smoothing_time;
+    diag.resampling_time = result.resampling_time;
+    diag.profiling_time = result.profiling_time;
+    diag.expanded_nodes = result.expanded_nodes;
+    diag.search_iterations = result.search_iterations;
+
     std::lock_guard<std::mutex> d_lock(diag_mutex_);
-    last_status_ = result.statusString();
-    last_planning_time_ = result.total_time;
+    last_diag_ = diag;
+  }
+
+  // Log bubbled warnings from core planner & post-processor via Nodelet logger
+  for (const auto& warn_msg : result.warnings) {
+    NODELET_WARN("%s", warn_msg.c_str());
   }
 
   if (result.success()) {
     successful_plans_++;
     
-    // Calculate path length
-    double len = 0.0;
-    for (size_t i = 1; i < result.path.size(); ++i) {
-      double dx = result.path[i].x - result.path[i-1].x;
-      double dy = result.path[i].y - result.path[i-1].y;
-      len += std::hypot(dx, dy);
-    }
-    {
-      std::lock_guard<std::mutex> d_lock(diag_mutex_);
-      last_path_length_ = len;
-    }
+    double len = result.path.empty() ? 0.0 : result.path.back().s;
 
     NODELET_INFO("Plan success! Planning: %.3f s, Smoothing: %.3f s, Total: %.3f s, Path Length: %.2f m",
                  result.planning_time, result.smoothing_time, result.total_time, len);
@@ -284,24 +289,24 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
   }
   else {
     failed_plans_++;
-    {
-      std::lock_guard<std::mutex> d_lock(diag_mutex_);
-      last_path_length_ = 0.0;
-    }
     NODELET_ERROR("Planning failed: %s", result.statusString());
   }
 }
 
 void GlobalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
-  std::string status;
-  double p_time = 0.0;
-  double p_len = 0.0;
+  GlobalPlanningDiagnostic last_res;
   {
     std::lock_guard<std::mutex> d_lock(diag_mutex_);
-    status = last_status_;
-    p_time = last_planning_time_;
-    p_len = last_path_length_;
+    last_res = last_diag_;
   }
+
+  std::string status = "NO_PLAN";
+  if (last_res.status != PlanningStatus::INVALID) {
+    status = last_res.statusString();
+  }
+
+  double p_time = last_res.total_time;
+  double p_len = last_res.path_length;
 
   if (status == "SUCCESS_OPTIMAL" || status == "SUCCESS_BEST_EFFORT") {
     stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Planning Active");
@@ -318,6 +323,12 @@ void GlobalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStat
   stat.add("Last Planning Time (s)", p_time);
   stat.add("Last Path Length (m)", p_len);
   stat.add("Last Status", status);
+  stat.add("A* Search Time (s)", last_res.planning_time);
+  stat.add("Smoothing Time (s)", last_res.smoothing_time);
+  stat.add("Resampling Time (s)", last_res.resampling_time);
+  stat.add("Velocity Profiling Time (s)", last_res.profiling_time);
+  stat.add("Expanded Nodes", last_res.expanded_nodes);
+  stat.add("Search Iterations", last_res.search_iterations);
 }
 
 void GlobalPlannerNodelet::diagTimerCallback(const ros::WallTimerEvent&) {
@@ -340,9 +351,7 @@ void GlobalPlannerNodelet::processDiagnostics() {
       failed_plans_ = 0;
       {
         std::lock_guard<std::mutex> d_lock(diag_mutex_);
-        last_planning_time_ = 0.0;
-        last_path_length_ = 0.0;
-        last_status_ = "NO_PLAN";
+        last_diag_ = GlobalPlanningDiagnostic();
       }
       if (tf_buffer_) {
         tf_buffer_->clear();

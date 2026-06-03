@@ -117,55 +117,43 @@ private:
   std::vector<double> f_;
   std::vector<double> M_;
 };
-
-class PathSmoother {
-public:
-  explicit PathSmoother(const GlobalMainConfig& config);
-  ~PathSmoother() = default;
-  PathSmoother(const PathSmoother&) = delete;
-  PathSmoother& operator=(const PathSmoother&) = delete;
-
-  bool smooth(Path& path, const GlobalMap& map);
-
-private:
-  GlobalPostProcessConfig config_;
-};
-
-class PathResampler {
-public:
-  explicit PathResampler(const GlobalMainConfig& config);
-  ~PathResampler() = default;
-  PathResampler(const PathResampler&) = delete;
-  PathResampler& operator=(const PathResampler&) = delete;
-
-  bool resample(const Path& path, Path& resampled_path);
-
-private:
-  bool resampleSegment(const Path& path, Path& resampled_path);
-  GlobalPostProcessConfig config_;
-  CubicSpline spline_x_;
-  CubicSpline spline_y_;
-};
-
 struct KinematicLimits {
   double max_vel;
   double max_accel;
   double max_decel;
   double max_jerk;
   double max_lat_acc;
+  double min_vel_denom;
 };
 
-class VelocityProfiler {
+class PostProcessor {
 public:
-  explicit VelocityProfiler(const GlobalMainConfig& config);
-  ~VelocityProfiler() = default;
-  VelocityProfiler(const VelocityProfiler&) = delete;
-  VelocityProfiler& operator=(const VelocityProfiler&) = delete;
+  explicit PostProcessor(const GlobalMainConfig& config);
+  ~PostProcessor() = default;
+  PostProcessor(const PostProcessor&) = delete;
+  PostProcessor& operator=(const PostProcessor&) = delete;
 
-  bool profile(Path& path, double start_vel);
+  bool process(GlobalPlanningResult& result,
+               const GlobalMap& map,
+               double start_vel,
+               bool enable_smoothing,
+               bool enable_resampling,
+               bool enable_profiling);
 
 private:
+  bool smooth(Path& path, const GlobalMap& map, std::vector<std::string>& warnings);
+  bool resample(const Path& path, Path& resampled_path, std::vector<std::string>& warnings);
+  bool resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::string>& warnings);
+  bool profile(Path& path, double start_vel, std::vector<std::string>& warnings);
+  void profileKinematicPass(Path& path, double start_v, double start_a,
+                            double goal_v, double goal_a, const KinematicLimits& limits, std::vector<std::string>& warnings);
+  void smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::string>& warnings);
+  std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) const;
+
   GlobalPostProcessConfig config_;
+  double max_kappa_ = 0.2;
+  CubicSpline spline_x_;
+  CubicSpline spline_y_;
 };
 
 } // namespace carmaker_planning

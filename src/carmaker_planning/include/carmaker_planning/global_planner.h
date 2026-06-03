@@ -53,9 +53,7 @@ private:
   }
 
   std::unique_ptr<HybridAStar> hybrid_astar_;
-  std::unique_ptr<PathSmoother> smoother_;
-  std::unique_ptr<PathResampler> resampler_;
-  std::unique_ptr<VelocityProfiler> velocity_profiler_;
+  std::unique_ptr<PostProcessor> post_processor_;
 
   bool enable_smoothing_ = true;
   bool enable_resampling_ = true;

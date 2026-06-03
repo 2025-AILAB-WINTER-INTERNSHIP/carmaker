@@ -6,7 +6,6 @@
 #include "carmaker_planning/global_planner.h"
 #include <algorithm>
 #include <cmath>
-#include <ros/ros.h>
 
 namespace carmaker_planning {
 
@@ -14,9 +13,7 @@ GlobalPlanner::GlobalPlanner(const GlobalMainConfig& config, const std::string& 
   : config_(config), logger_name_(logger_name)
 {
   hybrid_astar_ = std::make_unique<HybridAStar>(config, logger_name);
-  smoother_ = std::make_unique<PathSmoother>(config);
-  resampler_ = std::make_unique<PathResampler>(config);
-  velocity_profiler_ = std::make_unique<VelocityProfiler>(config);
+  post_processor_ = std::make_unique<PostProcessor>(config);
 }
 
 void GlobalPlanner::updateConfig(const GlobalMainConfig& config)
@@ -24,9 +21,7 @@ void GlobalPlanner::updateConfig(const GlobalMainConfig& config)
   config_ = config;
 
   hybrid_astar_ = std::make_unique<HybridAStar>(config, logger_name_);
-  smoother_ = std::make_unique<PathSmoother>(config);
-  resampler_ = std::make_unique<PathResampler>(config);
-  velocity_profiler_ = std::make_unique<VelocityProfiler>(config);
+  post_processor_ = std::make_unique<PostProcessor>(config);
 }
 
 GlobalPlanningResult GlobalPlanner::plan(
@@ -61,7 +56,6 @@ GlobalPlanningResult GlobalPlanner::plan(
 
   // 3. Post-processing Pipeline (Smoothing -> Resampling -> Profiling)
   if (!postProcess(result, map, current_velocity)) {
-    ROS_WARN_NAMED(logger_name_, "Global Planner: Post-processing pipeline failed.");
     if (result.path.empty()) {
       result.status = PlanningStatus::FAILURE_NO_PATH;
     }
@@ -95,13 +89,11 @@ PlanningStatus GlobalPlanner::validateInputs(
   }
 
   if (!isValidState(start, map)) {
-    ROS_WARN_NAMED(logger_name_, "[Global] Start state in collision or out of bounds (%.2f, %.2f)", start.x, start.y);
-    return PlanningStatus::FAILURE_COLLISION;
+    return PlanningStatus::FAILURE_COLLISION_START;
   }
 
   if (!isValidState(goal, map)) {
-    ROS_WARN_NAMED(logger_name_, "[Global] Goal state in collision or out of bounds (%.2f, %.2f)", goal.x, goal.y);
-    return PlanningStatus::FAILURE_COLLISION;
+    return PlanningStatus::FAILURE_COLLISION_GOAL;
   }
 
   return PlanningStatus::SUCCESS_OPTIMAL;
@@ -132,33 +124,21 @@ bool GlobalPlanner::postProcess(GlobalPlanningResult& result, const GlobalMap& m
     return false;
   }
 
-  // 1. Smoothing
-  if (enable_smoothing_) {
-    const auto start = Clock::now();
-    smoother_->smooth(result.path, map);
-    result.smoothing_time = elapsedSeconds(start);
+  bool run_smoothing = enable_smoothing_;
+  bool run_resampling = enable_resampling_;
+  bool run_profiling = enable_velocity_profiling_;
+
+  if (run_profiling && !run_resampling) {
+    result.warnings.push_back("Velocity profiling is enabled but resampling is disabled. Forcing resampling to preserve kinematic consistency!");
+    run_resampling = true;
   }
 
-  // 2. Resampling
-  if (enable_resampling_) {
-    const auto start = Clock::now();
-    Path resampled_path;
-    if (resampler_->resample(result.path, resampled_path)) {
-      result.path = std::move(resampled_path);
-    }
-    result.resampling_time = elapsedSeconds(start);
+  bool success = post_processor_->process(result, map, current_velocity,
+                                          run_smoothing, run_resampling, run_profiling);
+  if (!success) {
+    result.status = PlanningStatus::FAILURE_POST_PROCESSING;
   }
-
-  // 3. Velocity profiling
-  if (enable_velocity_profiling_) {
-    const auto start = Clock::now();
-    if (!velocity_profiler_->profile(result.path, current_velocity)) {
-      // Profiling failed
-    }
-    result.profiling_time = elapsedSeconds(start);
-  }
-
-  return true;
+  return success;
 }
 
 std::vector<State> GlobalPlanner::getSearchTree() const

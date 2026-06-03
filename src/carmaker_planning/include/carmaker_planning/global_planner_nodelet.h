@@ -101,9 +101,7 @@ private:
   std::atomic<uint64_t> failed_plans_{0};
   
   std::mutex diag_mutex_;
-  double last_planning_time_{0.0};
-  double last_path_length_{0.0};
-  std::string last_status_{"NO_PLAN"};
+  GlobalPlanningDiagnostic last_diag_;
 };
 
 } // namespace carmaker_planning

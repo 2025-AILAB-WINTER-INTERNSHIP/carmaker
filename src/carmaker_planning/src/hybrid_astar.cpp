@@ -6,7 +6,7 @@
 #include "carmaker_planning/hybrid_astar.h"
 #include <chrono>
 #include <algorithm>
-#include <ros/ros.h>
+#include <iostream>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -251,7 +251,7 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
 
   GlobalNode3D * start_node = initializeStartNode(start, goal, map);
   if (!start_node) {
-    ROS_ERROR_NAMED(logger_name_, "Start node initialization failed (collision or out of bounds)");
+    std::cerr << "[HybridAStar] Start node initialization failed (collision or out of bounds)" << std::endl;
     return PlanningStatus::FAILURE_COLLISION;
   }
 
@@ -269,7 +269,7 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
     if (iter % 100 == 0) {
       auto current_clock = std::chrono::steady_clock::now();
       if (std::chrono::duration<double>(current_clock - start_clock).count() > max_time) {
-        ROS_WARN_NAMED(logger_name_, "Timeout reached (%.2fs)", max_time);
+        std::cerr << "[HybridAStar] Timeout reached (" << max_time << "s)" << std::endl;
         tracePath(best_node);
         return PlanningStatus::FAILURE_TIMEOUT;
       }
@@ -304,7 +304,7 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
     expandNode(current, goal, map);
   }
 
-  ROS_WARN_NAMED(logger_name_, "Goal not reached. Returning Best-Effort path (min_h: %.2fm)", min_h);
+  std::cerr << "[HybridAStar] Goal not reached. Returning Best-Effort path (min_h: " << min_h << "m)" << std::endl;
   tracePath(best_node);
 
   if (iter >= max_iter) return PlanningStatus::FAILURE_TIMEOUT;

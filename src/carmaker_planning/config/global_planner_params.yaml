@@ -8,6 +8,7 @@ topics:
       map: "/planning/debug/occupancy_grid"
       path: "/planning/debug/global_path"
       pose: "/planning/debug/global_pose"
+      curvature: "/planning/debug/curvature_path"
       tree: "/planning/debug/search_tree"
       velocity: "/planning/debug/velocity_profile"
   subscribe:
@@ -98,6 +99,7 @@ global_post_processing:
     resolution: 0.1
     yaw_blending_width: 5 # number of points for blending at cusp transitions
     use_spline: true # Set to true to use Cubic Spline resampling, false for Linear
+    cusp_angular_threshold_deg: 20.0 # Heading difference limit (in deg) to skip yaw blending at cusp transitions
   profiler:
     max_vel: 2.0 # m/s 7.2 km/h
     max_accel: 0.8 # m/s^2
@@ -106,3 +108,7 @@ global_post_processing:
     max_lat_acc: 0.8 # m/s^2
     goal_vel: 0.0
     gear_shift_duration: 1.0 # seconds (delay at forward/reverse transitions)
+    min_velocity_denominator: 0.02 # Lower limit of velocity denominator for dt calculations to prevent division by zero
+  visualization:
+    arrow_spacing_meters: 0.2 # Spacing in meters for PoseArray Yaw Arrows
+

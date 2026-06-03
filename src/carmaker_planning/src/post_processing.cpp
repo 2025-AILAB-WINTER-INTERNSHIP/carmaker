@@ -7,13 +7,63 @@
 #include "carmaker_planning/math.h"
 #include <cmath>
 #include <algorithm>
+#include <chrono>
+#include <iostream>
+#include <sstream>
+#include <iomanip>
 
 namespace carmaker_planning {
 
-namespace {
+// ── PostProcessor Implementation ──────────────────────────────────────
 
-void profileKinematicPass(Path& path, double start_v, double start_a,
-                          double goal_v, double goal_a, const KinematicLimits& limits) {
+PostProcessor::PostProcessor(const GlobalMainConfig& config)
+  : config_(config.post_process),
+    max_kappa_((config.vehicle.min_turning_radius > 0.1) ? (1.0 / config.vehicle.min_turning_radius) : 0.2) {}
+
+bool PostProcessor::process(GlobalPlanningResult& result,
+                            const GlobalMap& map,
+                            double start_vel,
+                            bool enable_smoothing,
+                            bool enable_resampling,
+                            bool enable_profiling) {
+  using Clock = std::chrono::steady_clock;
+
+  // 1. Smoothing
+  if (enable_smoothing) {
+    const auto start = Clock::now();
+    smooth(result.path, map, result.warnings);
+    result.smoothing_time = std::chrono::duration<double>(Clock::now() - start).count();
+  }
+
+  // 2. Resampling
+  if (enable_resampling) {
+    const auto start = Clock::now();
+    Path resampled_path;
+    if (resample(result.path, resampled_path, result.warnings)) {
+      result.path = std::move(resampled_path);
+    }
+    result.resampling_time = std::chrono::duration<double>(Clock::now() - start).count();
+  }
+
+  // 3. Velocity profiling
+  if (enable_profiling) {
+    const auto start = Clock::now();
+    profile(result.path, start_vel, result.warnings);
+    result.profiling_time = std::chrono::duration<double>(Clock::now() - start).count();
+  } else {
+    for (auto& pt : result.path) {
+      pt.v = 0.0;
+      pt.a = 0.0;
+    }
+    result.profiling_time = 0.0;
+  }
+
+  return true;
+}
+
+void PostProcessor::profileKinematicPass(Path& path, double start_v, double start_a,
+                                         double goal_v, double goal_a, const KinematicLimits& limits,
+                                         std::vector<std::string>& warnings) {
   if (path.empty()) return;
   const int n = static_cast<int>(path.size());
   const double max_accel = std::abs(limits.max_accel);
@@ -32,7 +82,7 @@ void profileKinematicPass(Path& path, double start_v, double start_a,
   a_fwd[0] = std::clamp(start_a, max_decel, max_accel);
   for (int i = 1; i < n; ++i) {
     const double ds = dist(path[i-1].x, path[i-1].y, path[i].x, path[i].y);
-    const double dt = (ds > 1e-6) ? ds / std::max(0.1, v_fwd[i-1]) : 0.1;
+    const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, v_fwd[i-1]) : limits.min_vel_denom;
     double a_lim = std::min(max_accel, a_fwd[i-1] + max_jerk * dt);
     v_fwd[i] = std::sqrt(std::max(0.0, v_fwd[i-1]*v_fwd[i-1] + 2.0*a_lim*ds));
     a_fwd[i] = std::clamp((ds > 1e-6) ? (v_fwd[i]*v_fwd[i]-v_fwd[i-1]*v_fwd[i-1])/(2.0*ds)
@@ -44,11 +94,19 @@ void profileKinematicPass(Path& path, double start_v, double start_a,
   a_bwd[n-1] = std::clamp(goal_a, max_decel, max_accel);
   for (int i = n-2; i >= 0; --i) {
     const double ds = dist(path[i].x, path[i].y, path[i+1].x, path[i+1].y);
-    const double dt = (ds > 1e-6) ? ds / std::max(0.1, v_bwd[i+1]) : 0.1;
+    const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, v_bwd[i+1]) : limits.min_vel_denom;
     double a_lim = std::max(max_decel, a_bwd[i+1] - max_jerk * dt);
     v_bwd[i] = std::sqrt(std::max(0.0, v_bwd[i+1]*v_bwd[i+1] - 2.0*a_lim*ds));
     a_bwd[i] = std::clamp((ds > 1e-6) ? (v_bwd[i+1]*v_bwd[i+1]-v_bwd[i]*v_bwd[i])/(2.0*ds)
                           : a_bwd[i+1], max_decel, max_accel);
+  }
+
+  if (std::abs(v_bwd[0] - start_v) > 0.5) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+      "Kinematic unreachability detected in segment: start velocity mismatch (v_bwd[0]: %.2f m/s vs start_v: %.2f m/s) exceeds 0.5 m/s threshold.",
+      v_bwd[0], start_v);
+    warnings.push_back(std::string(buf));
   }
 
   for (int i = 0; i < n; ++i) {
@@ -58,7 +116,7 @@ void profileKinematicPass(Path& path, double start_v, double start_a,
       path[i].t = 0.0;
     } else {
       const double ds = dist(path[i-1].x, path[i-1].y, path[i].x, path[i].y);
-      const double dt = (ds > 1e-6) ? ds / std::max(0.1, (path[i].v + path[i-1].v) / 2.0) : 0.1;
+      const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i].v + path[i-1].v) / 2.0) : limits.min_vel_denom;
       const double acc_dt = std::max(0.01, dt);
       path[i].a = std::clamp((path[i].v - path[i-1].v) / acc_dt, max_decel, max_accel);
       path[i].t = path[i-1].t + dt;
@@ -66,7 +124,7 @@ void profileKinematicPass(Path& path, double start_v, double start_a,
   }
 }
 
-std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) {
+std::vector<std::pair<size_t, size_t>> PostProcessor::splitIntoSegments(const Path& path) const {
   std::vector<std::pair<size_t, size_t>> segments;
   if (path.empty()) return segments;
   size_t start_idx = 0;
@@ -80,14 +138,7 @@ std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) {
   return segments;
 }
 
-} // namespace
-
-// ── PathSmoother Implementation ──────────────────────────────────────
-
-PathSmoother::PathSmoother(const GlobalMainConfig& config)
-: config_(config.post_process) {}
-
-bool PathSmoother::smooth(Path& path, const GlobalMap& map) {
+bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::string>& warnings) {
   if (path.size() < 3) {
     return true;
   }
@@ -156,19 +207,11 @@ bool PathSmoother::smooth(Path& path, const GlobalMap& map) {
         }
       }
     }
-  }
 
-  // 3. Re-calculate yaw and curvature for the entire path using segment boundaries
-  for (const auto& seg : segments) {
-    size_t seg_start = seg.first;
-    size_t seg_end = seg.second;
-    int seg_len = static_cast<int>(seg_end - seg_start + 1);
-
+    // 1) Calculate Yaw and Curvature for this segment immediately after smoothing
     for (int i = 0; i < seg_len; ++i) {
       size_t global_idx = seg_start + i;
       double dx = 0.0, dy = 0.0;
-      if (seg_len < 2) continue;
-
       if (i == 0) {
         dx = path[global_idx + 1].x - path[global_idx].x;
         dy = path[global_idx + 1].y - path[global_idx].y;
@@ -205,17 +248,29 @@ bool PathSmoother::smooth(Path& path, const GlobalMap& map) {
       path[seg_start].kappa = path[seg_start + 1].kappa;
       path[seg_end].kappa = path[seg_end - 1].kappa;
     }
+
+    // 2) Check for loops/twists and rollback if detected
+    bool loop_detected = false;
+    for (int i = 1; i < seg_len; ++i) {
+      double angle_diff = std::abs(wrap_to_pi(path[seg_start + i].theta - path[seg_start + i - 1].theta));
+      if (angle_diff > 1.22) { // 1.22 rad (approx. 70 deg)
+        loop_detected = true;
+        break;
+      }
+    }
+
+    if (loop_detected) {
+      warnings.push_back("Smoother loop/twist detected in segment (angle diff > 70 deg). Rolling back to original segment.");
+      for (int i = 0; i < seg_len; ++i) {
+        path[seg_start + i] = original_segment[i];
+      }
+    }
   }
 
   return true;
 }
 
-// ── PathResampler Implementation ─────────────────────────────────────
-
-PathResampler::PathResampler(const GlobalMainConfig& config)
-: config_(config.post_process) {}
-
-bool PathResampler::resampleSegment(const Path& input_segment, Path& output_path) {
+bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::string>& warnings) {
   if (input_segment.empty()) return false;
 
   std::vector<double> s_vals;
@@ -240,6 +295,9 @@ bool PathResampler::resampleSegment(const Path& input_segment, Path& output_path
   bool use_spline = false;
   if (config_.resampler.use_spline && input_segment.size() >= 3) {
     use_spline = spline_x_.fit(s_vals, x_orig) && spline_y_.fit(s_vals, y_orig);
+    if (!use_spline) {
+      warnings.push_back("Cubic Spline fitting failed for segment. Fallback to Linear interpolation.");
+    }
   }
 
   const double step_size = config_.resampler.resolution;
@@ -269,7 +327,8 @@ bool PathResampler::resampleSegment(const Path& input_segment, Path& output_path
       p.theta = raw_yaw;
 
       double denom = std::pow(dx_ds * dx_ds + dy_ds * dy_ds, 1.5);
-      p.kappa = (denom > 1e-9) ? (dx_ds * d2y_ds2 - dy_ds * d2x_ds2) / denom : 0.0;
+      double raw_kappa = (denom > 1e-9) ? (dx_ds * d2y_ds2 - dy_ds * d2x_ds2) / denom : 0.0;
+      p.kappa = std::clamp(raw_kappa, -max_kappa_, max_kappa_);
     } else {
       size_t current_idx = 0;
       while (current_idx < s_vals.size() - 1 && s_vals[current_idx + 1] < s_req) {
@@ -289,7 +348,8 @@ bool PathResampler::resampleSegment(const Path& input_segment, Path& output_path
       p.x = p0.x + ratio * (p1.x - p0.x);
       p.y = p0.y + ratio * (p1.y - p0.y);
       p.theta = wrap_to_pi(p0.theta + ratio * wrap_to_pi(p1.theta - p0.theta));
-      p.kappa = p0.kappa + ratio * (p1.kappa - p0.kappa);
+      double raw_kappa = p0.kappa + ratio * (p1.kappa - p0.kappa);
+      p.kappa = std::clamp(raw_kappa, -max_kappa_, max_kappa_);
     }
 
     output_path.push_back(p);
@@ -310,7 +370,8 @@ bool PathResampler::resampleSegment(const Path& input_segment, Path& output_path
     }
     p_last.theta = raw_yaw;
     double denom = std::pow(dx_ds * dx_ds + dy_ds * dy_ds, 1.5);
-    p_last.kappa = (denom > 1e-9) ? (dx_ds * d2y_ds2 - dy_ds * d2x_ds2) / denom : 0.0;
+    double raw_kappa = (denom > 1e-9) ? (dx_ds * d2y_ds2 - dy_ds * d2x_ds2) / denom : 0.0;
+    p_last.kappa = std::clamp(raw_kappa, -max_kappa_, max_kappa_);
   }
 
   if (output_path.empty()) {
@@ -327,7 +388,7 @@ bool PathResampler::resampleSegment(const Path& input_segment, Path& output_path
   return true;
 }
 
-bool PathResampler::resample(const Path& path, Path& resampled_path) {
+bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector<std::string>& warnings) {
   if (path.size() < 2) {
     resampled_path = path;
     return true;
@@ -356,7 +417,7 @@ bool PathResampler::resample(const Path& path, Path& resampled_path) {
 
     if (direction_changed) {
       Path segment_resampled;
-      resampleSegment(segment, segment_resampled);
+      resampleSegment(segment, segment_resampled, warnings);
 
       if (resampled_path.empty()) {
         resampled_path = segment_resampled;
@@ -378,7 +439,7 @@ bool PathResampler::resample(const Path& path, Path& resampled_path) {
 
   if (!segment.empty()) {
     Path segment_resampled;
-    resampleSegment(segment, segment_resampled);
+    resampleSegment(segment, segment_resampled, warnings);
 
     if (resampled_path.empty()) {
       resampled_path = segment_resampled;
@@ -397,55 +458,53 @@ bool PathResampler::resample(const Path& path, Path& resampled_path) {
     resampled_path[i].s = s;
   }
 
-  // Align and blend yaw at direction change cusps
+  // Post-processing Resampled Path: Align/blend yaw at direction change cusps and apply safeguards
   for (size_t i = 1; i < resampled_path.size(); ++i) {
     if (resampled_path[i-1].direction != resampled_path[i].direction) {
+      // 1. Exact Cusp points (where direction changes) must have zero curvature for safety
+      resampled_path[i-1].kappa = 0.0;
+      resampled_path[i].kappa = 0.0;
+
+      // 2. Yaw blending over a sliding window
       double theta_e = resampled_path[i-1].theta;
       const int target_dir = resampled_path[i].direction;
       const int N = config_.resampler.yaw_blending_width;
       if (N > 0) {
-        // Blend heading (yaw)
-        for (int k = 0; k < N; ++k) {
-          if (i + k < resampled_path.size() && resampled_path[i+k].direction == target_dir) {
-            double weight = static_cast<double>(k) / N;
-            double diff = wrap_to_pi(resampled_path[i+k].theta - theta_e);
-            resampled_path[i+k].theta = wrap_to_pi(theta_e + weight * diff);
-          }
-        }
-        // Update curvature (kappa = dtheta / ds) for the blended window to maintain geometric consistency
-        for (int k = 1; k <= N; ++k) {
-          size_t idx = i + k;
-          if (idx < resampled_path.size() && resampled_path[idx].direction == target_dir) {
-            double ds = dist(resampled_path[idx].x, resampled_path[idx].y, resampled_path[idx-1].x, resampled_path[idx-1].y);
-            if (ds > 1e-4) {
-              resampled_path[idx].kappa = wrap_to_pi(resampled_path[idx].theta - resampled_path[idx-1].theta) / ds;
-            } else {
-              resampled_path[idx].kappa = 0.0;
+        double cusp_diff = std::abs(wrap_to_pi(resampled_path[i].theta - theta_e));
+        if (cusp_diff < config_.resampler.cusp_angular_threshold_rad) {
+          // Blend heading (yaw)
+          for (int k = 0; k < N; ++k) {
+            if (i + k < resampled_path.size() && resampled_path[i+k].direction == target_dir) {
+              double weight = static_cast<double>(k) / N;
+              double diff = wrap_to_pi(resampled_path[i+k].theta - theta_e);
+              resampled_path[i+k].theta = wrap_to_pi(theta_e + weight * diff);
             }
           }
+          // Update curvature (kappa = dtheta / ds) for the blended window with denominator guard
+          for (int k = 1; k <= N; ++k) {
+            size_t idx = i + k;
+            if (idx < resampled_path.size() && resampled_path[idx].direction == target_dir) {
+              double ds = dist(resampled_path[idx].x, resampled_path[idx].y, resampled_path[idx-1].x, resampled_path[idx-1].y);
+              resampled_path[idx].kappa = (ds > 0.02)
+                ? std::clamp(wrap_to_pi(resampled_path[idx].theta - resampled_path[idx-1].theta) / ds, -max_kappa_, max_kappa_)
+                : 0.0;
+            }
+          }
+        } else {
+          char buf[128];
+          std::snprintf(buf, sizeof(buf), "Cusp heading discontinuity too large (%.2f deg), skipping yaw blending.", rad2deg(cusp_diff));
+          warnings.push_back(std::string(buf));
         }
       }
-    }
-  }
-
-  // Clear curvature at exact cusp points for safety (where speed is 0)
-  for (size_t i = 1; i < resampled_path.size(); ++i) {
-    if (resampled_path[i-1].direction != resampled_path[i].direction) {
-      resampled_path[i-1].kappa = 0.0;
-      resampled_path[i].kappa = 0.0;
     }
   }
 
   return true;
 }
 
-// ── VelocityProfiler Implementation ──────────────────────────────────
-
-VelocityProfiler::VelocityProfiler(const GlobalMainConfig& config)
-: config_(config.post_process) {}
-
-bool VelocityProfiler::profile(Path& path, double start_vel) {
+bool PostProcessor::profile(Path& path, double start_vel, std::vector<std::string>& warnings) {
   if (path.empty()) {
+    warnings.push_back("Velocity profiling bypassed: Input path is empty.");
     return false;
   }
 
@@ -462,6 +521,7 @@ bool VelocityProfiler::profile(Path& path, double start_vel) {
   limits.max_decel = config_.profiler.max_decel;
   limits.max_jerk = config_.profiler.max_jerk;
   limits.max_lat_acc = config_.profiler.max_lat_acc;
+  limits.min_vel_denom = config_.profiler.min_velocity_denominator;
 
   // Split path into segments of uniform direction
   std::vector<std::pair<size_t, size_t>> segments = splitIntoSegments(path);
@@ -481,7 +541,7 @@ bool VelocityProfiler::profile(Path& path, double start_vel) {
     double seg_goal_v = (j == segments.size() - 1) ? config_.profiler.goal_vel : 0.0;
 
     // Profile the segment
-    profileKinematicPass(seg_path, seg_start_v, 0.0, seg_goal_v, 0.0, limits);
+    profileKinematicPass(seg_path, seg_start_v, 0.0, seg_goal_v, 0.0, limits, warnings);
 
     // If this is not the first segment, calculate transition time from the end of the previous segment
     if (j > 0) {
@@ -501,7 +561,57 @@ bool VelocityProfiler::profile(Path& path, double start_vel) {
     }
   }
 
+  // Apply velocity profile smoothing and recalculate kinematics
+  smoothVelocityProfile(path, limits, warnings);
+
   return true;
+}
+
+void PostProcessor::smoothVelocityProfile(Path& path, const KinematicLimits& limits, std::vector<std::string>& warnings) {
+  if (path.size() < 3) return;
+
+  std::vector<double> smoothed_v(path.size());
+  smoothed_v[0] = path[0].v;
+  smoothed_v[path.size() - 1] = path.back().v;
+
+  for (size_t i = 1; i < path.size() - 1; ++i) {
+    // Keep Cusp velocity at 0 (direction changes or stop points)
+    if (path[i].direction != path[i-1].direction || path[i].direction != path[i+1].direction ||
+        path[i].v < 1e-3 || path[i-1].v < 1e-3 || path[i+1].v < 1e-3) {
+      smoothed_v[i] = path[i].v;
+    } else {
+      smoothed_v[i] = (path[i-1].v + path[i].v + path[i+1].v) / 3.0;
+    }
+  }
+
+  // Apply velocity rescaling and re-calculate acceleration / time stamp after smoothing for consistency
+  for (size_t i = 1; i < path.size(); ++i) {
+    const double ds = dist(path[i-1].x, path[i-1].y, path[i].x, path[i].y);
+    
+    // For index i, retrieve the smoothed target velocity or the original endpoint velocity
+    double target_v = (i == path.size() - 1) ? path.back().v : smoothed_v[i];
+    
+    const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (target_v + path[i-1].v) / 2.0) : limits.min_vel_denom;
+    const double acc_dt = std::max(0.01, dt);
+    
+    double raw_acc = (target_v - path[i-1].v) / acc_dt;
+    double clamped_acc = std::clamp(raw_acc, limits.max_decel, limits.max_accel);
+
+    if (std::abs(raw_acc - clamped_acc) > 1e-2) {
+      target_v = path[i-1].v + clamped_acc * acc_dt;
+      
+      std::stringstream ss;
+      ss << std::fixed << std::setprecision(2);
+      ss << "Velocity profile smoothing caused acceleration violation at index " << i
+         << ". Raw: " << raw_acc << " m/s^2, Clamped to: " << clamped_acc
+         << " m/s^2. Rescaled velocity to " << target_v << " m/s.";
+      warnings.push_back(ss.str());
+    }
+
+    path[i].v = std::max(0.0, target_v);
+    path[i].a = clamped_acc;
+    path[i].t = path[i-1].t + dt;
+  }
 }
 
 } // namespace carmaker_planning

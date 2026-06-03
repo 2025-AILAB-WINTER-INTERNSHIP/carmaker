@@ -18,22 +18,38 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
   tree_topic_ = pnh.param("topics/publish/debug/tree", std::string("/planning/debug/search_tree"));
   velocity_topic_ = pnh.param("topics/publish/debug/velocity", std::string("/planning/debug/velocity_profile"));
   pose_array_topic_ = pnh.param("topics/publish/debug/pose", std::string("/planning/debug/global_pose"));
+  curvature_topic_ = pnh.param("topics/publish/debug/curvature", std::string("/planning/debug/curvature_path"));
 
   path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 1, true);
   tree_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(tree_topic_, 1, true);
   velocity_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(velocity_topic_, 1, true);
   pose_array_pub_ = nh_.advertise<geometry_msgs::PoseArray>(pose_array_topic_, 1, true);
+  curvature_pub_ = nh_.advertise<visualization_msgs::Marker>(curvature_topic_, 1, true);
+
+  pnh.param("global_post_processing/visualization/arrow_spacing_meters", arrow_spacing_meters_, 0.2);
 }
 
-void Visualizer::publishPath(const Path& path, const std::string& frame_id, double rear_axle_offset) {
+void Visualizer::visualize(const Path& path,
+                           const std::vector<State>& tree,
+                           const std::vector<std::pair<State, State>>& branches,
+                           const std::string& frame_id,
+                           double rear_axle_offset,
+                           double min_turning_radius) {
   if (path.empty()) return;
 
   ros::Time now = ros::Time::now();
 
-  // 1. Publish standard nav_msgs::Path
+  path_pub_.publish(createPathMsg(path, frame_id, rear_axle_offset, now));
+  velocity_pub_.publish(createVelocityMarkers(path, frame_id, rear_axle_offset, now));
+  pose_array_pub_.publish(createPoseArrayMsg(path, frame_id, rear_axle_offset, now));
+  curvature_pub_.publish(createCurvatureMarker(path, frame_id, rear_axle_offset, min_turning_radius, now));
+  tree_pub_.publish(createTreeMarkers(tree, branches, frame_id, now));
+}
+
+nav_msgs::Path Visualizer::createPathMsg(const Path& path, const std::string& frame_id, double rear_axle_offset, const ros::Time& stamp) {
   nav_msgs::Path path_msg;
   path_msg.header.frame_id = frame_id;
-  path_msg.header.stamp = now;
+  path_msg.header.stamp = stamp;
 
   for (const auto& pt : path) {
     geometry_msgs::PoseStamped pose;
@@ -53,15 +69,16 @@ void Visualizer::publishPath(const Path& path, const std::string& frame_id, doub
 
     path_msg.poses.push_back(pose);
   }
-  path_pub_.publish(path_msg);
+  return path_msg;
+}
 
-  // 2. Publish 3D Cyan Cylinder Speed markers
+visualization_msgs::MarkerArray Visualizer::createVelocityMarkers(const Path& path, const std::string& frame_id, double rear_axle_offset, const ros::Time& stamp) {
   visualization_msgs::MarkerArray velocity_markers;
 
   // Add DELETEALL marker to clear previous speed cylinders
   visualization_msgs::Marker delete_marker;
   delete_marker.header.frame_id = frame_id;
-  delete_marker.header.stamp = now;
+  delete_marker.header.stamp = stamp;
   delete_marker.ns = "velocity";
   delete_marker.action = visualization_msgs::Marker::DELETEALL;
   velocity_markers.markers.push_back(delete_marker);
@@ -70,7 +87,7 @@ void Visualizer::publishPath(const Path& path, const std::string& frame_id, doub
   for (const auto& pt : path) {
     visualization_msgs::Marker m;
     m.header.frame_id = frame_id;
-    m.header.stamp = now;
+    m.header.stamp = stamp;
     m.ns = "velocity";
     m.id = marker_id++;
     m.type = visualization_msgs::Marker::CYLINDER;
@@ -95,59 +112,102 @@ void Visualizer::publishPath(const Path& path, const std::string& frame_id, doub
 
     if (pt.direction == -1) {
       // Solid Red for Reverse
-      m.color.r = 0.9;
-      m.color.g = 0.0;
-      m.color.b = 0.0;
+      m.color.r = 0.9; m.color.g = 0.0; m.color.b = 0.0;
     } else {
       // Solid Cyan for Forward
-      m.color.r = 0.0;
-      m.color.g = 0.9;
-      m.color.b = 0.9;
+      m.color.r = 0.0; m.color.g = 0.9; m.color.b = 0.9;
     }
     m.color.a = 0.7;
 
     velocity_markers.markers.push_back(m);
   }
-  velocity_pub_.publish(velocity_markers);
-
-  // 3. Publish PoseArray for Yaw Arrows
-  geometry_msgs::PoseArray pose_array_msg;
-  pose_array_msg.header.frame_id = frame_id;
-  pose_array_msg.header.stamp = now;
-
-  const size_t stride = 5; // Visualize every 5th point to avoid clutter (0.5m spacing at 0.1m resolution)
-  pose_array_msg.poses.reserve(path.size() / stride + 1);
-
-  for (size_t i = 0; i < path.size(); i += stride) {
-    const auto& pt = path[i];
-    geometry_msgs::Pose pose;
-
-    // Translate planned path point (rear axle center) backward to rear bumper to match path visualization
-    pose.position.x = pt.x - rear_axle_offset * std::cos(pt.theta);
-    pose.position.y = pt.y - rear_axle_offset * std::sin(pt.theta);
-    pose.position.z = 0.02; // Small height offset above the path line
-
-    double half_theta = pt.theta * 0.5;
-    pose.orientation.x = 0.0;
-    pose.orientation.y = 0.0;
-    pose.orientation.z = std::sin(half_theta);
-    pose.orientation.w = std::cos(half_theta);
-
-    pose_array_msg.poses.push_back(pose);
-  }
-  pose_array_pub_.publish(pose_array_msg);
+  return velocity_markers;
 }
 
-void Visualizer::publishTree(const std::vector<State>& tree,
-                             const std::vector<std::pair<State, State>>& branches,
-                             const std::string& frame_id) {
+geometry_msgs::PoseArray Visualizer::createPoseArrayMsg(const Path& path, const std::string& frame_id, double rear_axle_offset, const ros::Time& stamp) {
+  geometry_msgs::PoseArray pose_array_msg;
+  pose_array_msg.header.frame_id = frame_id;
+  pose_array_msg.header.stamp = stamp;
+  pose_array_msg.poses.reserve(path.size());
+
+  double last_s = -999.0;
+
+  for (size_t i = 0; i < path.size(); ++i) {
+    const auto& pt = path[i];
+    bool is_first = (i == 0);
+    bool is_last = (i == path.size() - 1);
+    bool is_cusp_start = (i > 0 && path[i].direction != path[i-1].direction);
+    bool is_cusp_end = (i < path.size() - 1 && path[i].direction != path[i+1].direction);
+
+    if (is_first || is_last || is_cusp_start || is_cusp_end || (pt.s - last_s >= arrow_spacing_meters_)) {
+      geometry_msgs::Pose pose;
+
+      // Translate planned path point (rear axle center) backward to rear bumper
+      pose.position.x = pt.x - rear_axle_offset * std::cos(pt.theta);
+      pose.position.y = pt.y - rear_axle_offset * std::sin(pt.theta);
+      pose.position.z = 0.03; // Small height offset above the curvature line
+
+      double half_theta = pt.theta * 0.5;
+      pose.orientation.x = 0.0;
+      pose.orientation.y = 0.0;
+      pose.orientation.z = std::sin(half_theta);
+      pose.orientation.w = std::cos(half_theta);
+
+      pose_array_msg.poses.push_back(pose);
+      last_s = pt.s;
+    }
+  }
+  return pose_array_msg;
+}
+
+visualization_msgs::Marker Visualizer::createCurvatureMarker(const Path& path, const std::string& frame_id, double rear_axle_offset, double min_turning_radius, const ros::Time& stamp) {
+  visualization_msgs::Marker curv_line;
+  curv_line.header.frame_id = frame_id;
+  curv_line.header.stamp = stamp;
+  curv_line.ns = "curvature";
+  curv_line.id = 0;
+  curv_line.type = visualization_msgs::Marker::LINE_STRIP;
+  curv_line.action = visualization_msgs::Marker::ADD;
+  curv_line.scale.x = 0.08; // Line width
+  curv_line.pose.orientation.w = 1.0;
+
+  curv_line.points.reserve(path.size());
+  curv_line.colors.reserve(path.size());
+
+  const double max_kappa = (min_turning_radius > 0.1) ? (1.0 / min_turning_radius) : 0.2;
+
+  for (const auto& pt : path) {
+    geometry_msgs::Point p;
+    p.x = pt.x - rear_axle_offset * std::cos(pt.theta);
+    p.y = pt.y - rear_axle_offset * std::sin(pt.theta);
+    p.z = 0.01; // Slightly below arrows/cylinders but above road
+
+    curv_line.points.push_back(p);
+    curv_line.colors.push_back(makeCurvatureColor(pt.kappa, max_kappa));
+  }
+  return curv_line;
+}
+
+std_msgs::ColorRGBA Visualizer::makeCurvatureColor(double kappa, double max_kappa) {
+  double ratio = std::min(1.0, std::abs(kappa) / (max_kappa > 1e-6 ? max_kappa : 1.0));
+  std_msgs::ColorRGBA color;
+  color.r = ratio;
+  color.g = 1.0 - ratio;
+  color.b = 0.0;
+  color.a = 0.8;
+  return color;
+}
+
+visualization_msgs::MarkerArray Visualizer::createTreeMarkers(const std::vector<State>& tree,
+                                                              const std::vector<std::pair<State, State>>& branches,
+                                                              const std::string& frame_id,
+                                                              const ros::Time& stamp) {
   visualization_msgs::MarkerArray markers;
-  ros::Time now = ros::Time::now();
 
   // 1. Nodes marker
   visualization_msgs::Marker nodes_marker;
   nodes_marker.header.frame_id = frame_id;
-  nodes_marker.header.stamp = now;
+  nodes_marker.header.stamp = stamp;
   nodes_marker.ns = "nodes";
   nodes_marker.id = 0;
   nodes_marker.type = visualization_msgs::Marker::POINTS;
@@ -174,7 +234,7 @@ void Visualizer::publishTree(const std::vector<State>& tree,
   // 2. Branches marker
   visualization_msgs::Marker branches_marker;
   branches_marker.header.frame_id = frame_id;
-  branches_marker.header.stamp = now;
+  branches_marker.header.stamp = stamp;
   branches_marker.ns = "branches";
   branches_marker.id = 1;
   branches_marker.type = visualization_msgs::Marker::LINE_LIST;
@@ -201,7 +261,7 @@ void Visualizer::publishTree(const std::vector<State>& tree,
   }
   markers.markers.push_back(branches_marker);
 
-  tree_pub_.publish(markers);
+  return markers;
 }
 
 void Visualizer::clear() {
@@ -229,6 +289,14 @@ void Visualizer::clear() {
   clear_pose_array.header.frame_id = "Fr0";
   clear_pose_array.header.stamp = ros::Time::now();
   pose_array_pub_.publish(clear_pose_array);
+
+  visualization_msgs::Marker clear_curv;
+  clear_curv.header.frame_id = "Fr0";
+  clear_curv.header.stamp = ros::Time::now();
+  clear_curv.ns = "curvature";
+  clear_curv.id = 0;
+  clear_curv.action = visualization_msgs::Marker::DELETEALL;
+  curvature_pub_.publish(clear_curv);
 }
 
 } // namespace carmaker_planning

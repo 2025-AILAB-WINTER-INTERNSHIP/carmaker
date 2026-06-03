@@ -102,6 +102,9 @@ enum class PlanningStatus {
   FAILURE_NO_PATH,
   FAILURE_TIMEOUT,
   FAILURE_COLLISION,
+  FAILURE_COLLISION_START,
+  FAILURE_COLLISION_GOAL,
+  FAILURE_POST_PROCESSING,
   FAILURE_INVALID_MAP
 };
 
@@ -112,6 +115,7 @@ struct GlobalPlanningResult {
   double planning_time = 0.0, smoothing_time = 0.0;
   double resampling_time = 0.0, profiling_time = 0.0, total_time = 0.0;
   int expanded_nodes = 0, search_iterations = 0;
+  std::vector<std::string> warnings;
 
   bool success() const {
     return status == PlanningStatus::SUCCESS_OPTIMAL ||
@@ -119,12 +123,42 @@ struct GlobalPlanningResult {
   }
   const char* statusString() const {
     switch (status) {
-      case PlanningStatus::SUCCESS_OPTIMAL:     return "SUCCESS_OPTIMAL";
-      case PlanningStatus::SUCCESS_BEST_EFFORT: return "SUCCESS_BEST_EFFORT";
-      case PlanningStatus::FAILURE_NO_PATH:     return "FAILURE_NO_PATH";
-      case PlanningStatus::FAILURE_TIMEOUT:     return "FAILURE_TIMEOUT";
-      case PlanningStatus::FAILURE_COLLISION:   return "FAILURE_COLLISION";
-      case PlanningStatus::FAILURE_INVALID_MAP: return "FAILURE_INVALID_MAP";
+      case PlanningStatus::SUCCESS_OPTIMAL:       return "SUCCESS_OPTIMAL";
+      case PlanningStatus::SUCCESS_BEST_EFFORT:    return "SUCCESS_BEST_EFFORT";
+      case PlanningStatus::FAILURE_NO_PATH:       return "FAILURE_NO_PATH";
+      case PlanningStatus::FAILURE_TIMEOUT:       return "FAILURE_TIMEOUT";
+      case PlanningStatus::FAILURE_COLLISION:     return "FAILURE_COLLISION";
+      case PlanningStatus::FAILURE_COLLISION_START: return "FAILURE_COLLISION_START";
+      case PlanningStatus::FAILURE_COLLISION_GOAL:  return "FAILURE_COLLISION_GOAL";
+      case PlanningStatus::FAILURE_POST_PROCESSING: return "FAILURE_POST_PROCESSING";
+      case PlanningStatus::FAILURE_INVALID_MAP:    return "FAILURE_INVALID_MAP";
+      default: return "UNKNOWN";
+    }
+  }
+};
+
+struct GlobalPlanningDiagnostic {
+  PlanningStatus status = PlanningStatus::INVALID;
+  double total_time = 0.0;
+  double path_length = 0.0;
+  double planning_time = 0.0;
+  double smoothing_time = 0.0;
+  double resampling_time = 0.0;
+  double profiling_time = 0.0;
+  int expanded_nodes = 0;
+  int search_iterations = 0;
+  
+  const char* statusString() const {
+    switch (status) {
+      case PlanningStatus::SUCCESS_OPTIMAL:       return "SUCCESS_OPTIMAL";
+      case PlanningStatus::SUCCESS_BEST_EFFORT:    return "SUCCESS_BEST_EFFORT";
+      case PlanningStatus::FAILURE_NO_PATH:       return "FAILURE_NO_PATH";
+      case PlanningStatus::FAILURE_TIMEOUT:       return "FAILURE_TIMEOUT";
+      case PlanningStatus::FAILURE_COLLISION:     return "FAILURE_COLLISION";
+      case PlanningStatus::FAILURE_COLLISION_START: return "FAILURE_COLLISION_START";
+      case PlanningStatus::FAILURE_COLLISION_GOAL:  return "FAILURE_COLLISION_GOAL";
+      case PlanningStatus::FAILURE_POST_PROCESSING: return "FAILURE_POST_PROCESSING";
+      case PlanningStatus::FAILURE_INVALID_MAP:    return "FAILURE_INVALID_MAP";
       default: return "UNKNOWN";
     }
   }
@@ -191,11 +225,16 @@ struct GlobalPostProcessConfig {
     double resolution;
     int yaw_blending_width;
     bool use_spline;
+    double cusp_angular_threshold_rad;
   } resampler;
   struct Profiler {
     double max_vel, max_accel, max_decel, max_jerk, max_lat_acc, goal_vel;
     double gear_shift_duration;
+    double min_velocity_denominator;
   } profiler;
+  struct Visualization {
+    double arrow_spacing_meters;
+  } visualization;
 };
 
 struct GlobalMainConfig {
@@ -300,6 +339,11 @@ inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostPro
   nh.param(ns + "/resampler/resolution",    cfg.resampler.resolution,   0.1);
   nh.param(ns + "/resampler/yaw_blending_width", cfg.resampler.yaw_blending_width, 5);
   nh.param(ns + "/resampler/use_spline",    cfg.resampler.use_spline,   true);
+
+  double cusp_threshold_deg = 20.0;
+  nh.param(ns + "/resampler/cusp_angular_threshold_deg", cusp_threshold_deg, cusp_threshold_deg);
+  cfg.resampler.cusp_angular_threshold_rad = deg2rad(cusp_threshold_deg);
+
   nh.param(ns + "/profiler/max_vel",        cfg.profiler.max_vel,       1.5);
   nh.param(ns + "/profiler/max_accel",      cfg.profiler.max_accel,     1.0);
   nh.param(ns + "/profiler/max_decel",      cfg.profiler.max_decel,     1.5);
@@ -307,6 +351,9 @@ inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostPro
   nh.param(ns + "/profiler/max_lat_acc",    cfg.profiler.max_lat_acc,   1.0);
   nh.param(ns + "/profiler/goal_vel",       cfg.profiler.goal_vel,      0.0);
   nh.param(ns + "/profiler/gear_shift_duration", cfg.profiler.gear_shift_duration, 1.2);
+  nh.param(ns + "/profiler/min_velocity_denominator", cfg.profiler.min_velocity_denominator, 0.02);
+
+  nh.param(ns + "/visualization/arrow_spacing_meters", cfg.visualization.arrow_spacing_meters, 0.2);
 }
 
 inline void loadGlobalMainConfig(const ros::NodeHandle& nh, GlobalMainConfig& cfg) {
