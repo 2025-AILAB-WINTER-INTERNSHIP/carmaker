@@ -9,6 +9,8 @@ topics:
       estimation_pose: "/localization/data/estimation_pose"
       correction_pose: "/localization/data/correction_pose"
       features_prefix: "/localization/data/features"
+      rmse_position: "/localization/data/rmse_position"
+      rmse_orientation: "/localization/data/rmse_orientation"
     debug:
       svm_image: "/localization/debug/svm_image"
       map_features: "/localization/debug/map_features"
@@ -59,7 +61,8 @@ setting:
 
 frames:
   global: "Fr0"
-  prediction: "Fr1A_pred"
+  prediction_bumper: "Fr1A_Pred"
+  prediction_rear_axle: "Fr1A_Rear_Axle_Pred"
 
 feature_extractor:
   fusion: true # True : 개별 채널별 특징점 융합 후 정합 수행, False : 개별 채널 별 정합 수행

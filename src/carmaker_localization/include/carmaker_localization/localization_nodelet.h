@@ -31,7 +31,9 @@
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/GetMap.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <std_msgs/Float64.h>
 #include <diagnostic_updater/diagnostic_updater.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 
 namespace carmaker_localization {
 
@@ -104,6 +106,7 @@ private:
     void correctionWorkerLoop();
     void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
+    void calculateAndPublishErrors(const carmaker_msgs::DynamicsInfo& dynamics);
 
     // Frame transformation helpers
     Eigen::Vector3d transformPose(const Eigen::Vector3d& pose_in, double offset_x) const;
@@ -122,7 +125,8 @@ private:
     double imu_offset_x_ = 0.0;
     double imu_offset_y_ = 0.0;
     std::string global_frame_;
-    std::string prediction_frame_;
+    std::string prediction_bumper_frame_;
+    std::string prediction_rear_axle_frame_;
 
     // SVM Config
     double svm_res_ = 0.05;
@@ -180,6 +184,8 @@ private:
     ros::Publisher pose_pub_;
     ros::Publisher estimation_data_pub_;
     ros::Publisher correction_data_pub_;
+    ros::Publisher rmse_pos_pub_;
+    ros::Publisher rmse_yaw_pub_;
     std::map<std::string, ros::Publisher> feature_data_pubs_;
     ros::Timer prediction_timer_;
     ros::ServiceServer map_srv_;
@@ -193,6 +199,7 @@ private:
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     std::shared_ptr<Visualizer> visualizer_;
 
     // Camera Subscriptions
@@ -233,6 +240,12 @@ private:
     uint64_t correction_count_          = 0;
     double   correction_start_sim_time_ = -1.0;
     std::mutex correction_hz_mutex_;
+
+    // Cumulative RMSE calculation variables
+    double cumulative_pos_sq_err_ = 0.0;
+    double cumulative_yaw_sq_err_ = 0.0;
+    uint64_t err_count_ = 0;
+
 
     // CameraInfo buffer protected by mutex to prevent Data Race
     std::mutex info_array_mutex_;

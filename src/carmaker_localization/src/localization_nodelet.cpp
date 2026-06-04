@@ -5,6 +5,7 @@
 #include <XmlRpcValue.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <pluginlib/class_list_macros.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 
 namespace carmaker_localization {
 
@@ -30,9 +31,11 @@ void LocalizationNodelet::onInit() {
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>();
+    static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>();
 
     ros::NodeHandle& nh = getNodeHandle();
     visualizer_ = std::make_shared<Visualizer>(nh);
+
 
     // SRP-based partitioned lifecycle initialization
     if (!loadParameters()) {
@@ -62,7 +65,8 @@ bool LocalizationNodelet::loadParameters() {
     image_type_ = pnh.param("setting/image_type", std::string("gt"));
 
     global_frame_ = pnh.param("frames/global", std::string("map"));
-    prediction_frame_ = pnh.param("frames/prediction", std::string("Fr1A_pred"));
+    prediction_bumper_frame_ = pnh.param("frames/prediction_bumper", std::string("Fr1A_Pred"));
+    prediction_rear_axle_frame_ = pnh.param("frames/prediction_rear_axle", std::string("Fr1A_Rear_Axle_Pred"));
 
     tire_radius_ = pnh.param("vehicle/tire_radius", 0.298);
     track_width_ = pnh.param("vehicle/track_width", 1.634);
@@ -388,8 +392,12 @@ bool LocalizationNodelet::setupRosIo() {
 
     std::string topic_estimation_data = pnh.param("topics/publish/data/estimation_pose", std::string("/localization/data/estimation_pose"));
     std::string topic_correction_data = pnh.param("topics/publish/data/correction_pose", std::string("/localization/data/correction_pose"));
+    std::string topic_rmse_pos = pnh.param("topics/publish/data/rmse_position", std::string("/localization/data/rmse_position"));
+    std::string topic_rmse_yaw = pnh.param("topics/publish/data/rmse_orientation", std::string("/localization/data/rmse_orientation"));
     estimation_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_estimation_data, 10);
     correction_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_correction_data, 10);
+    rmse_pos_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_pos, 10);
+    rmse_yaw_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_yaw, 10);
 
     // Setup Diagnostics Updater (publishes directly to the standard /diagnostics topic)
     diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh, pnh);
@@ -566,6 +574,9 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
         ekf_core_->correctWheel(vx_wheel, 0.0, yaw_rate_wheel, R_wheel, current_time);
         last_processed_cycleno_ = dynamics.cycleno;
     }
+
+    // 6c. Cumulative RMSE calculation & Instantaneous Error publishing (GT rear axle vs EKF rear axle state)
+    calculateAndPublishErrors(dynamics);
 
     // 7. Publish
     publishEstimation(ros::Time(current_time));
@@ -829,7 +840,7 @@ void LocalizationNodelet::processImages(
             feature_data_pubs_[ch.name].publish(features);
 
             carmaker_msgs::LocalFeatures viz_features = features;
-            viz_features.header.frame_id = prediction_frame_;
+            viz_features.header.frame_id = prediction_bumper_frame_;
             viz_features.header.stamp = features.header.stamp;
             visualizer_->publishObservation(ch.name, viz_features);
             ch.processed_count++;
@@ -1065,19 +1076,9 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
 
     const double yaw = x(YAW);
 
-    // EKF 상태(X, Y)는 후륜축 기준 → 출력 명세(Fr1A 범퍼)로 역변환
-    Eigen::Vector3d pose_rear(x(X), x(Y), yaw);
-    Eigen::Vector3d pose_bumper = transformPose(pose_rear, -rear_axle_x_);
-    double pub_x = pose_bumper(0);
-    double pub_y = pose_bumper(1);
-
-    // EKF 포즈 공분산(X, Y, YAW)을 후륜축 기준에서 후방 범퍼 기준으로 역전파
-    Eigen::Matrix3d P_rear = Eigen::Matrix3d::Zero();
-    P_rear(0, 0) = P(X, X);   P_rear(0, 1) = P(X, Y);   P_rear(0, 2) = P(X, YAW);
-    P_rear(1, 0) = P(X, Y);   P_rear(1, 1) = P(Y, Y);   P_rear(1, 2) = P(Y, YAW);
-    P_rear(2, 0) = P(X, YAW); P_rear(2, 1) = P(Y, YAW); P_rear(2, 2) = P(YAW, YAW);
-
-    Eigen::Matrix3d P_bumper = propagateCovariance(P_rear, yaw, -rear_axle_x_);
+    // EKF 상태(X, Y)는 후륜축 기준 → 위치 출력 명세를 후륜축 기준으로 설정
+    double pub_x = x(X);
+    double pub_y = x(Y);
 
     geometry_msgs::PoseWithCovarianceStamped pose_msg;
     pose_msg.header.stamp = stamp;
@@ -1090,44 +1091,43 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     q.setRPY(0, 0, yaw);
     pose_msg.pose.pose.orientation = tf2::toMsg(q);
 
-    pose_msg.pose.covariance[0]  = P_bumper(0, 0); // XX
-    pose_msg.pose.covariance[1]  = P_bumper(0, 1); // XY
-    pose_msg.pose.covariance[5]  = P_bumper(0, 2); // X-YAW
-    pose_msg.pose.covariance[6]  = P_bumper(0, 1); // YX
-    pose_msg.pose.covariance[7]  = P_bumper(1, 1); // YY
-    pose_msg.pose.covariance[11] = P_bumper(1, 2); // Y-YAW
-    pose_msg.pose.covariance[30] = P_bumper(0, 2); // YAW-X
-    pose_msg.pose.covariance[31] = P_bumper(1, 2); // YAW-Y
-    pose_msg.pose.covariance[35] = P_bumper(2, 2); // YAW-YAW
+    // EKF 포즈 공분산(X, Y, YAW)을 후륜축 기준으로 직접 출력
+    pose_msg.pose.covariance[0]  = P(X, X);     // XX
+    pose_msg.pose.covariance[1]  = P(X, Y);     // XY
+    pose_msg.pose.covariance[5]  = P(X, YAW);   // X-YAW
+    pose_msg.pose.covariance[6]  = P(X, Y);     // YX
+    pose_msg.pose.covariance[7]  = P(Y, Y);     // YY
+    pose_msg.pose.covariance[11] = P(Y, YAW);   // Y-YAW
+    pose_msg.pose.covariance[30] = P(X, YAW);   // YAW-X
+    pose_msg.pose.covariance[31] = P(Y, YAW);   // YAW-Y
+    pose_msg.pose.covariance[35] = P(YAW, YAW); // YAW-YAW
 
     pose_pub_.publish(pose_msg);
     estimation_data_pub_.publish(pose_msg);
     visualizer_->publishEstimation(pose_msg);
 
-    // EKF 속도(VX, VY)는 후륜축 기준 → 출력 명세(Fr1A 범퍼)로 역변환하여 퍼블리시
-    Eigen::Vector2d vel_rear(x(VX), x(VY));
-    Eigen::Vector2d vel_bumper = transformVelocity(vel_rear, x(YAW_RATE), -rear_axle_x_);
-
+    // EKF 속도(VX, VY)는 후륜축 기준 → 속도 출력 명세를 후륜축 기준으로 설정
     nav_msgs::Odometry odom_msg;
     odom_msg.header = pose_msg.header;
-    odom_msg.child_frame_id = prediction_frame_;
+    odom_msg.child_frame_id = prediction_rear_axle_frame_; // 후륜축 예측 프레임
     odom_msg.pose = pose_msg.pose;
-    odom_msg.twist.twist.linear.x = vel_bumper(0);
-    odom_msg.twist.twist.linear.y = vel_bumper(1);
+    odom_msg.twist.twist.linear.x = x(VX);
+    odom_msg.twist.twist.linear.y = x(VY);
     odom_msg.twist.twist.linear.z = 0.0;
     odom_msg.twist.twist.angular.z = x(YAW_RATE);
     odom_pub_.publish(odom_msg);
 
-    // Broadcast TF: global -> prediction
-    geometry_msgs::TransformStamped tf_msg;
-    tf_msg.header.stamp = stamp;
-    tf_msg.header.frame_id = global_frame_;
-    tf_msg.child_frame_id = prediction_frame_;
-    tf_msg.transform.translation.x = pub_x;
-    tf_msg.transform.translation.y = pub_y;
-    tf_msg.transform.translation.z = 0.0;
-    tf_msg.transform.rotation = pose_msg.pose.pose.orientation;
-    tf_broadcaster_->sendTransform(tf_msg);
+    // 1. Broadcast TF: global -> prediction_rear_axle (Rear Axle, EKF 추정 상태 기준)
+    geometry_msgs::TransformStamped tf_msg1;
+    tf_msg1.header.stamp = stamp;
+    tf_msg1.header.frame_id = global_frame_;
+    tf_msg1.child_frame_id = prediction_rear_axle_frame_;
+    tf_msg1.transform.translation.x = x(X);
+    tf_msg1.transform.translation.y = x(Y);
+    tf_msg1.transform.translation.z = 0.0;
+    tf_msg1.transform.rotation = pose_msg.pose.pose.orientation;
+
+    tf_broadcaster_->sendTransform(tf_msg1);
 
     // If search_radius is dynamic/local (positive), republish map features based on current EKF estimation
     if (visualizer_ && search_radius_ >= 0.0) {
@@ -1197,6 +1197,23 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
         }
         stat.add("Correction Hz (Hz)", correction_hz);
     }
+
+    double local_pos_sq_err = 0.0;
+    double local_yaw_sq_err = 0.0;
+    uint64_t local_count = 0;
+    {
+        local_pos_sq_err = cumulative_pos_sq_err_;
+        local_yaw_sq_err = cumulative_yaw_sq_err_;
+        local_count = err_count_;
+    }
+
+    if (local_count > 0) {
+        stat.add("Cumulative Position RMSE (m)", std::sqrt(local_pos_sq_err / local_count));
+        stat.add("Cumulative Yaw RMSE (deg)", std::sqrt(local_yaw_sq_err / local_count) * 180.0 / M_PI);
+    } else {
+        stat.add("Cumulative Position RMSE (m)", 0.0);
+        stat.add("Cumulative Yaw RMSE (deg)", 0.0);
+    }
 }
 
 void LocalizationNodelet::resetLocalization() {
@@ -1209,6 +1226,10 @@ void LocalizationNodelet::resetLocalization() {
     last_map_pub_x_ = -9999.0;
     last_map_pub_y_ = -9999.0;
 
+    for (auto& ch : channels_) {
+        ch.lut_initialized.store(false, std::memory_order_release);
+    }
+
     {
         std::lock_guard<std::mutex> lock(dyn_mutex_);
         dynamics_received_ = false;
@@ -1218,6 +1239,9 @@ void LocalizationNodelet::resetLocalization() {
         std::lock_guard<std::mutex> lock(estimation_mutex_);
         last_prediction_time_ = 0.0;
         last_processed_cycleno_ = -1;
+        cumulative_pos_sq_err_ = 0.0;
+        cumulative_yaw_sq_err_ = 0.0;
+        err_count_ = 0;
     }
 
     // Correction Hz 추적 초기화 (리셋 전 데이터가 Hz 추정에 섞이는 것 방지)
@@ -1250,14 +1274,11 @@ void LocalizationNodelet::initLocalization(double current_time, const carmaker_m
     last_prediction_time_ = current_time;
     double init_yaw = use_manual_initial_state_ ? init_yaw_ : current_dynamics.Car_Yaw;
 
-    // 수동 및 GT 초기 포즈는 모두 범퍼(Fr1A) 기준이므로 동일하게 후륜축 기준으로 오프셋 변환
-    double init_x_raw = use_manual_initial_state_ ? init_x_ : current_dynamics.Car_x;
-    double init_y_raw = use_manual_initial_state_ ? init_y_ : current_dynamics.Car_y;
-    Eigen::Vector3d pose_rear = transformPose(Eigen::Vector3d(init_x_raw, init_y_raw, init_yaw), rear_axle_x_);
-    double init_x = pose_rear(0);
-    double init_y = pose_rear(1);
+    // 수동 및 GT 초기 포즈는 모두 후륜축 기준
+    double init_x = use_manual_initial_state_ ? init_x_ : current_dynamics.RearAxle_x;
+    double init_y = use_manual_initial_state_ ? init_y_ : current_dynamics.RearAxle_y;
 
-    // 횡속도(Vy) 초기화 시 선회 성분(Lever-arm 효과)을 포함하여 후륜축 횡속도로 변환
+    // 횡속도(Vy) 초기화 시 선회 성분(Lever-arm 효과)을 포함하여 범퍼(Fr1A) 횡속도 -> 후륜축 횡속도로 변환
     double init_vx_raw = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vx;
     double init_vy_raw = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vy;
     double init_yaw_rate = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_YawVel;
@@ -1267,6 +1288,21 @@ void LocalizationNodelet::initLocalization(double current_time, const carmaker_m
 
     ekf_core_->initialize(init_x, init_y, init_yaw, current_time, init_vx, init_vy);
     NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vel [%.2f, %.2f]", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx, init_vy);
+
+    // Publish static TF: prediction_rear_axle (Rear Axle) -> prediction_bumper (Bumper)
+    geometry_msgs::TransformStamped static_tf;
+    static_tf.header.stamp = ros::Time::now();
+    static_tf.header.frame_id = prediction_rear_axle_frame_;
+    static_tf.child_frame_id = prediction_bumper_frame_;
+    static_tf.transform.translation.x = -rear_axle_x_;
+    static_tf.transform.translation.y = 0.0;
+    static_tf.transform.translation.z = 0.0;
+    static_tf.transform.rotation.x = 0.0;
+    static_tf.transform.rotation.y = 0.0;
+    static_tf.transform.rotation.z = 0.0;
+    static_tf.transform.rotation.w = 1.0;
+    
+    static_tf_broadcaster_->sendTransform(static_tf);
 
     if (visualizer_) {
         visualizer_->publishReferenceFeatures(feature_loader_->queryNear(init_x, init_y, search_radius_));
@@ -1311,6 +1347,42 @@ Eigen::Matrix3d LocalizationNodelet::propagateCovariance(const Eigen::Matrix3d& 
     J(1, 2) =  offset_x * std::cos(yaw);
     return J * cov_in * J.transpose();
 }
+
+void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::DynamicsInfo& dynamics) {
+    auto state_frame = ekf_core_->getState();
+    const auto& x_state = state_frame.x;
+    
+    if (std::isnan(dynamics.RearAxle_x) || std::isnan(dynamics.RearAxle_y)) {
+        return;
+    }
+
+    double dx = dynamics.RearAxle_x - x_state(X);
+    double dy = dynamics.RearAxle_y - x_state(Y);
+    double pos_err = std::hypot(dx, dy);
+
+    double yaw_err = dynamics.Car_Yaw - x_state(YAW);
+    while (yaw_err > M_PI) yaw_err -= 2.0 * M_PI;
+    while (yaw_err < -M_PI) yaw_err += 2.0 * M_PI;
+    double yaw_err_abs = std::abs(yaw_err);
+
+    {
+        std::lock_guard<std::mutex> lock(estimation_mutex_);
+        cumulative_pos_sq_err_ += (pos_err * pos_err);
+        cumulative_yaw_sq_err_ += (yaw_err * yaw_err);
+        err_count_++;
+    }
+
+    // 토픽에는 실시간 오차(Instantaneous Error) 발행
+    std_msgs::Float64 pos_err_msg;
+    pos_err_msg.data = pos_err;
+    rmse_pos_pub_.publish(pos_err_msg);
+
+    std_msgs::Float64 yaw_err_msg;
+    yaw_err_msg.data = yaw_err_abs;
+    rmse_yaw_pub_.publish(yaw_err_msg);
+}
+
+
 
 } // namespace carmaker_localization
 

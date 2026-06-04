@@ -52,7 +52,9 @@ private:
     double vehicle_length_, vehicle_width_, vehicle_height_, vehicle_length_offset_;
     bool viz_seam_line_;
     std::string global_frame_;
-    std::string prediction_frame_;
+    std::string prediction_bumper_frame_;
+    std::string prediction_rear_axle_frame_;
+    double rear_axle_x_;
 
     void _addVehicleMarker(visualization_msgs::MarkerArray& marker_array,
                            const geometry_msgs::Pose& pose,
