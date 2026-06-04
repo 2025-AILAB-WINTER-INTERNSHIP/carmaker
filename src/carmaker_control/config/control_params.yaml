@@ -51,6 +51,9 @@ control:
 
   # 전진/후진 segment 전환 전 차량 속도가 이 값 이하가 될 때까지 brake를 유지한다.
   gear_switch_speed: 0.08
+  # 다음 segment로 넘어갈 때 정지 상태에서 먼저 다음 segment 조향각을 보낸 뒤 출발한다.
+  presteer_enabled: true
+  presteer_duration: 0.6
 
   # PID 출력 가속도 명령을 gas/brake/accel 필드로 변환할 때 쓰는 한계값.
   max_accel: 0.8

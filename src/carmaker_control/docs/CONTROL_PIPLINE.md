@@ -412,6 +412,7 @@ control loop는 다음 순서로 동작한다.
 9. Control_Signal로 gas/brake/accel/steerangle/gear publish
 10. segment 끝에 도착하면 정지
 11. 속도가 충분히 낮아지면 다음 gear segment로 전환
+12. 정지 상태에서 다음 segment 조향각을 먼저 보낸 뒤 출발
 ```
 
 control은 단순히 trajectory를 받아 그대로 내보내는 노드가 아니다. 매 순간 현재 차량 위치와 경로를 비교하면서 속도 제어와 조향 제어를 동시에 수행한다.
@@ -619,6 +620,8 @@ segment 끝 접근
   -> brake 유지
   -> 현재 속도가 gear_switch_speed 이하인지 확인
   -> 충분히 느려지면 다음 segment로 전환
+  -> presteer_duration 동안 다음 segment 조향각 유지
+  -> PID/Stanley 추종 재개
 ```
 
 예를 들어 전진 segment 다음에 후진 segment가 있다면 다음과 같이 동작한다.
@@ -629,10 +632,11 @@ segment 끝 접근
   -> 브레이크로 감속
   -> gear_switch_speed 이하로 감소
   -> reverse gear 전환
+  -> 후진 segment 첫 조향각으로 pre-steer
   -> 후진 segment 추종
 ```
 
-이 구조는 차량이 아직 움직이고 있는데 바로 반대 방향 gear로 바뀌는 것을 막기 위한 안정화 로직이다.
+이 구조는 차량이 아직 움직이고 있는데 바로 반대 방향 gear로 바뀌는 것을 막고, 정지 상태에서 다음 segment 곡률에 맞춰 조향을 먼저 잡아 출발 초반 경로 이탈을 줄이기 위한 안정화 로직이다.
 
 ### 9. 최종 Control_Signal publish
 
@@ -750,7 +754,7 @@ Add -> Path
 | `/control/debug/trajectory_age` | `std_msgs/Float64` | 마지막 `/planning/trajectory` 수신 후 지난 시간. trajectory를 받은 적 없으면 `-1` |
 | `/control/debug/trajectory_completed` | `std_msgs/Int32` | `1`: trajectory 완료 상태, `0`: 아직 완료 아님 |
 | `/control/debug/direction` | `std_msgs/Int32` | `1`: 전진, `-1`: 후진, `0`: 추종 중 아님 |
-| `/control/debug/tracking_state` | `std_msgs/Int32` | `0`: idle/no trajectory, `1`: tracking, `2`: stopping at segment end |
+| `/control/debug/tracking_state` | `std_msgs/Int32` | `0`: idle/no trajectory, `1`: tracking, `2`: stopping at segment end, `3`: pre-steering before next segment |
 
 PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 
@@ -783,6 +787,7 @@ PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 - `current_speed`가 `target_speed`보다 낮으면 `gas`가 증가하고, 높으면 `brake`가 증가한다.
 - `steer_saturated = 1`이 계속 유지되면 controller가 더 꺾고 싶지만 `max_steer_command` 한계에 걸린 상태다.
 - segment 끝에서는 `tracking_state = 2`, `brake > 0`이 되고, 속도가 `gear_switch_speed` 이하로 내려가면 다음 segment로 넘어간다.
+- segment 전환 직후에는 `tracking_state = 3`, `brake > 0` 상태에서 다음 segment 조향각이 먼저 나간다.
 - segment 전환이 정상이라면 `segment_index`가 증가하고 `direction`이 다음 segment 방향으로 바뀐다.
 - 전진 segment에서는 `direction = 1`, `gear = drive_gear`다.
 - 후진 segment에서는 `direction = -1`, `gear = reverse_gear`다.
@@ -891,9 +896,13 @@ control:
   segment_finish_distance: 0.5
   segment_finish_index_margin: 3
   gear_switch_speed: 0.08
+  presteer_enabled: true
+  presteer_duration: 0.6
 ```
 
 segment 끝에 도달해도 현재 속도가 `gear_switch_speed`보다 크면 다음 segment로 넘어가지 않는다. 먼저 brake를 걸고 충분히 느려진 뒤 기어를 바꾼다.
+
+`presteer_enabled`가 켜져 있으면 다음 segment로 넘어간 직후 `presteer_duration` 동안 brake를 유지하면서 다음 segment의 nearest/lookahead point 기준 Stanley 조향각을 먼저 보낸다. 시간이 지나면 PID 속도 제어를 다시 허용해 출발한다.
 
 ### PID
 
@@ -1070,6 +1079,7 @@ rostopic echo /carmaker/control_signal
 - `/control/debug/steer_saturated`가 계속 `1`이면 조향 한계에 걸린 상태인지
 - `gas`와 `brake`가 동시에 과하게 나오지 않는지
 - segment 끝에서 먼저 감속한 뒤 다음 gear로 넘어가는지
+- segment 전환 직후 `tracking_state = 3` 동안 brake를 유지하면서 다음 segment 조향각이 먼저 나가는지
 
 ## 흔한 문제
 

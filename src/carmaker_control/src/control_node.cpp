@@ -144,7 +144,9 @@ private:
 
   void advanceOrStop(const PathSegment& active_segment,
                      std::size_t active_segment_index,
-                     double current_speed);
+                     const Pose2D& pose,
+                     double current_speed,
+                     const ros::Time& now);
   void advertiseDebugTopics();
   void publishDebugTelemetry(const Pose2D& pose,
                              double signed_speed,
@@ -217,6 +219,10 @@ private:
   ros::Time last_trajectory_time_;
   std::size_t active_segment_index_{0};
   std::size_t nearest_index_{0};
+  bool presteer_active_{false};
+  std::size_t presteer_segment_index_{0};
+  ros::Time presteer_until_;
+  double presteer_steer_command_{0.0};
   bool trajectory_received_{false};
   bool trajectory_completed_{false};
 
@@ -251,6 +257,8 @@ private:
   double segment_finish_distance_{0.5};
   int segment_finish_index_margin_{3};
   double gear_switch_speed_{0.08};
+  bool presteer_enabled_{true};
+  double presteer_duration_{0.6};
 
   double max_accel_{0.8};
   double max_decel_{1.5};
@@ -356,6 +364,9 @@ void ControlNode::loadParameters()
   pnh_.param("control/segment_finish_distance", segment_finish_distance_, 0.5);
   pnh_.param("control/segment_finish_index_margin", segment_finish_index_margin_, 3);
   pnh_.param("control/gear_switch_speed", gear_switch_speed_, 0.08);
+  pnh_.param("control/presteer_enabled", presteer_enabled_, true);
+  pnh_.param("control/presteer_duration", presteer_duration_, 0.6);
+  presteer_duration_ = std::max(0.0, presteer_duration_);
 
   pnh_.param("control/max_accel", max_accel_, 0.8);
   pnh_.param("control/max_decel", max_decel_, 1.5);
@@ -468,6 +479,10 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
     segments_ = std::move(new_segments);
     active_segment_index_ = 0;
     nearest_index_ = 0;
+    presteer_active_ = false;
+    presteer_segment_index_ = 0;
+    presteer_until_ = ros::Time();
+    presteer_steer_command_ = 0.0;
     trajectory_received_ = !segments_.empty();
     trajectory_completed_ = false;
     last_trajectory_time_ = ros::Time::now();
@@ -688,20 +703,29 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   PathSegment active_segment;
   std::size_t active_segment_index = 0;
   std::size_t previous_nearest_index = 0;
+  bool presteer_active = false;
+  ros::Time presteer_until;
+  double presteer_steer_command = 0.0;
   bool should_track = false;
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
     const bool trajectory_fresh =
         trajectory_received_ &&
         !trajectory_completed_ &&
-        (ros::Time::now() - last_trajectory_time_).toSec() <= trajectory_timeout_ &&
+        (now - last_trajectory_time_).toSec() <= trajectory_timeout_ &&
         active_segment_index_ < segments_.size();
 
     if (trajectory_fresh) {
       active_segment = segments_[active_segment_index_];
       active_segment_index = active_segment_index_;
       previous_nearest_index = nearest_index_;
+      presteer_active =
+          presteer_active_ && presteer_segment_index_ == active_segment_index_;
+      presteer_until = presteer_until_;
+      presteer_steer_command = presteer_steer_command_;
       should_track = true;
+    } else {
+      presteer_active_ = false;
     }
   }
 
@@ -726,12 +750,32 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
     }
   }
 
+  if (presteer_active) {
+    const double presteer_lookahead =
+        clamp(lookahead_distance_, min_lookahead_distance_, max_lookahead_distance_);
+    const std::size_t presteer_target_index =
+        findLookaheadIndex(active_segment, nearest_index, presteer_lookahead);
+    if (now < presteer_until || current_speed > gear_switch_speed_) {
+      publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
+                            nearest_index, presteer_target_index, 0.0,
+                            presteer_lookahead, 3, presteer_steer_command);
+      publishStop(active_segment.direction, presteer_steer_command);
+      speed_pid_.reset();
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(trajectory_mutex_);
+    if (presteer_segment_index_ == active_segment_index) {
+      presteer_active_ = false;
+    }
+  }
+
   if (isSegmentComplete(active_segment, pose, nearest_index)) {
     // segment 끝에 도착하면 바로 다음 segment로 넘어가지 않고 먼저 충분히 감속한다.
     // 전진/후진 기어 전환을 움직이는 중에 하지 않기 위한 처리다.
     publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
                           nearest_index, nearest_index, 0.0, 0.0, 2, 0.0);
-    advanceOrStop(active_segment, active_segment_index, current_speed);
+    advanceOrStop(active_segment, active_segment_index, pose, current_speed, now);
     return;
   }
 
@@ -900,7 +944,9 @@ double ControlNode::selectTargetSpeed(const PathSegment& segment, std::size_t ta
 
 void ControlNode::advanceOrStop(const PathSegment& active_segment,
                                 std::size_t active_segment_index,
-                                double current_speed)
+                                const Pose2D& pose,
+                                double current_speed,
+                                const ros::Time& now)
 {
   if (current_speed > gear_switch_speed_) {
     // 아직 움직이는 중이면 현재 gear를 유지한 채 brake를 걸어 segment 끝에서 정지시킨다.
@@ -915,17 +961,36 @@ void ControlNode::advanceOrStop(const PathSegment& active_segment,
 
   speed_pid_.reset();
   nearest_index_ = 0;
+  presteer_active_ = false;
   if (active_segment_index_ + 1 < segments_.size()) {
     // 충분히 느려진 뒤 다음 segment로 넘어간다.
-    // 여기서 다음 segment의 direction에 맞는 gear로 stop 명령을 한 번 내고,
-    // 다음 timer tick부터 PID/Stanley 추종을 재개한다.
+    // 다음 segment 조향을 정지 상태에서 먼저 보낸 뒤 PID/Stanley 추종을 재개한다.
     ++active_segment_index_;
+    PathSegment& next_segment = segments_[active_segment_index_];
+    double next_steer_command = 0.0;
+    if (presteer_enabled_ && presteer_duration_ > 0.0 && !next_segment.points.empty()) {
+      const std::size_t next_nearest_index = findNearestIndex(next_segment, pose, 0);
+      const double presteer_lookahead =
+          clamp(lookahead_distance_, min_lookahead_distance_, max_lookahead_distance_);
+      const std::size_t next_target_index =
+          findLookaheadIndex(next_segment, next_nearest_index, presteer_lookahead);
+      next_steer_command =
+          computeSteeringCommand(pose, next_segment.points[next_nearest_index],
+                                 next_segment.points[next_target_index],
+                                 min_tracking_speed_, next_segment.direction);
+      presteer_active_ = true;
+      presteer_segment_index_ = active_segment_index_;
+      presteer_until_ = now + ros::Duration(presteer_duration_);
+      presteer_steer_command_ = next_steer_command;
+    }
+
     ROS_INFO("Switching trajectory segment: %zu/%zu, direction=%s",
              active_segment_index_ + 1, segments_.size(),
-             segments_[active_segment_index_].direction > 0 ? "forward" : "reverse");
-    publishStop(segments_[active_segment_index_].direction);
+             next_segment.direction > 0 ? "forward" : "reverse");
+    publishStop(next_segment.direction, next_steer_command);
   } else {
     trajectory_completed_ = true;
+    presteer_active_ = false;
     ROS_INFO("Trajectory complete.");
     publishStop(0);
   }
