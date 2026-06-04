@@ -753,6 +753,8 @@ void TrajectoryValidator::validateJerk(const Path& path, TrajectoryDiagnostic& d
   checkLimit(path, diag.jerk_ok, diag.jerk_violations, diag.max_jerk_violation,
              max_jerk, 0.01,
              [&](size_t i) {
+               // Skip verification at segment transitions (Cusp) where direction changes
+               if (path[i].direction != path[i-1].direction) return 0.0;
                if (std::abs(path[i].v) < 0.1 || std::abs(path[i-1].v) < 0.1) return 0.0;
                double dt = path[i].t - path[i-1].t;
                double acc_dt = std::max(0.01, dt); // Match the planner's denominator guard
@@ -774,12 +776,19 @@ void TrajectoryValidator::validateSteeringVelocity(const Path& path, TrajectoryD
   checkLimit(path, diag.steer_vel_ok, diag.steer_vel_violations, diag.max_steer_vel_violation,
              max_steer_vel_limit, 0.01,
              [&](size_t i) {
-               if (std::abs(path[i].v) < 0.1 || std::abs(path[i-1].v) < 0.1) return 0.0;
                double dt = path[i].t - path[i-1].t;
                if (dt <= 1e-6) return 0.0;
-               double acc_dt = std::max(0.01, dt); // Match the planner's denominator guard
+
                double phi_i = std::atan(wheelbase_ * path[i].kappa);
                double phi_prev = std::atan(wheelbase_ * path[i-1].kappa);
+
+               if (path[i].direction != path[i-1].direction) {
+                 // At segment transitions (Cusp), verify if the steer angle can rotate within the gear shift duration (dt)
+                 return std::abs(phi_i - phi_prev) / dt;
+               }
+
+               if (std::abs(path[i].v) < 0.1 || std::abs(path[i-1].v) < 0.1) return 0.0;
+               double acc_dt = std::max(0.01, dt); // Match the planner's denominator guard
                return std::abs(phi_i - phi_prev) / acc_dt;
              },
              1);

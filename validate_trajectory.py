@@ -182,6 +182,17 @@ def callback(msg):
         if dt <= 1e-6:
             continue
 
+        # 기어 변속(Cusp) 등 세그먼트 전환 지점에서의 조향 속도 및 Jerk 검증 분기
+        if direction[i] != direction[i-1]:
+            # Cusp 지점: 변속 대기 시간(dt) 동안 제자리에서 조향각 회전이 가능한지 검증 (Jerk는 스킵)
+            steer_vel = abs(phis[i] - phis[i-1]) / dt
+            if steer_vel > MAX_STEER_VEL + 0.01:
+                steer_vel_violations_count += 1
+                if steer_vel_violations_count <= 5:
+                    rospy.logwarn(f"[Debug Steer Cusp] i={i}, dt={dt:.6f}s (gear shift), phi_diff={abs(phis[i]-phis[i-1]):.4f}rad, steer_vel={steer_vel:.4f}")
+            max_steer_vel_val = max(max_steer_vel_val, steer_vel)
+            continue
+
         # 시작/정지/Cusp 근처 기어 변속 직후처럼 속도가 극도로 느려지는 순간은 급가속/급회전 수치가 튀기 때문에 필터링
         if abs(v[i]) < 0.1 or abs(v[i-1]) < 0.1:
             continue
