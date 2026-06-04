@@ -544,7 +544,18 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
       const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i].v + path[i-1].v) / 2.0) : limits.min_vel_denom;
       // Apply 0.01s denominator guard to prevent division by extremely small dt (which causes acceleration to spike)
       const double acc_dt = std::max(0.01, dt);
-      path[i].a = std::clamp((path[i].v - path[i-1].v) / acc_dt, max_decel, max_accel);
+      
+      // Calculate raw acceleration from speed difference
+      double raw_a = (path[i].v - path[i-1].v) / acc_dt;
+      raw_a = std::clamp(raw_a, max_decel, max_accel);
+
+      // Enforce the maximum Jerk constraint directly on the calculated acceleration profile
+      if (path[i].direction == path[i-1].direction) {
+        const double max_a_change = max_jerk * acc_dt;
+        raw_a = std::clamp(raw_a, path[i-1].a - max_a_change, path[i-1].a + max_a_change);
+      }
+
+      path[i].a = raw_a;
       path[i].t = path[i-1].t + dt;
     }
   }
