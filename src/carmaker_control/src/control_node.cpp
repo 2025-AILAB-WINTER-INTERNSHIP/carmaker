@@ -619,14 +619,14 @@ bool ControlNode::getCurrentState(Pose2D& pose, double& signed_speed) const
     }
 
     // DynamicsInfo의 Car_* 값은 CarMaker GT 상태다.
-    // /planning/trajectory는 rear bumper 기준으로 publish되므로, CarMaker의 GT 기준점이
-    // rear axle이면 rear bumper로 변환해 control reference를 맞춘다.
+    // Controller 내부 pose와 /planning/trajectory는 rear axle 기준으로 맞춘다.
+    // CarMaker GT가 Fr1A/rear bumper 기준이면 후륜축 중심으로 변환한다.
     const double yaw = normalizeAngle(dynamics.Car_Yaw);
     pose.x = dynamics.Car_x;
     pose.y = dynamics.Car_y;
-    if (dynamics_pose_reference_ == "rear_axle") {
-      pose.x -= rear_axle_offset_ * std::cos(yaw);
-      pose.y -= rear_axle_offset_ * std::sin(yaw);
+    if (dynamics_pose_reference_ == "rear_bumper") {
+      pose.x += rear_axle_offset_ * std::cos(yaw);
+      pose.y += rear_axle_offset_ * std::sin(yaw);
     }
     pose.yaw = yaw;
     signed_speed = dynamics.Car_vx;
@@ -823,25 +823,25 @@ bool ControlNode::isSegmentComplete(const PathSegment& segment,
 
 ControlNode::Pose2D ControlNode::toSteeringControlPose(const Pose2D& pose) const
 {
-  if (steering_control_point_ != "rear_axle") {
+  if (steering_control_point_ != "rear_bumper") {
     return pose;
   }
 
   Pose2D control_pose = pose;
-  control_pose.x += rear_axle_offset_ * std::cos(pose.yaw);
-  control_pose.y += rear_axle_offset_ * std::sin(pose.yaw);
+  control_pose.x -= rear_axle_offset_ * std::cos(pose.yaw);
+  control_pose.y -= rear_axle_offset_ * std::sin(pose.yaw);
   return control_pose;
 }
 
 ControlNode::PathPoint ControlNode::toSteeringControlPoint(const PathPoint& point) const
 {
-  if (steering_control_point_ != "rear_axle") {
+  if (steering_control_point_ != "rear_bumper") {
     return point;
   }
 
   PathPoint control_point = point;
-  control_point.x += rear_axle_offset_ * std::cos(point.yaw);
-  control_point.y += rear_axle_offset_ * std::sin(point.yaw);
+  control_point.x -= rear_axle_offset_ * std::cos(point.yaw);
+  control_point.y -= rear_axle_offset_ * std::sin(point.yaw);
   return control_point;
 }
 

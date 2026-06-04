@@ -88,10 +88,10 @@ stanley:
 vehicle:
   wheelbase: 2.97
   min_turning_radius: 5.5
-  # DynamicsInfo.Car_x/y 기준점 보정.
-  # rear_bumper: Car_x/y가 Fr1A/rear bumper center이면 그대로 사용한다.
-  # rear_axle: Car_x/y가 rear axle center이면 rear_axle_offset만큼 뒤로 변환해서
-  #             planning trajectory의 rear bumper 기준점과 맞춘다.
+  # DynamicsInfo.Car_x/y 입력 기준점.
+  # controller 내부 pose와 /planning/trajectory는 rear axle 기준으로 맞춘다.
+  # rear_bumper: Car_x/y가 Fr1A/rear bumper center이면 rear_axle_offset만큼 앞으로 변환한다.
+  # rear_axle: Car_x/y가 rear axle center이면 그대로 사용한다.
   rear_axle_offset: 0.82
   dynamics_pose_reference: "rear_bumper"
   # Stanley는 타이어 조향각을 계산한다. CarMaker control_signal/steerangle은
@@ -100,8 +100,8 @@ vehicle:
   max_steer_command: 4.5
   # 조향 부호가 반대로 보이면 -1.0으로 바꿔서 테스트한다.
   steering_command_sign: 1.0
-  # /planning/trajectory는 rear bumper 기준으로 publish되지만,
-  # Stanley 조향 오차는 planning 내부 기준과 같은 rear axle에서 계산한다.
+  # /planning/trajectory와 현재 pose는 기본적으로 rear axle 기준이다.
+  # 필요할 때만 rear_bumper로 바꿔 Stanley 오차 계산 기준점을 이동한다.
   steering_control_point: "rear_axle"
 
 debug:
