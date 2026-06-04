@@ -13,7 +13,7 @@ MAX_DECEL = 3.0        # m/s^2
 MIN_TURNING_RADIUS = 5.5  # m
 MAX_KAPPA = 1.0 / MIN_TURNING_RADIUS
 YAW_TOLERANCE_DEG = 5.0  # deg (yaw alignment 허용 편차)
-TIME_TOLERANCE_SEC = 0.01 # 10 ms (시간 일관성 허용 편차)
+TIME_TOLERANCE_MS = 1.0   # ms (시간 일관성 허용 편차)
 
 # 고차 미분값 제약 설정 (Jerk 및 조향 각속도)
 MAX_JERK = 2.0          # m/s^3
@@ -24,18 +24,30 @@ def wrap_to_pi(angle):
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 def load_params():
-    global MAX_VEL, MAX_ACCEL, MAX_DECEL, MIN_TURNING_RADIUS, MAX_KAPPA, MAX_JERK, MAX_STEER_VEL, WHEELBASE
+    global MAX_VEL, MAX_ACCEL, MAX_DECEL, MIN_TURNING_RADIUS, MAX_KAPPA, MAX_JERK, MAX_STEER_VEL, WHEELBASE, TIME_TOLERANCE_MS, YAW_TOLERANCE_DEG
     try:
-        # GlobalPlannerNodelet 의 private namespace 아래 파라미터 로딩 시도
-        MIN_TURNING_RADIUS = rospy.get_param('/GlobalPlannerNodelet/vehicle/min_turning_radius', MIN_TURNING_RADIUS)
-        MAX_VEL = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_vel', MAX_VEL)
-        MAX_ACCEL = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_accel', MAX_ACCEL)
-        MAX_DECEL = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_decel', MAX_DECEL)
-        MAX_JERK = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_jerk', MAX_JERK)
-        WHEELBASE = rospy.get_param('/GlobalPlannerNodelet/vehicle/wheelbase', WHEELBASE)
+        # GlobalPlannerNodelet 의 private namespace 또는 글로벌 namespace로부터 파라미터 로딩 시도 (Fallback Chain)
+        MIN_TURNING_RADIUS = rospy.get_param('/GlobalPlannerNodelet/vehicle/min_turning_radius',
+                             rospy.get_param('/vehicle/min_turning_radius', MIN_TURNING_RADIUS))
+        MAX_VEL = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_vel',
+                  rospy.get_param('/vehicle/limits/max_vel', MAX_VEL))
+        MAX_ACCEL = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_accel',
+                    rospy.get_param('/vehicle/limits/max_accel', MAX_ACCEL))
+        MAX_DECEL = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_decel',
+                    rospy.get_param('/vehicle/limits/max_decel', MAX_DECEL))
+        MAX_JERK = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_jerk',
+                   rospy.get_param('/vehicle/limits/max_jerk', MAX_JERK))
+        MAX_STEER_VEL = rospy.get_param('/GlobalPlannerNodelet/vehicle/limits/max_steer_vel',
+                        rospy.get_param('/vehicle/limits/max_steer_vel', MAX_STEER_VEL))
+        WHEELBASE = rospy.get_param('/GlobalPlannerNodelet/vehicle/wheelbase',
+                    rospy.get_param('/vehicle/wheelbase', WHEELBASE))
+        TIME_TOLERANCE_MS = rospy.get_param('/GlobalPlannerNodelet/global_post_processing/validator/time_tolerance_ms',
+                            rospy.get_param('/global_post_processing/validator/time_tolerance_ms', TIME_TOLERANCE_MS))
+        YAW_TOLERANCE_DEG = rospy.get_param('/GlobalPlannerNodelet/global_post_processing/validator/yaw_tolerance_deg',
+                            rospy.get_param('/global_post_processing/validator/yaw_tolerance_deg', YAW_TOLERANCE_DEG))
         MAX_KAPPA = 1.0 / MIN_TURNING_RADIUS
-        rospy.loginfo("[LoadParams] Dynamic specs synchronized: R=%.2fm, wheelbase=%.2fm, max_jerk=%.2fm/s^3, max_vel=%.2fm/s", 
-                      MIN_TURNING_RADIUS, WHEELBASE, MAX_JERK, MAX_VEL)
+        rospy.loginfo("[LoadParams] Dynamic specs synchronized: R=%.2fm, wheelbase=%.2fm, max_jerk=%.2fm/s^3, max_steer_vel=%.4frad/s, max_vel=%.2fm/s, time_tol=%.2fms, yaw_tol=%.2fdeg", 
+                      MIN_TURNING_RADIUS, WHEELBASE, MAX_JERK, MAX_STEER_VEL, MAX_VEL, TIME_TOLERANCE_MS, YAW_TOLERANCE_DEG)
     except Exception as e:
         rospy.logwarn("[LoadParams] Failed to load parameters from server, using default limits: %s", str(e))
 
@@ -64,20 +76,7 @@ def callback(msg):
         yaws.append(yaw)
     yaws = np.array(yaws)
 
-    # 1. 속도 검증
-    vel_violations = np.sum(np.abs(v) > MAX_VEL + 0.01)
-    max_v = np.max(np.abs(v))
-
-    # 2. 가속도 검증
-    acc_violations = np.sum((v >= 0) & (a > MAX_ACCEL + 0.01)) + np.sum((v >= 0) & (a < -MAX_DECEL - 0.01))
-    max_a = np.max(a)
-    min_a = np.min(a)
-
-    # 3. 곡률 검증
-    kappa_violations = np.sum(np.abs(kappa) > MAX_KAPPA + 1e-3)
-    max_k = np.max(np.abs(kappa))
-
-    # 4. 방향각(Yaw) 정합성 검증 (Cusp 포인트 및 근처 영역 스킵 처리 추가)
+    # 방향 판별 (1: 전진, -1: 후진)
     direction = np.ones(n)
     for i in range(n):
         if v[i] > 1e-5:
@@ -94,6 +93,21 @@ def callback(msg):
                 if next_nonzero < n:
                     direction[i] = 1 if v[next_nonzero] > 0 else -1
 
+    # 1. 속도 검증
+    vel_violations = np.sum(np.abs(v) > MAX_VEL + 0.01)
+    max_v = np.max(np.abs(v))
+
+    # 2. 가속도 검증 (전진/후진 관계없이 휠 로컬 기준 가/감속 한계 검증)
+    dynamic_accel = a * direction
+    acc_violations = np.sum(dynamic_accel > MAX_ACCEL + 0.01) + np.sum(dynamic_accel < -MAX_DECEL - 0.01)
+    max_a = np.max(dynamic_accel)
+    min_a = np.min(dynamic_accel)
+
+    # 3. 곡률 검증
+    kappa_violations = np.sum(np.abs(kappa) > MAX_KAPPA + 1e-3)
+    max_k = np.max(np.abs(kappa))
+
+    # 4. 방향각(Yaw) 정합성 검증 (Cusp 포인트 및 근처 영역 스킵 처리 추가)
     # Cusp (방향 전환점) 인덱스 검출
     cusp_indices = []
     for i in range(1, n):
@@ -107,10 +121,11 @@ def callback(msg):
         # Cusp 기준 물리적 거리 0.2m 이내 영역은 스킵
         near_cusp = False
         for cusp_idx in cusp_indices:
-            dist_to_cusp = math.hypot(x[i] - x[cusp_idx], y[i] - y[cusp_idx])
-            if dist_to_cusp < 0.2:
-                near_cusp = True
-                break
+            if abs(i - cusp_idx) <= 5: # 해상도 0.1m 고려하여 인덱스 거리 5 이하일 때만 실거리 검사
+                dist_to_cusp = math.hypot(x[i] - x[cusp_idx], y[i] - y[cusp_idx])
+                if dist_to_cusp < 0.2:
+                    near_cusp = True
+                    break
         if near_cusp:
             continue
 
@@ -149,7 +164,7 @@ def callback(msg):
             continue
 
         time_err = abs(dt - expected_dt)
-        if time_err > TIME_TOLERANCE_SEC:
+        if time_err > TIME_TOLERANCE_MS / 1000.0:
             time_violations_count += 1
         max_time_err_sec = max(max_time_err_sec, time_err)
 
@@ -225,7 +240,7 @@ def callback(msg):
     print("  - Status              : " + ("OK" if yaw_violations_count == 0 else "FAIL ❌"))
 
     # 시간 일관성 출력
-    print(f"\n[5] Timestamp Consistency (Tolerance: {TIME_TOLERANCE_SEC * 1000.0} ms)")
+    print(f"\n[5] Timestamp Consistency (Tolerance: {TIME_TOLERANCE_MS:.2f} ms)")
     print(f"  - Max Time Mismatch   : {max_time_err_sec * 1000.0:.2f} ms")
     print(f"  - Violations Count    : {time_violations_count} / {n-1}")
     print("  - Status              : " + ("OK" if time_violations_count == 0 else "FAIL ❌"))
