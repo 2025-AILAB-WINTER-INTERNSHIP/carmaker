@@ -443,7 +443,8 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
     double phi_prev = std::atan(wheelbase_ * path[i-1].kappa);
     double dphi_ds = (ds > 1e-4) ? std::abs(phi_i - phi_prev) / ds : 0.0;
     if (dphi_ds > 1e-4) {
-      double v_steer = max_steer_vel / dphi_ds;
+      // Apply 0.9 safety margin on steering velocity limit to absorb profile numerical noises
+      double v_steer = (max_steer_vel * 0.9) / dphi_ds;
       v_static[i] = std::min(v_static[i], v_steer);
       v_static[i-1] = std::min(v_static[i-1], v_steer);
     }
@@ -505,8 +506,31 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
     logs.push_back({"WARN", std::string(buf)});
   }
 
+  std::vector<double> v_final(n);
   for (int i = 0; i < n; ++i) {
-    path[i].v = std::min({v_fwd[i], v_bwd[i], v_static[i]});
+    v_final[i] = std::min({v_fwd[i], v_bwd[i], v_static[i]});
+  }
+
+  // 1. Smooth the velocity profile to suppress high-frequency speed variations (which cause Jerk spikes)
+  if (n > 2) {
+    std::vector<double> smoothed_v = v_final;
+    // 3 passes of 3-point moving average
+    for (int iter = 0; iter < 3; ++iter) {
+      std::vector<double> temp = smoothed_v;
+      for (int i = 1; i < n - 1; ++i) {
+        // Keep Cusp/Goal/Start velocity 0.0 constraint preserved
+        if (temp[i] < 0.1 || temp[i-1] < 0.1 || temp[i+1] < 0.1) {
+          continue;
+        }
+        smoothed_v[i] = (temp[i-1] + temp[i] + temp[i+1]) / 3.0;
+      }
+    }
+    v_final = std::move(smoothed_v);
+  }
+
+  // 2. Re-calculate acceleration and timestamps to maintain 100% physical consistency (a = dv/dt, dt = ds/v)
+  for (int i = 0; i < n; ++i) {
+    path[i].v = v_final[i];
     if (i == 0) {
       path[i].a = a_fwd[0];
       path[i].t = 0.0;
