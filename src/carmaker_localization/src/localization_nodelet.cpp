@@ -74,13 +74,8 @@ bool LocalizationNodelet::loadParameters() {
     wheelbase_ = pnh.param("vehicle/wheelbase", 2.97);
     steering_ratio_ = pnh.param("vehicle/steering_ratio", 1.0);
 
-    enable_zupt_ = pnh.param("ekf/enable_zupt", false);
-
     wheel_speed_std_ = pnh.param("ekf/wheel/speed_std", 0.05);
     slip_threshold_long_ = pnh.param("ekf/wheel/slip_threshold_long", 0.5);
-    slip_threshold_lat_ = pnh.param("ekf/wheel/slip_threshold_lat", 0.1);
-    slip_detect_min_vx_ = pnh.param("ekf/wheel/slip_detect_min_vx", 0.5);
-    imu_acc_std_ = pnh.param("ekf/imu/acc_std", 0.1);
     imu_gyro_std_ = pnh.param("ekf/imu/gyro_std", 0.01);
 
     resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
@@ -232,10 +227,7 @@ bool LocalizationNodelet::initEkf() {
     double imu_z = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_z", 0.298);
 
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 1e-4;
-    Q(VX, VX) = std::pow(imu_acc_std_, 2);
-    Q(VY, VY) = Q(VX, VX);
-    Q(AX, AX) = 1e-2;
-    Q(AY, AY) = 1e-2;
+    Q(VX, VX) = std::pow(wheel_speed_std_, 2);
     Q(YAW_RATE, YAW_RATE) = std::pow(imu_gyro_std_, 2);
 
     ekf_core_->setProcessNoise(Q);
@@ -244,7 +236,6 @@ bool LocalizationNodelet::initEkf() {
     ekf_core_->setWheelbase(wheelbase_);
     ekf_core_->setRearAxleOffset(rear_axle_x_);
     ekf_core_->setImuOffsets(imu_offset_x_, imu_offset_y_);
-    ekf_core_->setVyDecayTimeConst(pnh.param("ekf/vy_decay_time_const", 0.1));
 
     // ROS 의존성을 EkfCore에서 Nodelet으로 격리: 로그 콜백 등록
     ekf_core_->setLogCallbacks(
@@ -396,10 +387,12 @@ bool LocalizationNodelet::setupRosIo() {
     std::string topic_correction_data = pnh.param("topics/publish/data/correction_pose", std::string("/localization/data/correction_pose"));
     std::string topic_rmse_pos = pnh.param("topics/publish/data/rmse_position", std::string("/localization/data/rmse_position"));
     std::string topic_rmse_yaw = pnh.param("topics/publish/data/rmse_orientation", std::string("/localization/data/rmse_orientation"));
+    std::string topic_nees = pnh.param("topics/publish/data/nees", std::string("/localization/data/nees"));
     estimation_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_estimation_data, 10);
     correction_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_correction_data, 10);
     rmse_pos_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_pos, 10);
     rmse_yaw_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_yaw, 10);
+    nees_pub_ = nh.advertise<std_msgs::Float64>(topic_nees, 10);
 
     // Setup Diagnostics Updater (publishes directly to the standard /diagnostics topic)
     diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh, pnh);
@@ -515,15 +508,7 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
     double vx_wheel       = (v_left + v_right) / 2.0;
     double yaw_rate_wheel = (v_right - v_left) / track_width_;
 
-    // Zero Velocity Update (ZUPT) check
-    bool is_stopped = false;
-    if (enable_zupt_) {
-        is_stopped = (std::abs(vx_wheel) < 0.01);
-    }
-    if (is_stopped) {
-        vx_wheel = 0.0;
-        yaw_rate_wheel = 0.0;
-    }
+
 
     // 5. EKF Prediction
     PredictionInput pred_input;
@@ -544,36 +529,25 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
 
         // 6a. IMU Correction (raw values; lever-arm handled inside EkfCore)
         Eigen::Matrix3d R_imu = Eigen::Matrix3d::Identity();
-        R_imu(0, 0) = std::pow(imu_acc_std_, 2);
-        R_imu(1, 1) = R_imu(0, 0);
+        R_imu(0, 0) = 1.0;
+        R_imu(1, 1) = 1.0;
         R_imu(2, 2) = std::pow(imu_gyro_std_, 2);
         ekf_core_->correctImu(ax_raw, ay_raw, wz_raw, R_imu, current_time);
 
-        // 6b. Wheel Correction with dual-slip covariance inflation
-        Eigen::Matrix3d R_wheel = Eigen::Matrix3d::Identity();
+        // 6b. Wheel Correction with slip covariance inflation
+        Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
         R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);                        // 종방향 휠 속도 분산
-        R_wheel(1, 1) = (std::abs(vx_wheel) < 0.5) ? 0.0001 : 0.01;           // NHC 횡방향 구속 조건 불확실성 (v_y = 0) (저속 시 제약 강화)
-        R_wheel(2, 2) = 2.0 * std::pow(wheel_speed_std_ / track_width_, 2);   // 좌우 휠 속도 노이즈의 요레이트 분산 전파
+        R_wheel(1, 1) = 2.0 * std::pow(wheel_speed_std_ / track_width_, 2);   // 요레이트 분산
 
         const double vx_state = ekf_core_->getState().x(VX);
-        const double delta    = pred_input.steering_angle;
 
         // Longitudinal slip detection
         if (std::abs(vx_wheel - vx_state) > slip_threshold_long_) {
             R_wheel(0, 0) *= 100.0;
             NODELET_WARN_THROTTLE(1.0, "Longitudinal slip detected (vx_wheel: %.2f, vx_state: %.2f)!", vx_wheel, vx_state);
         }
-        // Lateral slip detection: 저속 구간에서는 expected_wz≈0이 되어 오감지 가능성이 높으므로 비활성화
-        if (std::abs(vx_state) > slip_detect_min_vx_) {
-            const double expected_wz = (vx_state / wheelbase_) * std::tan(delta);
-            if (std::abs(wz_raw - expected_wz) > slip_threshold_lat_) {
-                R_wheel(1, 1) *= 100.0;
-                R_wheel(2, 2) *= 10.0;
-                NODELET_WARN_THROTTLE(1.0, "Lateral slip detected (wz_raw: %.3f, expected: %.3f)!", wz_raw, expected_wz);
-            }
-        }
 
-        ekf_core_->correctWheel(vx_wheel, 0.0, yaw_rate_wheel, R_wheel, current_time);
+        ekf_core_->correctWheel(vx_wheel, yaw_rate_wheel, R_wheel, current_time);
         last_processed_cycleno_ = dynamics.cycleno;
     }
 
@@ -1114,7 +1088,7 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     odom_msg.child_frame_id = prediction_rear_axle_frame_; // 후륜축 예측 프레임
     odom_msg.pose = pose_msg.pose;
     odom_msg.twist.twist.linear.x = x(VX);
-    odom_msg.twist.twist.linear.y = x(VY);
+    odom_msg.twist.twist.linear.y = 0.0;
     odom_msg.twist.twist.linear.z = 0.0;
     odom_msg.twist.twist.angular.z = x(YAW_RATE);
     odom_pub_.publish(odom_msg);
@@ -1160,7 +1134,7 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
     double std_y = std::sqrt(std::max(0.0, P(Y, Y)));
     double std_yaw = std::sqrt(std::max(0.0, P(YAW, YAW))) * 180.0 / M_PI; // Degrees
     double std_vx = std::sqrt(std::max(0.0, P(VX, VX)));
-    double std_vy = std::sqrt(std::max(0.0, P(VY, VY)));
+    double std_vy = 0.0;
     double std_yaw_rate = std::sqrt(std::max(0.0, P(YAW_RATE, YAW_RATE))) * 180.0 / M_PI; // Deg/s
     double pos_uncertainty = std::sqrt(std_x * std_x + std_y * std_y);
 
@@ -1185,7 +1159,7 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
     stat.add("Estimated Y (m)", x(Y));
     stat.add("Estimated Yaw (deg)", x(YAW) * 180.0 / M_PI);
     stat.add("Estimated Vx (m/s)", x(VX));
-    stat.add("Estimated Vy (m/s)", x(VY));
+    stat.add("Estimated Vy (m/s)", 0.0);
     stat.add("Estimated Yaw Rate (deg/s)", x(YAW_RATE) * 180.0 / M_PI);
 
     // Correction Hz = 성공 횟수 / (현재 시뮬 시각 - 첫 correction 시뮬 시각)
@@ -1202,19 +1176,27 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
 
     double local_pos_sq_err = 0.0;
     double local_yaw_sq_err = 0.0;
+    double local_nees_sum = 0.0;
+    double local_nees_latest = 0.0;
     uint64_t local_count = 0;
     {
         local_pos_sq_err = cumulative_pos_sq_err_;
         local_yaw_sq_err = cumulative_yaw_sq_err_;
+        local_nees_sum = cumulative_nees_;
+        local_nees_latest = nees_latest_;
         local_count = err_count_;
     }
 
     if (local_count > 0) {
         stat.add("Cumulative Position RMSE (m)", std::sqrt(local_pos_sq_err / local_count));
         stat.add("Cumulative Yaw RMSE (deg)", std::sqrt(local_yaw_sq_err / local_count) * 180.0 / M_PI);
+        stat.add("Cumulative Average NEES", local_nees_sum / local_count);
+        stat.add("Latest Instantaneous NEES", local_nees_latest);
     } else {
         stat.add("Cumulative Position RMSE (m)", 0.0);
         stat.add("Cumulative Yaw RMSE (deg)", 0.0);
+        stat.add("Cumulative Average NEES", 0.0);
+        stat.add("Latest Instantaneous NEES", 0.0);
     }
 }
 
@@ -1367,21 +1349,45 @@ void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::Dynamic
     while (yaw_err < -M_PI) yaw_err += 2.0 * M_PI;
     double yaw_err_abs = std::abs(yaw_err);
 
+    // 3D Pose Error Vector (X, Y, YAW)
+    Eigen::Vector3d e;
+    e(0) = dx;
+    e(1) = dy;
+    e(2) = yaw_err;
+
+    // 3x3 Pose Covariance Submatrix
+    const auto& P = state_frame.P;
+    Eigen::Matrix3d P_pose = Eigen::Matrix3d::Zero();
+    P_pose(0, 0) = P(X, X);     P_pose(0, 1) = P(X, Y);     P_pose(0, 2) = P(X, YAW);
+    P_pose(1, 0) = P(Y, X);     P_pose(1, 1) = P(Y, Y);     P_pose(1, 2) = P(Y, YAW);
+    P_pose(2, 0) = P(YAW, X);   P_pose(2, 1) = P(YAW, Y);   P_pose(2, 2) = P(YAW, YAW);
+
+    // Regularization to ensure positive definiteness
+    P_pose += Eigen::Matrix3d::Identity() * 1e-9;
+
+    double nees = e.transpose() * P_pose.inverse() * e;
+
     {
         std::lock_guard<std::mutex> lock(estimation_mutex_);
         cumulative_pos_sq_err_ += (pos_err * pos_err);
         cumulative_yaw_sq_err_ += (yaw_err * yaw_err);
+        cumulative_nees_ += nees;
+        nees_latest_ = nees;
         err_count_++;
     }
 
-    // 토픽에는 실시간 오차(Instantaneous Error) 발행
+    // 토픽에는 실시간 오차(Instantaneous Error) 및 NEES 발행
     std_msgs::Float64 pos_err_msg;
     pos_err_msg.data = pos_err;
     rmse_pos_pub_.publish(pos_err_msg);
 
     std_msgs::Float64 yaw_err_msg;
-    yaw_err_msg.data = yaw_err_abs;
+    yaw_err_msg.data = yaw_err_abs * 180.0 / M_PI; // radian -> degree 변환
     rmse_yaw_pub_.publish(yaw_err_msg);
+
+    std_msgs::Float64 nees_msg;
+    nees_msg.data = nees;
+    nees_pub_.publish(nees_msg);
 }
 
 

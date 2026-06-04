@@ -155,7 +155,6 @@ private:
 
     // EKF Noise Config
     double wheel_speed_std_ = 0.05;
-    double imu_acc_std_ = 0.1;
     double imu_gyro_std_ = 0.01;
 
     // EKF Rate Limiter & Validation Gate Config
@@ -166,15 +165,12 @@ private:
 
     // Wheel Slip Detection Config
     double slip_threshold_long_ = 0.5;
-    double slip_threshold_lat_ = 0.1;
-    double slip_detect_min_vx_ = 0.5; ///< 저속 구간 횡방향 슬립 감지 최소 속도 [m/s]
 
     // EKF Initial State Config
     bool use_manual_initial_state_ = false;
     double init_x_ = 0.0;
     double init_y_ = 0.0;
     double init_yaw_ = 0.0;
-    bool enable_zupt_ = false;
 
     // =========================================================================
     // 3. ROS Communication Objects
@@ -186,6 +182,7 @@ private:
     ros::Publisher correction_data_pub_;
     ros::Publisher rmse_pos_pub_;
     ros::Publisher rmse_yaw_pub_;
+    ros::Publisher nees_pub_;
     std::map<std::string, ros::Publisher> feature_data_pubs_;
     ros::Timer prediction_timer_;
     ros::ServiceServer map_srv_;
@@ -244,6 +241,8 @@ private:
     // Cumulative RMSE calculation variables
     double cumulative_pos_sq_err_ = 0.0;
     double cumulative_yaw_sq_err_ = 0.0;
+    double cumulative_nees_ = 0.0;
+    double nees_latest_ = 0.0;
     uint64_t err_count_ = 0;
 
 
