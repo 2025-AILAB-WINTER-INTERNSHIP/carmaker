@@ -157,7 +157,9 @@ private:
                              double target_speed,
                              double lookahead,
                              int tracking_state,
-                             double steer_command);
+                             double steer_command,
+                             int stop_reason = 0);
+  void publishStopReason(int stop_reason);
   void publishPoseDebug(const ros::Publisher& publisher,
                         double x,
                         double y,
@@ -203,6 +205,7 @@ private:
   ros::Publisher debug_trajectory_completed_pub_;
   ros::Publisher debug_direction_pub_;
   ros::Publisher debug_tracking_state_pub_;
+  ros::Publisher debug_stop_reason_pub_;
 
   mutable std::mutex odom_mutex_;
   nav_msgs::Odometry latest_odom_;
@@ -694,6 +697,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   double signed_speed = 0.0;
   if (!getCurrentState(pose, signed_speed)) {
     // pose/speed를 모르면 제어를 계속 내는 것보다 정지 명령을 유지하는 편이 안전하다.
+    publishStopReason(1);
     publishStop(0);
     return;
   }
@@ -707,8 +711,10 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   ros::Time presteer_until;
   double presteer_steer_command = 0.0;
   bool should_track = false;
+  bool trajectory_completed = false;
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
+    trajectory_completed = trajectory_completed_;
     const bool trajectory_fresh =
         trajectory_received_ &&
         !trajectory_completed_ &&
@@ -731,7 +737,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   if (!should_track) {
     // 경로가 없거나 timeout이면 neutral + brake로 대기한다.
-    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0, 0.0, 0.0, 0, 0.0);
+    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0, 0.0, 0.0, 0, 0.0,
+                          trajectory_completed ? 5 : 2);
     if (publish_stop_without_path_) {
       publishStop(0);
     }
@@ -758,7 +765,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
     if (now < presteer_until || current_speed > gear_switch_speed_) {
       publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
                             nearest_index, presteer_target_index, 0.0,
-                            presteer_lookahead, 3, presteer_steer_command);
+                            presteer_lookahead, 3, presteer_steer_command, 4);
       publishStop(active_segment.direction, presteer_steer_command);
       speed_pid_.reset();
       return;
@@ -774,7 +781,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
     // segment 끝에 도착하면 바로 다음 segment로 넘어가지 않고 먼저 충분히 감속한다.
     // 전진/후진 기어 전환을 움직이는 중에 하지 않기 위한 처리다.
     publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
-                          nearest_index, nearest_index, 0.0, 0.0, 2, 0.0);
+                          nearest_index, nearest_index, 0.0, 0.0, 2, 0.0, 3);
     advanceOrStop(active_segment, active_segment_index, pose, current_speed, now);
     return;
   }
@@ -948,8 +955,17 @@ void ControlNode::advanceOrStop(const PathSegment& active_segment,
                                 double current_speed,
                                 const ros::Time& now)
 {
+  const double distance_to_end =
+      active_segment.points.empty() ? -1.0 : distance2D(pose, active_segment.points.back());
+
   if (current_speed > gear_switch_speed_) {
     // 아직 움직이는 중이면 현재 gear를 유지한 채 brake를 걸어 segment 끝에서 정지시킨다.
+    ROS_INFO_THROTTLE(1.0,
+                      "Segment %zu reached. Braking before switch: speed=%.3f m/s, "
+                      "distance_to_end=%.3f m",
+                      active_segment_index + 1,
+                      current_speed,
+                      distance_to_end);
     publishStop(active_segment.direction);
     return;
   }
@@ -965,6 +981,7 @@ void ControlNode::advanceOrStop(const PathSegment& active_segment,
   if (active_segment_index_ + 1 < segments_.size()) {
     // 충분히 느려진 뒤 다음 segment로 넘어간다.
     // 다음 segment 조향을 정지 상태에서 먼저 보낸 뒤 PID/Stanley 추종을 재개한다.
+    const std::size_t completed_segment_index = active_segment_index_;
     ++active_segment_index_;
     PathSegment& next_segment = segments_[active_segment_index_];
     double next_steer_command = 0.0;
@@ -984,14 +1001,21 @@ void ControlNode::advanceOrStop(const PathSegment& active_segment,
       presteer_steer_command_ = next_steer_command;
     }
 
-    ROS_INFO("Switching trajectory segment: %zu/%zu, direction=%s",
+    ROS_INFO("Segment %zu/%zu arrived: speed=%.3f m/s, distance_to_end=%.3f m. "
+             "Switching to segment %zu/%zu, direction=%s",
+             completed_segment_index + 1, segments_.size(),
+             current_speed, distance_to_end,
              active_segment_index_ + 1, segments_.size(),
              next_segment.direction > 0 ? "forward" : "reverse");
     publishStop(next_segment.direction, next_steer_command);
   } else {
     trajectory_completed_ = true;
     presteer_active_ = false;
-    ROS_INFO("Trajectory complete.");
+    ROS_INFO("Trajectory complete: final segment %zu/%zu arrived, speed=%.3f m/s, "
+             "distance_to_end=%.3f m",
+             active_segment_index_ + 1, segments_.size(),
+             current_speed, distance_to_end);
+    publishStopReason(5);
     publishStop(0);
   }
 }
@@ -1055,6 +1079,8 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/direction", 10);
   debug_tracking_state_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/tracking_state", 10);
+  debug_stop_reason_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/stop_reason", 10);
 
   ROS_INFO("Control debug topics enabled at %s (frame=%s)",
            debug_topic_prefix_.c_str(), debug_frame_id_.c_str());
@@ -1069,7 +1095,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
                                         double target_speed,
                                         double lookahead,
                                         int tracking_state,
-                                        double steer_command)
+                                        double steer_command,
+                                        int stop_reason)
 {
   if (!publish_debug_) {
     return;
@@ -1189,6 +1216,19 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_direction_pub_.publish(int_msg);
   int_msg.data = tracking_state;
   debug_tracking_state_pub_.publish(int_msg);
+  int_msg.data = stop_reason;
+  debug_stop_reason_pub_.publish(int_msg);
+}
+
+void ControlNode::publishStopReason(int stop_reason)
+{
+  if (!publish_debug_) {
+    return;
+  }
+
+  std_msgs::Int32 msg;
+  msg.data = stop_reason;
+  debug_stop_reason_pub_.publish(msg);
 }
 
 void ControlNode::publishPoseDebug(const ros::Publisher& publisher,

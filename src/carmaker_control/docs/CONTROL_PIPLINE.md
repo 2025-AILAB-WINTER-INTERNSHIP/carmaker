@@ -755,6 +755,7 @@ Add -> Path
 | `/control/debug/trajectory_completed` | `std_msgs/Int32` | `1`: trajectory 완료 상태, `0`: 아직 완료 아님 |
 | `/control/debug/direction` | `std_msgs/Int32` | `1`: 전진, `-1`: 후진, `0`: 추종 중 아님 |
 | `/control/debug/tracking_state` | `std_msgs/Int32` | `0`: idle/no trajectory, `1`: tracking, `2`: stopping at segment end, `3`: pre-steering before next segment |
+| `/control/debug/stop_reason` | `std_msgs/Int32` | `0`: none/tracking, `1`: current state unavailable, `2`: no valid trajectory or timeout, `3`: segment arrived/braking, `4`: pre-steering hold, `5`: final trajectory arrived |
 
 PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 
@@ -773,6 +774,7 @@ PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 /control/debug/cross_track_error
 /control/debug/heading_error
 /control/debug/tracking_state
+/control/debug/stop_reason
 /control/debug/direction
 /control/debug/segment_index
 /control/debug/segment_count
@@ -789,6 +791,9 @@ PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 - segment 끝에서는 `tracking_state = 2`, `brake > 0`이 되고, 속도가 `gear_switch_speed` 이하로 내려가면 다음 segment로 넘어간다.
 - segment 전환 직후에는 `tracking_state = 3`, `brake > 0` 상태에서 다음 segment 조향각이 먼저 나간다.
 - segment 전환이 정상이라면 `segment_index`가 증가하고 `direction`이 다음 segment 방향으로 바뀐다.
+- `stop_reason = 3`이면 segment 끝점에 도착해 감속 중이고, `stop_reason = 5`이면 전체 trajectory 최종 도착이다.
+- `stop_reason = 1` 또는 `2`이면 도착이 아니라 입력 상태나 trajectory freshness 문제로 정지한 것이다.
+- segment 도착/최종 도착 시에는 ROS_INFO에도 segment 번호, 속도, 끝점 거리가 남는다.
 - 전진 segment에서는 `direction = 1`, `gear = drive_gear`다.
 - 후진 segment에서는 `direction = -1`, `gear = reverse_gear`다.
 
