@@ -49,6 +49,10 @@ struct PathPoint {
 
 using Path = std::vector<PathPoint>;
 
+inline double dist(const PathPoint& p1, const PathPoint& p2) {
+  return dist(p1.x, p1.y, p2.x, p2.y);
+}
+
 struct CollisionCircle {
   double offset;
   double radius;
@@ -65,6 +69,7 @@ struct VehicleSpec {
   double max_accel;
   double max_decel;
   double max_jerk;
+  double max_steer_vel;
   double max_lat_acc;
   std::vector<CollisionCircle> collision_circles;
 };
@@ -128,12 +133,26 @@ struct TrajectoryDiagnostic {
   bool curvature_ok = false;
   bool yaw_ok = false;
   bool time_ok = false;
+  bool vel_ok = false;
+  bool acc_ok = false;
+  bool jerk_ok = false;
+  bool steer_vel_ok = false;
+
   int curv_violations = -1;
   int yaw_violations = -1;
   int time_violations = -1;
+  int vel_violations = -1;
+  int acc_violations = -1;
+  int jerk_violations = -1;
+  int steer_vel_violations = -1;
+
   double max_curv_violation = -1.0;
   double max_yaw_error_rad = -1.0;
   double max_time_error_sec = -1.0;
+  double max_vel_violation = -1.0;
+  double max_acc_violation = -1.0;
+  double max_jerk_violation = -1.0;
+  double max_steer_vel_violation = -1.0;
 };
 
 struct GlobalPlanningResult {
@@ -250,12 +269,13 @@ struct GlobalPostProcessConfig {
   } smoother;
   struct Resampler {
     double resolution;
-    int yaw_blending_width;
-    bool use_spline;
-    double cusp_angular_threshold_rad;
   } resampler;
+  struct Validator {
+    double time_tolerance_ms;
+    double yaw_tolerance_rad;
+  } validator;
   struct Profiler {
-    double max_vel, max_accel, max_decel, max_jerk, max_lat_acc, goal_vel;
+    double max_vel, max_accel, max_decel, max_jerk, max_steer_vel, max_lat_acc, goal_vel;
     double gear_shift_duration;
     double min_velocity_denominator;
   } profiler;
@@ -305,6 +325,7 @@ inline void loadVehicleSpec(const ros::NodeHandle& nh, VehicleSpec& spec,
   nh.param(ns + "/limits/max_accel", spec.max_accel, 1.0);
   nh.param(ns + "/limits/max_decel", spec.max_decel, 2.0);
   nh.param(ns + "/limits/max_jerk",  spec.max_jerk,  2.0);
+  nh.param(ns + "/limits/max_steer_vel", spec.max_steer_vel, 0.6108);
   nh.param(ns + "/limits/max_lat_acc", spec.max_lat_acc, 1.5);
 
   std::vector<double> offsets, radii;
@@ -364,17 +385,15 @@ inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostPro
   nh.param(ns + "/smoother/tolerance",      cfg.smoother.tolerance,     0.001);
   nh.param(ns + "/smoother/max_iterations", cfg.smoother.max_iterations, 500);
   nh.param(ns + "/resampler/resolution",    cfg.resampler.resolution,   0.1);
-  nh.param(ns + "/resampler/yaw_blending_width", cfg.resampler.yaw_blending_width, 5);
-  nh.param(ns + "/resampler/use_spline",    cfg.resampler.use_spline,   true);
 
-  double cusp_threshold_deg = 20.0;
-  nh.param(ns + "/resampler/cusp_angular_threshold_deg", cusp_threshold_deg, cusp_threshold_deg);
-  cfg.resampler.cusp_angular_threshold_rad = deg2rad(cusp_threshold_deg);
+  nh.param(ns + "/validator/time_tolerance_ms", cfg.validator.time_tolerance_ms, 1.0);
+  cfg.validator.yaw_tolerance_rad = deg2rad(nh.param<double>(ns + "/validator/yaw_tolerance_deg", 5.0));
 
   nh.param(ns + "/profiler/max_vel",        cfg.profiler.max_vel,       1.5);
   nh.param(ns + "/profiler/max_accel",      cfg.profiler.max_accel,     1.0);
   nh.param(ns + "/profiler/max_decel",      cfg.profiler.max_decel,     1.5);
   nh.param(ns + "/profiler/max_jerk",       cfg.profiler.max_jerk,      5.0);
+  nh.param(ns + "/profiler/max_steer_vel",  cfg.profiler.max_steer_vel,  0.6108);
   nh.param(ns + "/profiler/max_lat_acc",    cfg.profiler.max_lat_acc,   1.0);
   nh.param(ns + "/profiler/goal_vel",       cfg.profiler.goal_vel,      0.0);
   nh.param(ns + "/profiler/gear_shift_duration", cfg.profiler.gear_shift_duration, 1.2);

@@ -40,6 +40,16 @@ inline double mengerCurvature(double x1, double y1, double x2, double y2, double
   return 0.0;
 }
 
+inline double symmetricDiffCurvature(double theta_prev, double theta_curr, double theta_next, double ds1, double ds2) {
+  const double total_ds = ds1 + ds2;
+  if (total_ds > 2e-4) {
+    const double dtheta1 = wrap_to_pi(theta_curr - theta_prev);
+    const double dtheta2 = wrap_to_pi(theta_next - theta_curr);
+    return wrap_to_pi(dtheta1 + dtheta2) / total_ds;
+  }
+  return 0.0;
+}
+
 } // namespace carmaker_planning
 
 #endif // CARMAKER_PLANNING_MATH_H
