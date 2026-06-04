@@ -66,6 +66,7 @@ private:
 
   std::string global_frame_;
   std::string ego_frame_;
+  std::string rear_axle_frame_;
 
   // Diagnostics
   std::unique_ptr<diagnostic_updater::Updater> diagnostic_updater_;

@@ -234,6 +234,8 @@ bool LocalizationNodelet::initEkf() {
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 1e-4;
     Q(VX, VX) = std::pow(imu_acc_std_, 2);
     Q(VY, VY) = Q(VX, VX);
+    Q(AX, AX) = 1e-2;
+    Q(AY, AY) = 1e-2;
     Q(YAW_RATE, YAW_RATE) = std::pow(imu_gyro_std_, 2);
 
     ekf_core_->setProcessNoise(Q);
@@ -550,7 +552,7 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
         // 6b. Wheel Correction with dual-slip covariance inflation
         Eigen::Matrix3d R_wheel = Eigen::Matrix3d::Identity();
         R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);                        // 종방향 휠 속도 분산
-        R_wheel(1, 1) = 0.01;                                                 // NHC 횡방향 구속 조건 불확실성 (v_y = 0)
+        R_wheel(1, 1) = (std::abs(vx_wheel) < 0.5) ? 0.0001 : 0.01;           // NHC 횡방향 구속 조건 불확실성 (v_y = 0) (저속 시 제약 강화)
         R_wheel(2, 2) = 2.0 * std::pow(wheel_speed_std_ / track_width_, 2);   // 좌우 휠 속도 노이즈의 요레이트 분산 전파
 
         const double vx_state = ekf_core_->getState().x(VX);
