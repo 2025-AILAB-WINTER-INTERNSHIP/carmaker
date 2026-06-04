@@ -186,8 +186,11 @@ def callback(msg):
         if abs(v[i]) < 0.1 or abs(v[i-1]) < 0.1:
             continue
 
+        # 수치 연산 시 dt가 너무 작아 저크/조향 각속도가 비정상적으로 튀는 것을 방지하는 분모 가드 (C++ PostProcessor 스펙과 일치)
+        acc_dt = max(0.01, dt)
+
         # Jerk 계산 (da/dt)
-        jerk_val = abs(a[i] - a[i-1]) / dt
+        jerk_val = abs(a[i] - a[i-1]) / acc_dt
         if jerk_val > MAX_JERK + 0.01:
             jerk_violations_count += 1
             if jerk_violations_count <= 5:
@@ -195,7 +198,7 @@ def callback(msg):
         max_jerk_val = max(max_jerk_val, jerk_val)
 
         # Steering Velocity 계산 (dphi/dt)
-        steer_vel = abs(phis[i] - phis[i-1]) / dt
+        steer_vel = abs(phis[i] - phis[i-1]) / acc_dt
         if steer_vel > MAX_STEER_VEL + 0.01:
             steer_vel_violations_count += 1
             if steer_vel_violations_count <= 5:

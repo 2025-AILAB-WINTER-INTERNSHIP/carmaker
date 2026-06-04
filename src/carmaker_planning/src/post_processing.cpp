@@ -292,7 +292,10 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
 }
 
 bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs) {
-  if (input_segment.empty()) return false;
+  if (input_segment.empty()) {
+    logs.push_back({"WARN", "resampleSegment bypassed: Input segment is empty."});
+    return false;
+  }
 
   std::vector<double> s_vals;
   s_vals.reserve(input_segment.size());
@@ -336,6 +339,7 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
 
   const auto& last_pt = input_segment.back();
   if (output_path.empty()) {
+    logs.push_back({"WARN", "resampleSegment: Output path is empty after interpolation. Defaulting to last point."});
     output_path.push_back(last_pt);
   } else {
     double d = dist(output_path.back(), last_pt);
@@ -514,14 +518,15 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
   // 1. Smooth the velocity profile to suppress high-frequency speed variations (which cause Jerk spikes)
   if (n > 2) {
     std::vector<double> smoothed_v = v_final;
-    // 3 passes of 3-point moving average
-    for (int iter = 0; iter < 3; ++iter) {
+    // 5 passes of 3-point moving average to stronger filter Jerk high frequency noise
+    for (int iter = 0; iter < 5; ++iter) {
       std::vector<double> temp = smoothed_v;
       for (int i = 1; i < n - 1; ++i) {
-        // Keep Cusp/Goal/Start velocity 0.0 constraint preserved
-        if (temp[i] < 0.1 || temp[i-1] < 0.1 || temp[i+1] < 0.1) {
+        // Keep Cusp/Goal/Start velocity 0.0 constraint preserved (anchor points)
+        if (temp[i] < 0.1) {
           continue;
         }
+        // Smooth non-zero points, allowing them to blend with neighboring zero velocities smoothly
         smoothed_v[i] = (temp[i-1] + temp[i] + temp[i+1]) / 3.0;
       }
     }
@@ -537,6 +542,7 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
     } else {
       const double ds = dist(path[i-1], path[i]);
       const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i].v + path[i-1].v) / 2.0) : limits.min_vel_denom;
+      // Apply 0.01s denominator guard to prevent division by extremely small dt (which causes acceleration to spike)
       const double acc_dt = std::max(0.01, dt);
       path[i].a = std::clamp((path[i].v - path[i-1].v) / acc_dt, max_decel, max_accel);
       path[i].t = path[i-1].t + dt;
@@ -749,7 +755,8 @@ void TrajectoryValidator::validateJerk(const Path& path, TrajectoryDiagnostic& d
              [&](size_t i) {
                if (std::abs(path[i].v) < 0.1 || std::abs(path[i-1].v) < 0.1) return 0.0;
                double dt = path[i].t - path[i-1].t;
-               return (dt > 1e-6) ? std::abs(path[i].a - path[i-1].a) / dt : 0.0;
+               double acc_dt = std::max(0.01, dt); // Match the planner's denominator guard
+               return (dt > 1e-6) ? std::abs(path[i].a - path[i-1].a) / acc_dt : 0.0;
              },
              1);
 
@@ -770,9 +777,10 @@ void TrajectoryValidator::validateSteeringVelocity(const Path& path, TrajectoryD
                if (std::abs(path[i].v) < 0.1 || std::abs(path[i-1].v) < 0.1) return 0.0;
                double dt = path[i].t - path[i-1].t;
                if (dt <= 1e-6) return 0.0;
+               double acc_dt = std::max(0.01, dt); // Match the planner's denominator guard
                double phi_i = std::atan(wheelbase_ * path[i].kappa);
                double phi_prev = std::atan(wheelbase_ * path[i-1].kappa);
-               return std::abs(phi_i - phi_prev) / dt;
+               return std::abs(phi_i - phi_prev) / acc_dt;
              },
              1);
 
