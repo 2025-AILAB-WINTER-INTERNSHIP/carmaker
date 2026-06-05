@@ -157,6 +157,11 @@ private:
     double wheel_speed_std_ = 0.05;
     double imu_acc_std_ = 0.1;
     double imu_gyro_std_ = 0.01;
+    double q_pos_std_ = 0.05;
+    double q_yaw_std_ = 0.03;
+    double q_vel_std_ = 0.15;
+    double q_yaw_rate_std_ = 0.01;
+    double q_bias_std_ = 0.01;
 
     // EKF Rate Limiter & Validation Gate Config
     double max_position_step_ = 0.15;

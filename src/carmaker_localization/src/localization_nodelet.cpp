@@ -227,19 +227,19 @@ bool LocalizationNodelet::initEkf() {
     imu_offset_y_ = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_y", 0.0);
     double imu_z = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_z", 0.298);
 
-    double q_pos_std = pnh.param("ekf/process_noise/pos_std", 0.01);
-    double q_yaw_std = pnh.param("ekf/process_noise/yaw_std", 0.01);
-    double q_vel_std = pnh.param("ekf/process_noise/vel_std", 0.05);
-    double q_yaw_rate_std = pnh.param("ekf/process_noise/yaw_rate_std", 0.01);
-    double q_bias_std = pnh.param("ekf/process_noise/bias_std", 0.01);
+    q_pos_std_ = pnh.param("ekf/process_noise/pos_std", 0.05);
+    q_yaw_std_ = pnh.param("ekf/process_noise/yaw_std", 0.03);
+    q_vel_std_ = pnh.param("ekf/process_noise/vel_std", 0.15);
+    q_yaw_rate_std_ = pnh.param("ekf/process_noise/yaw_rate_std", 0.01);
+    q_bias_std_ = pnh.param("ekf/process_noise/bias_std", 0.01);
 
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
-    Q(X, X) = std::pow(q_pos_std, 2);
-    Q(Y, Y) = std::pow(q_pos_std, 2);
-    Q(YAW, YAW) = std::pow(q_yaw_std, 2);
-    Q(VX, VX) = std::pow(q_vel_std, 2);
-    Q(YAW_RATE, YAW_RATE) = std::pow(q_yaw_rate_std, 2);
-    Q(B_YAW_RATE, B_YAW_RATE) = std::pow(q_bias_std, 2);
+    Q(X, X) = std::pow(q_pos_std_, 2);
+    Q(Y, Y) = std::pow(q_pos_std_, 2);
+    Q(YAW, YAW) = std::pow(q_yaw_std_, 2);
+    Q(VX, VX) = std::pow(q_vel_std_, 2);
+    Q(YAW_RATE, YAW_RATE) = std::pow(q_yaw_rate_std_, 2);
+    Q(B_YAW_RATE, B_YAW_RATE) = std::pow(q_bias_std_, 2);
 
     ekf_core_->setProcessNoise(Q);
 
@@ -544,7 +544,36 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
         double vx_wheel       = (v_left + v_right) / 2.0;
         double yaw_rate_wheel = (v_right - v_left) / track_width_;
 
-        // 5. EKF Prediction
+        // 5. Adaptive EKF Process Noise (Q) Computation based on vehicle dynamics
+        const double ax_raw = dynamics.Sensor_Inertial_0_Acc_B_x;
+        const double wz_raw = dynamics.Sensor_Inertial_0_Omega_B_z;
+
+        // 가감속이 심할 때 속도 예측 노이즈 팽창 (모델 예측의 강성을 완화하여 센서 관측 수렴성 유도)
+        double scale_vel = 1.0;
+        if (std::abs(ax_raw) > 1.0) {
+            scale_vel = std::min(5.0, 1.0 + (std::abs(ax_raw) - 1.0) * 1.5);
+        }
+
+        // 급선회 시 요각 및 요레이트 예측 노이즈 팽창 (원심력/타이어 슬립 횡슬립에 따른 회전 오차 흡수)
+        double scale_yaw = 1.0;
+        if (std::abs(wz_raw) > 0.1) { // 0.1 rad/s (약 5.7 deg/s) 이상 선회 시
+            scale_yaw = std::min(10.0, 1.0 + (std::abs(wz_raw) - 0.1) * 8.0);
+        }
+
+        // 두 요인을 선형 누적으로 결합하여 단일 동적 스케일링 인자 도출 (극단적 팽창 방지를 위해 상한 12.0배 제한)
+        double scale_dyn = std::min(12.0, scale_yaw + scale_vel - 1.0);
+
+        Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q_dyn = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
+        Q_dyn(X, X) = std::pow(q_pos_std_, 2) * scale_dyn; 
+        Q_dyn(Y, Y) = std::pow(q_pos_std_, 2) * scale_dyn;
+        Q_dyn(YAW, YAW) = std::pow(q_yaw_std_ * scale_yaw, 2);
+        Q_dyn(VX, VX) = std::pow(q_vel_std_ * scale_vel, 2);
+        Q_dyn(YAW_RATE, YAW_RATE) = std::pow(q_yaw_rate_std_ * scale_yaw, 2);
+        Q_dyn(B_YAW_RATE, B_YAW_RATE) = std::pow(q_bias_std_, 2);
+
+        ekf_core_->setProcessNoise(Q_dyn);
+
+        // 6. EKF Prediction
         PredictionInput pred_input;
         pred_input.rear_wheel_speed = vx_wheel;
         // 조향각: 앞바퀴 전향각 직접 사용 (Vhcl_FL_rz와 Vhcl_FR_rz의 평균, Steer_WhlAng 핸들 각도보다 정확)
@@ -1036,15 +1065,24 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             // 최대 허용 편차 검증 (설정 파일 기반 Validation Gate)
             // ICP 관측값의 신뢰도(fitness_score가 낮을수록 높음)가 높을수록 
             // 검증 게이트(max_position_dev_) 범위를 동적으로 확장하여 누적된 큰 드리프트를 한번에 구제 및 복구
+            // EKF 상태의 불확실성(P)에 따른 3-sigma 오차 한계선 계산
+            const auto& P_current = ekf_core_->getState().P;
+            double ekf_uncertainty_3sigma = 3.0 * std::sqrt(P_current(X, X) + P_current(Y, Y));
+            double ekf_yaw_uncertainty_3sigma = 3.0 * std::sqrt(P_current(YAW, YAW));
+
             double adaptive_max_position_dev = max_position_dev_;
             if (registration_result.fitness_score < fitness_threshold_ && fitness_threshold_ > 1e-6) {
                 double fitness_margin = (fitness_threshold_ - registration_result.fitness_score) / fitness_threshold_;
                 adaptive_max_position_dev *= (1.0 + 4.0 * fitness_margin); // 신뢰도가 높을수록 최대 5배까지 완화 (예: 1.0m -> 5.0m)
             }
 
-            if (dist > adaptive_max_position_dev || std::abs(dyaw) > max_yaw_dev_) {
-                ROS_WARN_THROTTLE(2.0, "performCorrection: Match rejected by validation gate. Dev: %.3fm, %.1f deg (limits: %.2fm / adaptive: %.2fm, %.1f deg). Skipping correction.",
-                                  dist, std::abs(dyaw) * 180.0 / M_PI, max_position_dev_, adaptive_max_position_dev, max_yaw_dev_ * 180.0 / M_PI);
+            // EKF 불확실성에 비례하여 검증 게이트를 탄력적으로 확장하여 재수렴 지연(Rejection Lock) 방지
+            adaptive_max_position_dev = std::max(adaptive_max_position_dev, ekf_uncertainty_3sigma);
+            double adaptive_max_yaw_dev = std::max(max_yaw_dev_, ekf_yaw_uncertainty_3sigma);
+
+            if (dist > adaptive_max_position_dev || std::abs(dyaw) > adaptive_max_yaw_dev) {
+                ROS_WARN_THROTTLE(2.0, "performCorrection: Match rejected by validation gate. Dev: %.3fm, %.1f deg (limits: %.2fm / adaptive: %.2fm, %.1f deg / yaw_limit: %.1f deg). Skipping correction.",
+                                  dist, std::abs(dyaw) * 180.0 / M_PI, max_position_dev_, adaptive_max_position_dev, max_yaw_dev_ * 180.0 / M_PI, adaptive_max_yaw_dev * 180.0 / M_PI);
                 return;
             }
 
