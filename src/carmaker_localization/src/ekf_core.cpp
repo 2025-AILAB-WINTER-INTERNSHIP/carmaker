@@ -15,9 +15,9 @@ EkfCore::EkfCore()
     Q_(X, X) = 1e-4;
     Q_(Y, Y) = 1e-4;
     Q_(YAW, YAW) = 1e-4;
-    Q_(VX, VX) = 1e-3;
-    Q_(YAW_RATE, YAW_RATE) = 1e-3;
-    Q_(B_YAW_RATE, B_YAW_RATE) = 1e-6; // 자이로 바이어스는 매우 완만하게 변하도록 설정
+    Q_(VX, VX) = 1e-4;
+    Q_(YAW_RATE, YAW_RATE) = 1e-4;
+    Q_(B_YAW_RATE, B_YAW_RATE) = 1e-4;
 }
 
 void EkfCore::initialize(double x, double y, double yaw, double timestamp, double vx, double vy) {
@@ -191,7 +191,7 @@ void EkfCore::correctWheel(double vx, double yaw_rate, const Eigen::Matrix2d& R,
     P_ = I_KH * P_ * I_KH.transpose() + K * R * K.transpose();
 }
 
-void EkfCore::correctImu(double ax_raw, double ay_raw, double yaw_rate_raw, const Eigen::Matrix3d& R, double timestamp) {
+void EkfCore::correctImu(double yaw_rate_raw, double R_gyro, double timestamp) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -203,17 +203,14 @@ void EkfCore::correctImu(double ax_raw, double ay_raw, double yaw_rate_raw, cons
     double z = yaw_rate_raw;
     double h = x_(YAW_RATE) + x_(B_YAW_RATE);
 
-    // R matrix에서 1D 요레이트 분산 추출 (2, 2)
-    double R_sub = R(2, 2);
-
-    double S = (H * P_ * H.transpose())(0, 0) + R_sub;
+    double S = (H * P_ * H.transpose())(0, 0) + R_gyro;
     Eigen::Matrix<double, STATE_DIM, 1> K = P_ * H.transpose() / S;
 
     x_ += K * (z - h);
 
     // 수치적 안정성을 위한 Joseph Form 공분산 업데이트
     StateMatrix I_KH = StateMatrix::Identity() - K * H;
-    P_ = I_KH * P_ * I_KH.transpose() + K * R_sub * K.transpose();
+    P_ = I_KH * P_ * I_KH.transpose() + K * R_gyro * K.transpose();
 }
 
 StateFrame EkfCore::getState() const {

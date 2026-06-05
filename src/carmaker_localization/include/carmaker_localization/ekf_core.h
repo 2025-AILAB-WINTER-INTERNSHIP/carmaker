@@ -76,7 +76,7 @@ public:
     // Multi-Sensor Corrections
     void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,
                      double max_pos_step = 999.0, double max_yaw_step = 999.0);
-    void correctImu(double ax, double ay, double yaw_rate, const Eigen::Matrix3d& R, double timestamp);
+    void correctImu(double yaw_rate, double R_gyro, double timestamp);
     void correctWheel(double vx, double yaw_rate, const Eigen::Matrix2d& R, double timestamp);
 
     // Getters

@@ -76,6 +76,7 @@ bool LocalizationNodelet::loadParameters() {
 
     wheel_speed_std_ = pnh.param("ekf/wheel/speed_std", 0.05);
     slip_threshold_long_ = pnh.param("ekf/wheel/slip_threshold_long", 0.5);
+    imu_acc_std_ = pnh.param("ekf/imu/imu_acc_std", 0.1);
     imu_gyro_std_ = pnh.param("ekf/imu/gyro_std", 0.01);
 
     resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
@@ -226,9 +227,19 @@ bool LocalizationNodelet::initEkf() {
     imu_offset_y_ = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_y", 0.0);
     double imu_z = pnh.param("vehicle/imu_" + std::to_string(imu_id_) + "/offset_z", 0.298);
 
-    Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Identity() * 1e-4;
-    Q(VX, VX) = std::pow(wheel_speed_std_, 2);
-    Q(YAW_RATE, YAW_RATE) = std::pow(imu_gyro_std_, 2);
+    double q_pos_std = pnh.param("ekf/process_noise/pos_std", 0.01);
+    double q_yaw_std = pnh.param("ekf/process_noise/yaw_std", 0.01);
+    double q_vel_std = pnh.param("ekf/process_noise/vel_std", 0.05);
+    double q_yaw_rate_std = pnh.param("ekf/process_noise/yaw_rate_std", 0.01);
+    double q_bias_std = pnh.param("ekf/process_noise/bias_std", 0.01);
+
+    Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
+    Q(X, X) = std::pow(q_pos_std, 2);
+    Q(Y, Y) = std::pow(q_pos_std, 2);
+    Q(YAW, YAW) = std::pow(q_yaw_std, 2);
+    Q(VX, VX) = std::pow(q_vel_std, 2);
+    Q(YAW_RATE, YAW_RATE) = std::pow(q_yaw_rate_std, 2);
+    Q(B_YAW_RATE, B_YAW_RATE) = std::pow(q_bias_std, 2);
 
     ekf_core_->setProcessNoise(Q);
 
@@ -541,12 +552,9 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
             const double ay_raw = dynamics.Sensor_Inertial_0_Acc_B_y;
             const double wz_raw = dynamics.Sensor_Inertial_0_Omega_B_z;
 
-            // 6a. IMU Correction (raw values; lever-arm handled inside EkfCore)
-            Eigen::Matrix3d R_imu = Eigen::Matrix3d::Identity();
-            R_imu(0, 0) = 1.0;
-            R_imu(1, 1) = 1.0;
-            R_imu(2, 2) = std::pow(imu_gyro_std_, 2);
-            ekf_core_->correctImu(ax_raw, ay_raw, wz_raw, R_imu, current_time);
+            // 6a. IMU Gyro Correction (1D yaw rate)
+            double R_gyro = std::pow(imu_gyro_std_, 2);
+            ekf_core_->correctImu(wz_raw, R_gyro, current_time);
 
             // 6b. Wheel Correction with slip covariance inflation
             Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
@@ -995,9 +1003,17 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
 
             // 최대 허용 편차 검증 (설정 파일 기반 Validation Gate)
-            if (dist > max_position_dev_ || std::abs(dyaw) > max_yaw_dev_) {
-                ROS_WARN_THROTTLE(2.0, "performCorrection: Match rejected by validation gate. Dev: %.3fm, %.1f deg (limits: %.2fm, %.1f deg). Skipping correction.",
-                                  dist, std::abs(dyaw) * 180.0 / M_PI, max_position_dev_, max_yaw_dev_ * 180.0 / M_PI);
+            // ICP 관측값의 신뢰도(fitness_score가 낮을수록 높음)가 높을수록 
+            // 검증 게이트(max_position_dev_) 범위를 동적으로 확장하여 누적된 큰 드리프트를 한번에 구제 및 복구
+            double adaptive_max_position_dev = max_position_dev_;
+            if (registration_result.fitness_score < fitness_threshold_ && fitness_threshold_ > 1e-6) {
+                double fitness_margin = (fitness_threshold_ - registration_result.fitness_score) / fitness_threshold_;
+                adaptive_max_position_dev *= (1.0 + 4.0 * fitness_margin); // 신뢰도가 높을수록 최대 5배까지 완화 (예: 1.0m -> 5.0m)
+            }
+
+            if (dist > adaptive_max_position_dev || std::abs(dyaw) > max_yaw_dev_) {
+                ROS_WARN_THROTTLE(2.0, "performCorrection: Match rejected by validation gate. Dev: %.3fm, %.1f deg (limits: %.2fm / adaptive: %.2fm, %.1f deg). Skipping correction.",
+                                  dist, std::abs(dyaw) * 180.0 / M_PI, max_position_dev_, adaptive_max_position_dev, max_yaw_dev_ * 180.0 / M_PI);
                 return;
             }
 
