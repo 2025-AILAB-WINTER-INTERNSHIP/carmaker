@@ -563,10 +563,17 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
 
             const double vx_state = ekf_core_->getState().x(VX);
 
-            // Longitudinal slip detection
+            // Longitudinal slip detection & Adaptive Deceleration Handling
+            // 차량이 급감속할 때(ax_raw가 음수로 클 때)는 실제 제동 상황이므로 슬립 인플레이션 비율을 완화하여 EKF가 휠 감속 속도를 받아들이도록 유도
+            double slip_inflation = 100.0;
+            if (ax_raw < -0.5) {
+                // ax_raw가 -0.5 m/s^2 이하로 내려갈수록 최소 5.0배 수준까지 인플레이션을 점진적으로 감쇄
+                slip_inflation = std::max(5.0, 100.0 + (ax_raw - (-0.5)) * 50.0);
+            }
+
             if (std::abs(vx_wheel - vx_state) > slip_threshold_long_) {
-                R_wheel(0, 0) *= 100.0;
-                NODELET_WARN_THROTTLE(1.0, "Longitudinal slip detected (vx_wheel: %.2f, vx_state: %.2f)!", vx_wheel, vx_state);
+                R_wheel(0, 0) *= slip_inflation;
+                NODELET_WARN_THROTTLE(1.0, "Longitudinal slip detected (vx_wheel: %.2f, vx_state: %.2f, inflation: %.1f)!", vx_wheel, vx_state, slip_inflation);
             }
 
             ekf_core_->correctWheel(vx_wheel, yaw_rate_wheel, R_wheel, current_time);
