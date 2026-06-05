@@ -477,86 +477,101 @@ void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
 }
 
 void LocalizationNodelet::updateEstimation(double current_time, const carmaker_msgs::DynamicsInfo& dynamics) {
-    std::unique_lock<std::mutex> lock(estimation_mutex_);
+    bool needs_reset = false;
+    bool needs_init = false;
 
-    // 1. Time jump detection (e.g., bag loop or simulation restart)
-    if (last_prediction_time_ > 0.0) {
-        double raw_dt = current_time - last_prediction_time_;
-        if (raw_dt < -1.0 || raw_dt > 5.0) {
-            NODELET_WARN_THROTTLE(2.0, "EKF Time jump detected (dt: %.3f). Triggering localization reset...", raw_dt);
-            lock.unlock();
-            resetLocalization();
-            return;
+    {
+        std::lock_guard<std::mutex> lock(estimation_mutex_);
+
+        // 1. Time jump detection (e.g., bag loop or simulation restart)
+        if (last_prediction_time_ > 0.0) {
+            double raw_dt = current_time - last_prediction_time_;
+            if (raw_dt < -1.0 || raw_dt > 5.0) {
+                NODELET_WARN_THROTTLE(2.0, "EKF Time jump detected (dt: %.3f). Triggering localization reset...", raw_dt);
+                needs_reset = true;
+            }
+        }
+
+        // 2. First-run initialization
+        if (!needs_reset && last_prediction_time_ <= 0.0) {
+            needs_init = true;
         }
     }
 
-    // 2. First-run initialization
-    if (last_prediction_time_ <= 0.0) {
-        lock.unlock();
+    if (needs_reset) {
+        resetLocalization();
+        return;
+    }
+    if (needs_init) {
         initLocalization(current_time, dynamics);
         return;
     }
 
-    // 3. Monotonic Clamping: guarantee strictly increasing time for TF & Odom stream
-    if (current_time <= last_prediction_time_) {
-        current_time = last_prediction_time_ + 0.0001; // Minimum 0.1ms monotonic step
-    }
-
-    // 4. Compute wheel velocities
-    double v_left  = dynamics.Vhcl_RL_rotv * tire_radius_;
-    double v_right = dynamics.Vhcl_RR_rotv * tire_radius_;
-    double vx_wheel       = (v_left + v_right) / 2.0;
-    double yaw_rate_wheel = (v_right - v_left) / track_width_;
-
-
-
-    // 5. EKF Prediction
-    PredictionInput pred_input;
-    pred_input.rear_wheel_speed = vx_wheel;
-    // 조향각: 앞바퀴 전향각 직접 사용 (Vhcl_FL_rz와 Vhcl_FR_rz의 평균, Steer_WhlAng 핸들 각도보다 정확)
-    pred_input.steering_angle = (dynamics.Vhcl_FL_rz + dynamics.Vhcl_FR_rz) / 2.0;
-    ekf_core_->prediction(current_time, pred_input);
-
-    // 6. Cycle-Aware Sensor Corrections
-    if (dynamics.cycleno < last_processed_cycleno_) {
-        last_processed_cycleno_ = -1; // cycleno 역전 시 (시뮬레이션 루프) 리셋
-    }
-
-    if (dynamics.cycleno > last_processed_cycleno_) {
-        const double ax_raw = dynamics.Sensor_Inertial_0_Acc_B_x;
-        const double ay_raw = dynamics.Sensor_Inertial_0_Acc_B_y;
-        const double wz_raw = dynamics.Sensor_Inertial_0_Omega_B_z;
-
-        // 6a. IMU Correction (raw values; lever-arm handled inside EkfCore)
-        Eigen::Matrix3d R_imu = Eigen::Matrix3d::Identity();
-        R_imu(0, 0) = 1.0;
-        R_imu(1, 1) = 1.0;
-        R_imu(2, 2) = std::pow(imu_gyro_std_, 2);
-        ekf_core_->correctImu(ax_raw, ay_raw, wz_raw, R_imu, current_time);
-
-        // 6b. Wheel Correction with slip covariance inflation
-        Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
-        R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);                        // 종방향 휠 속도 분산
-        R_wheel(1, 1) = 2.0 * std::pow(wheel_speed_std_ / track_width_, 2);   // 요레이트 분산
-
-        const double vx_state = ekf_core_->getState().x(VX);
-
-        // Longitudinal slip detection
-        if (std::abs(vx_wheel - vx_state) > slip_threshold_long_) {
-            R_wheel(0, 0) *= 100.0;
-            NODELET_WARN_THROTTLE(1.0, "Longitudinal slip detected (vx_wheel: %.2f, vx_state: %.2f)!", vx_wheel, vx_state);
+    {
+        std::lock_guard<std::mutex> lock(estimation_mutex_);
+        if (last_prediction_time_ <= 0.0) {
+            return;
         }
 
-        ekf_core_->correctWheel(vx_wheel, yaw_rate_wheel, R_wheel, current_time);
-        last_processed_cycleno_ = dynamics.cycleno;
+        // 3. Monotonic Clamping: guarantee strictly increasing time for TF & Odom stream
+        if (current_time <= last_prediction_time_) {
+            current_time = last_prediction_time_ + 0.0001; // Minimum 0.1ms monotonic step
+        }
+
+        // 4. Compute wheel velocities
+        double v_left  = dynamics.Vhcl_RL_rotv * tire_radius_;
+        double v_right = dynamics.Vhcl_RR_rotv * tire_radius_;
+        double vx_wheel       = (v_left + v_right) / 2.0;
+        double yaw_rate_wheel = (v_right - v_left) / track_width_;
+
+        // 5. EKF Prediction
+        PredictionInput pred_input;
+        pred_input.rear_wheel_speed = vx_wheel;
+        // 조향각: 앞바퀴 전향각 직접 사용 (Vhcl_FL_rz와 Vhcl_FR_rz의 평균, Steer_WhlAng 핸들 각도보다 정확)
+        pred_input.steering_angle = (dynamics.Vhcl_FL_rz + dynamics.Vhcl_FR_rz) / 2.0;
+        ekf_core_->prediction(current_time, pred_input);
+
+        // 6. Cycle-Aware Sensor Corrections
+        if (dynamics.cycleno < last_processed_cycleno_) {
+            last_processed_cycleno_ = -1; // cycleno 역전 시 (시뮬레이션 루프) 리셋
+        }
+
+        if (dynamics.cycleno > last_processed_cycleno_) {
+            const double ax_raw = dynamics.Sensor_Inertial_0_Acc_B_x;
+            const double ay_raw = dynamics.Sensor_Inertial_0_Acc_B_y;
+            const double wz_raw = dynamics.Sensor_Inertial_0_Omega_B_z;
+
+            // 6a. IMU Correction (raw values; lever-arm handled inside EkfCore)
+            Eigen::Matrix3d R_imu = Eigen::Matrix3d::Identity();
+            R_imu(0, 0) = 1.0;
+            R_imu(1, 1) = 1.0;
+            R_imu(2, 2) = std::pow(imu_gyro_std_, 2);
+            ekf_core_->correctImu(ax_raw, ay_raw, wz_raw, R_imu, current_time);
+
+            // 6b. Wheel Correction with slip covariance inflation
+            Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
+            R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);                        // 종방향 휠 속도 분산
+            R_wheel(1, 1) = 2.0 * std::pow(wheel_speed_std_ / track_width_, 2);   // 요레이트 분산
+
+            const double vx_state = ekf_core_->getState().x(VX);
+
+            // Longitudinal slip detection
+            if (std::abs(vx_wheel - vx_state) > slip_threshold_long_) {
+                R_wheel(0, 0) *= 100.0;
+                NODELET_WARN_THROTTLE(1.0, "Longitudinal slip detected (vx_wheel: %.2f, vx_state: %.2f)!", vx_wheel, vx_state);
+            }
+
+            ekf_core_->correctWheel(vx_wheel, yaw_rate_wheel, R_wheel, current_time);
+            last_processed_cycleno_ = dynamics.cycleno;
+        }
+
+        // 6c. Cumulative RMSE calculation & Instantaneous Error publishing (GT rear axle vs EKF rear axle state)
+        calculateAndPublishErrors(dynamics);
+
+        // 7. Publish
+        publishEstimation(ros::Time(current_time));
+        last_prediction_time_ = current_time;
     }
-
-    // 6c. Cumulative RMSE calculation & Instantaneous Error publishing (GT rear axle vs EKF rear axle state)
-    calculateAndPublishErrors(dynamics);
-
-    // 7. Publish
-    publishEstimation(ros::Time(current_time));
-    last_prediction_time_ = current_time;
 }
 
 void LocalizationNodelet::imagesCallback(
@@ -1207,9 +1222,6 @@ void LocalizationNodelet::resetLocalization() {
         visualizer_->reset();
     }
 
-    last_map_pub_x_ = -9999.0;
-    last_map_pub_y_ = -9999.0;
-
     for (auto& ch : channels_) {
         ch.lut_initialized.store(false, std::memory_order_release);
     }
@@ -1226,6 +1238,8 @@ void LocalizationNodelet::resetLocalization() {
         cumulative_pos_sq_err_ = 0.0;
         cumulative_yaw_sq_err_ = 0.0;
         err_count_ = 0;
+        last_map_pub_x_ = -9999.0;
+        last_map_pub_y_ = -9999.0;
     }
 
     // Correction Hz 추적 초기화 (리셋 전 데이터가 Hz 추정에 섞이는 것 방지)
@@ -1367,14 +1381,11 @@ void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::Dynamic
 
     double nees = e.transpose() * P_pose.inverse() * e;
 
-    {
-        std::lock_guard<std::mutex> lock(estimation_mutex_);
-        cumulative_pos_sq_err_ += (pos_err * pos_err);
-        cumulative_yaw_sq_err_ += (yaw_err * yaw_err);
-        cumulative_nees_ += nees;
-        nees_latest_ = nees;
-        err_count_++;
-    }
+    cumulative_pos_sq_err_ += (pos_err * pos_err);
+    cumulative_yaw_sq_err_ += (yaw_err * yaw_err);
+    cumulative_nees_ += nees;
+    nees_latest_ = nees;
+    err_count_++;
 
     // 토픽에는 실시간 오차(Instantaneous Error) 및 NEES 발행
     std_msgs::Float64 pos_err_msg;
