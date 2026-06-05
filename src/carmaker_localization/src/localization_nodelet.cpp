@@ -1246,6 +1246,26 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
         stat.summary(diagnostic_updater::DiagnosticStatusWrapper::ERROR, "Localization is LOST (high uncertainty)");
     }
 
+    // Ground Truth (GT) Values for centralized monitoring
+    {
+        std::lock_guard<std::mutex> dyn_lock(dyn_mutex_);
+        if (dynamics_received_ && !std::isnan(latest_dynamics_.RearAxle_x) && !std::isnan(latest_dynamics_.RearAxle_y)) {
+            stat.add("True X (m)", latest_dynamics_.RearAxle_x);
+            stat.add("True Y (m)", latest_dynamics_.RearAxle_y);
+            stat.add("True Yaw (deg)", latest_dynamics_.Car_Yaw * 180.0 / M_PI);
+            stat.add("True Vx (m/s)", latest_dynamics_.Car_vx);
+            stat.add("True Vy (m/s)", latest_dynamics_.Car_vy);
+            stat.add("True Yaw Rate (deg/s)", latest_dynamics_.Car_YawVel * 180.0 / M_PI);
+        } else {
+            stat.add("True X (m)", "N/A");
+            stat.add("True Y (m)", "N/A");
+            stat.add("True Yaw (deg)", "N/A");
+            stat.add("True Vx (m/s)", "N/A");
+            stat.add("True Vy (m/s)", "N/A");
+            stat.add("True Yaw Rate (deg/s)", "N/A");
+        }
+    }
+
     stat.add("Uncertainty Position X (m)", std_x);
     stat.add("Uncertainty Position Y (m)", std_y);
     stat.add("Uncertainty Yaw (deg)", std_yaw);
