@@ -185,6 +185,9 @@ private:
     ros::Publisher rmse_yaw_pub_;
     ros::Publisher nees_pub_;
     std::map<std::string, ros::Publisher> feature_data_pubs_;
+    ros::Publisher debug_r_wheel_vx_pub_;
+    ros::Publisher debug_r_wheel_yaw_rate_pub_;
+    ros::Publisher debug_r_imu_yaw_rate_pub_;
     ros::Timer prediction_timer_;
     ros::ServiceServer map_srv_;
 
@@ -240,6 +243,8 @@ private:
     std::mutex correction_hz_mutex_;
 
     // Cumulative RMSE calculation variables
+    double inst_pos_err_ = 0.0;
+    double inst_yaw_err_ = 0.0;
     double cumulative_pos_sq_err_ = 0.0;
     double cumulative_yaw_sq_err_ = 0.0;
     double cumulative_nees_ = 0.0;

@@ -20,6 +20,9 @@ topics:
       correction_markers: "/localization/debug/correction_markers"
       estimation_trajectory: "/localization/debug/estimation_trajectory"
       bev_image_prefix: "/localization/debug/bev_image"
+      r_wheel_vx: "/localization/debug/r_wheel_vx"
+      r_wheel_yaw_rate: "/localization/debug/r_wheel_yaw_rate"
+      r_imu_yaw_rate: "/localization/debug/r_imu_yaw_rate"
   subscribe:
     dynamics: "/carmaker/dynamic_info"
     use_bundle: true
@@ -111,7 +114,8 @@ ekf:
     speed_std: 0.05 # speed_std : encoder 노이즈 [m/s]
     slip_threshold_long: 1.0 # 종방향 휠 슬립 속도 임계값 [m/s]
   camera:
-    base_std: 0.1 # camera : vision 노이즈 [m]
+    base_std: 0.1 # camera : vision 위치 노이즈 [m]
+    base_yaw_std: 0.02 # camera : vision 자세 노이즈 [rad] (~1.15 deg)
   divergence_threshold: 100.0 # divergence_threshold : 필터 발산 판정 임계값 (Trace(P))
 
 feature_registration:

@@ -362,12 +362,13 @@ bool LocalizationNodelet::setupRosIo() {
     int max_iterations = pnh.param("feature_registration/max_iterations", 50);
     search_radius_ = pnh.param("feature_registration/search_radius", 20.0);
     double vision_base_std = pnh.param("ekf/camera/base_std", 0.1);
+    double vision_base_yaw_std = pnh.param("ekf/camera/base_yaw_std", 0.02);
     double max_covariance = pnh.param("feature_registration/max_covariance", 10.0);
 
     double min_search_radius = pnh.param("feature_registration/min_search_radius", 0.5);
 
     if (registration_type == "icp") {
-        registration_engine_ = std::make_shared<IcpRegistration>(fitness_threshold_, max_iterations, vision_base_std, min_search_radius, max_covariance);
+        registration_engine_ = std::make_shared<IcpRegistration>(fitness_threshold_, max_iterations, vision_base_std, vision_base_yaw_std, min_search_radius, max_covariance);
         if (!registration_engine_) {
             NODELET_ERROR("Failed to allocate IcpRegistration instance.");
             return false;
@@ -404,6 +405,14 @@ bool LocalizationNodelet::setupRosIo() {
     rmse_pos_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_pos, 10);
     rmse_yaw_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_yaw, 10);
     nees_pub_ = nh.advertise<std_msgs::Float64>(topic_nees, 10);
+
+    std::string topic_r_wheel_vx = pnh.param("topics/publish/debug/r_wheel_vx", std::string("/localization/debug/r_wheel_vx"));
+    std::string topic_r_wheel_yaw_rate = pnh.param("topics/publish/debug/r_wheel_yaw_rate", std::string("/localization/debug/r_wheel_yaw_rate"));
+    std::string topic_r_imu_yaw_rate = pnh.param("topics/publish/debug/r_imu_yaw_rate", std::string("/localization/debug/r_imu_yaw_rate"));
+
+    debug_r_wheel_vx_pub_ = nh.advertise<std_msgs::Float64>(topic_r_wheel_vx, 10);
+    debug_r_wheel_yaw_rate_pub_ = nh.advertise<std_msgs::Float64>(topic_r_wheel_yaw_rate, 10);
+    debug_r_imu_yaw_rate_pub_ = nh.advertise<std_msgs::Float64>(topic_r_imu_yaw_rate, 10);
 
     // Setup Diagnostics Updater (publishes directly to the standard /diagnostics topic)
     diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh, pnh);
@@ -556,6 +565,11 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
             double R_gyro = std::pow(imu_gyro_std_, 2);
             ekf_core_->correctImu(wz_raw, R_gyro, current_time);
 
+            // Publish IMU yaw rate variance for debugging
+            std_msgs::Float64 debug_imu_msg;
+            debug_imu_msg.data = R_gyro;
+            debug_r_imu_yaw_rate_pub_.publish(debug_imu_msg);
+
             // 6b. Wheel Correction with slip covariance inflation
             Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
             R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);                        // 종방향 휠 속도 분산
@@ -577,6 +591,16 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
             }
 
             ekf_core_->correctWheel(vx_wheel, yaw_rate_wheel, R_wheel, current_time);
+
+            // Publish Wheel variance values for debugging
+            std_msgs::Float64 debug_wheel_vx_msg;
+            debug_wheel_vx_msg.data = R_wheel(0, 0);
+            debug_r_wheel_vx_pub_.publish(debug_wheel_vx_msg);
+
+            std_msgs::Float64 debug_wheel_yaw_rate_msg;
+            debug_wheel_yaw_rate_msg.data = R_wheel(1, 1);
+            debug_r_wheel_yaw_rate_pub_.publish(debug_wheel_yaw_rate_msg);
+
             last_processed_cycleno_ = dynamics.cycleno;
         }
 
@@ -1212,29 +1236,37 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
         stat.add("Correction Hz (Hz)", correction_hz);
     }
 
-    double local_pos_sq_err = 0.0;
-    double local_yaw_sq_err = 0.0;
-    double local_nees_sum = 0.0;
+    double local_inst_pos_err = 0.0;
+    double local_inst_yaw_err = 0.0;
+    double local_cumulative_pos_sq_err = 0.0;
+    double local_cumulative_yaw_sq_err = 0.0;
     double local_nees_latest = 0.0;
+    double local_cumulative_nees_sum = 0.0;
     uint64_t local_count = 0;
     {
-        local_pos_sq_err = cumulative_pos_sq_err_;
-        local_yaw_sq_err = cumulative_yaw_sq_err_;
-        local_nees_sum = cumulative_nees_;
+        local_inst_pos_err = inst_pos_err_;
+        local_inst_yaw_err = inst_yaw_err_;
+        local_cumulative_pos_sq_err = cumulative_pos_sq_err_;
+        local_cumulative_yaw_sq_err = cumulative_yaw_sq_err_;
         local_nees_latest = nees_latest_;
+        local_cumulative_nees_sum = cumulative_nees_;
         local_count = err_count_;
     }
 
     if (local_count > 0) {
-        stat.add("Cumulative Position RMSE (m)", std::sqrt(local_pos_sq_err / local_count));
-        stat.add("Cumulative Yaw RMSE (deg)", std::sqrt(local_yaw_sq_err / local_count) * 180.0 / M_PI);
-        stat.add("Cumulative Average NEES", local_nees_sum / local_count);
+        stat.add("Latest Instantaneous Position Error (m)", local_inst_pos_err);
+        stat.add("Latest Instantaneous Yaw Error (deg)", local_inst_yaw_err * 180.0 / M_PI);
+        stat.add("Cumulative Position RMSE (m)", std::sqrt(local_cumulative_pos_sq_err / local_count));
+        stat.add("Cumulative Yaw RMSE (deg)", std::sqrt(local_cumulative_yaw_sq_err / local_count) * 180.0 / M_PI);
         stat.add("Latest Instantaneous NEES", local_nees_latest);
+        stat.add("Cumulative Average NEES", local_cumulative_nees_sum / local_count);
     } else {
+        stat.add("Latest Instantaneous Position Error (m)", 0.0);
+        stat.add("Latest Instantaneous Yaw Error (deg)", 0.0);
         stat.add("Cumulative Position RMSE (m)", 0.0);
         stat.add("Cumulative Yaw RMSE (deg)", 0.0);
-        stat.add("Cumulative Average NEES", 0.0);
         stat.add("Latest Instantaneous NEES", 0.0);
+        stat.add("Cumulative Average NEES", 0.0);
     }
 }
 
@@ -1404,6 +1436,8 @@ void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::Dynamic
 
     double nees = e.transpose() * P_pose.inverse() * e;
 
+    inst_pos_err_ = pos_err;
+    inst_yaw_err_ = yaw_err_abs;
     cumulative_pos_sq_err_ += (pos_err * pos_err);
     cumulative_yaw_sq_err_ += (yaw_err * yaw_err);
     cumulative_nees_ += nees;

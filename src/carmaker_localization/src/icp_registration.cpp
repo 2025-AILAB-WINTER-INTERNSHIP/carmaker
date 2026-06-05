@@ -42,10 +42,11 @@ static double maxEigenvalue2x2(double a, double b, double c) {
 // ─────────────────────────────────────────────────────────────────────────────
 // IcpRegistration
 // ─────────────────────────────────────────────────────────────────────────────
-IcpRegistration::IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double min_search_radius, double max_covariance)
+IcpRegistration::IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double vision_base_yaw_std, double min_search_radius, double max_covariance)
     : fitness_threshold_(fitness_threshold),
       max_iterations_(max_iterations),
       vision_base_std_(vision_base_std),
+      vision_base_yaw_std_(vision_base_yaw_std),
       min_search_radius_(min_search_radius),
       max_covariance_(max_covariance) {}
 
@@ -307,6 +308,14 @@ RegistrationResult IcpRegistration::align(
                 }
             }
             result.covariance = eigenvectors * capped_cov_eigenvalues.asDiagonal() * eigenvectors.transpose();
+
+            // EKF 과신(Overconfidence) 방지를 위해 최소 바닥 노이즈(Floor Noise) 추가
+            // 정합 결과가 완벽하더라도 센서 자체의 해상도/왜곡 한계 오차를 공분산에 보장
+            double min_pos_var = std::pow(vision_base_std_, 2);
+            double min_yaw_var = std::pow(vision_base_yaw_std_, 2);
+            result.covariance(0, 0) += min_pos_var;
+            result.covariance(1, 1) += min_pos_var;
+            result.covariance(2, 2) += min_yaw_var;
         } else {
             result.covariance = Eigen::Matrix3d::Identity() * max_covariance_;
         }
