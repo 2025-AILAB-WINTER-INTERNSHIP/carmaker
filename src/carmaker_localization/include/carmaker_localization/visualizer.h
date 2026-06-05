@@ -60,7 +60,8 @@ private:
                            const geometry_msgs::Pose& pose,
                            const std::string& ns,
                            const std::string& label,
-                           const std::vector<double>& color);
+                           const std::vector<double>& color,
+                           bool is_bumper_frame = false);
 };
 
 } // namespace carmaker_localization

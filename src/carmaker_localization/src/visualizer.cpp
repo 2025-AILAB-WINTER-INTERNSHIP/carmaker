@@ -245,7 +245,7 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
 
     // 3. Vehicle Body & Label
     std::vector<double> color = {0.0, 1.0, 0.0, 0.7};
-    _addVehicleMarker(marker_array, pose.pose.pose, "estimation", "Estimation", color);
+    _addVehicleMarker(marker_array, pose.pose.pose, "estimation", "Estimation", color, false);
 
     estimation_marker_pub_.publish(marker_array);
 
@@ -305,7 +305,7 @@ void Visualizer::publishCorrection(const geometry_msgs::PoseWithCovarianceStampe
 
     // 2. Vehicle Body & Label
     std::vector<double> color = {1.0, 0.0, 0.0, 0.7};
-    _addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color);
+    _addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color, true);
 
     correction_marker_pub_.publish(marker_array);
 }
@@ -398,7 +398,8 @@ void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array
                                     const geometry_msgs::Pose& pose,
                                     const std::string& ns,
                                     const std::string& label,
-                                    const std::vector<double>& color) {
+                                    const std::vector<double>& color,
+                                    bool is_bumper_frame) {
     double yaw = tf2::getYaw(pose.orientation);
 
     visualization_msgs::Marker body;
@@ -409,9 +410,15 @@ void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array
     body.type = visualization_msgs::Marker::CUBE;
     body.action = visualization_msgs::Marker::ADD;
 
-    // 후륜축 -> 후방 범퍼 변환 후 차량 중심 오프셋 적용 (Rear Axle -> Rear Bumper -> Vehicle Center)
-    double bumper_x = pose.position.x - rear_axle_x_ * std::cos(yaw);
-    double bumper_y = pose.position.y - rear_axle_x_ * std::sin(yaw);
+    // 입력 포즈가 후륜축 기준일 경우에만 후방 범퍼 좌표로 1차 역변환 수행
+    double bumper_x = pose.position.x;
+    double bumper_y = pose.position.y;
+    if (!is_bumper_frame) {
+        bumper_x -= rear_axle_x_ * std::cos(yaw);
+        bumper_y -= rear_axle_x_ * std::sin(yaw);
+    }
+
+    // 후방 범퍼 기준으로 차량 중심 오프셋 적용하여 시각화 큐브 배치 (Rear Bumper -> Vehicle Center)
     body.pose.position.x = bumper_x + vehicle_length_offset_ * std::cos(yaw);
     body.pose.position.y = bumper_y + vehicle_length_offset_ * std::sin(yaw);
     body.pose.position.z = vehicle_height_ / 2.0;
