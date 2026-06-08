@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations  # Python 3.7+ 호환: 타입 힌트 지연 평가 활성화
 """FP32 vs FP16 세그멘테이션 결과 Bag 파일 픽셀 단위 비교 도구.
 
 사용법:
@@ -13,6 +14,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -20,27 +22,28 @@ import rosbag
 from cv_bridge import CvBridge
 
 
-def _collect_timestamps(bag_path: str, topic: str) -> set:
+def _collect_timestamps(bag_path: str, topic: str) -> set[int]:
     """1-pass: 타임스탬프(nsec)만 수집합니다. 메시지 데이터는 보관하지 않습니다."""
-    timestamps = {}
+    # dict → set으로 단순화. 중복 감지는 add 전 in 검사로 명확하게 처리합니다.
+    timestamps: set[int] = set()
     with rosbag.Bag(bag_path) as bag:
         for _, msg, _ in bag.read_messages(topics=[topic]):
             ts = msg.header.stamp.to_nsec()
             # 동일 타임스탬프 중복 감지 시 경고를 출력합니다.
             if ts in timestamps:
-                print(f"  ⚠️  [경고] 중복 타임스탬프 감지 (덮어쓰기): {ts} ns — {bag_path}")
-            timestamps[ts] = True
-    return set(timestamps.keys())
+                print(f"  ⚠️  [경고] 중복 타임스탬프 감지: {ts} ns — {bag_path}")
+            timestamps.add(ts)
+    return timestamps
 
 
 def _read_messages_for_timestamps(
-    bag_path: str, topic: str, target_timestamps: set
-) -> dict:
+    bag_path: str, topic: str, target_timestamps: set[int]
+) -> dict[int, Any]:
     """2-pass: 필요한 타임스탬프의 메시지만 선택적으로 읽습니다.
 
     모든 메시지를 메모리에 올리지 않고 필요한 것만 적재하여 OOM을 방지합니다.
     """
-    messages = {}
+    messages: dict[int, Any] = {}
     with rosbag.Bag(bag_path) as bag:
         for _, msg, _ in bag.read_messages(topics=[topic]):
             ts = msg.header.stamp.to_nsec()
@@ -68,13 +71,17 @@ def compare_synced_bags(
     Returns:
         True  – 전체 일치율이 threshold 이상 (검증 통과)
         False – threshold 미달 또는 비교 불가
+
+    Notes:
+        통과/실패 판정은 프레임별 일치율이 아닌 **누적 픽셀 기준 전체 일치율**
+        (overall_accuracy)을 사용합니다. matching_frames는 참고 지표입니다.
     """
     print(
         f"📂 파일 로딩 중...\n"
         f"  - 기준(FP32): {fp32_bag_path}\n"
         f"  - 테스트(FP16): {fp16_bag_path}\n"
         f"  - 토픽: {topic}\n"
-        f"  - 통과 기준: {threshold:.2f}%"
+        f"  - 통과 기준: {threshold:.2f}% (누적 픽셀 일치율 기준)"
     )
 
     # ── 1단계: 타임스탬프만 수집 (메모리 효율적인 2-pass 방식) ──────────────
@@ -112,15 +119,21 @@ def compare_synced_bags(
     # 고정 상대경로 대신 절대 경로를 사용하여 실행 위치에 무관하게 동작합니다.
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    n_common = len(common_timestamps)
     print(f"\n🔍 공통 프레임 픽셀 단위 비교 시작... (diff 저장: {output_dir})")
 
     for i, ts in enumerate(common_timestamps):
+        # 진행 상황 출력 (50프레임마다 또는 마지막 프레임)
+        if i % 50 == 0 or i == n_common - 1:
+            print(f"  ⏳ [{i + 1}/{n_common}] 처리 중...")
+
+        # common_timestamps ⊆ dict_fp32.keys() ∩ dict_fp16.keys() 이어야 합니다.
+        # 이 불변 조건이 깨지면 내부 오류이므로 assert로 즉시 감지합니다.
         msg_fp32 = dict_fp32.get(ts)
         msg_fp16 = dict_fp16.get(ts)
-
-        if msg_fp32 is None or msg_fp16 is None:
-            skipped_frames += 1
-            continue
+        assert msg_fp32 is not None and msg_fp16 is not None, (
+            f"내부 오류: 공통 TS {ts}가 메시지 dict에 없습니다."
+        )
 
         img_fp32 = bridge.imgmsg_to_cv2(msg_fp32, desired_encoding="passthrough")
         img_fp16 = bridge.imgmsg_to_cv2(msg_fp16, desired_encoding="passthrough")
@@ -131,25 +144,36 @@ def compare_synced_bags(
             skipped_frames += 1
             continue
 
-        # 픽셀 일치도 계산
-        match_mask = img_fp32 == img_fp16
+        # 픽셀 일치율은 H×W 픽셀 수 기준으로 정규화합니다.
+        # img.size는 H*W*C를 반환하므로, 다채널 이미지에서는 채널별 원소 수로
+        # 나누어 일치율이 과소 계산되는 문제를 방지합니다.
+        h, w = img_fp32.shape[:2]
+        frame_pixels = h * w
+
+        # 다채널 이미지: 모든 채널이 일치해야 해당 픽셀을 일치로 판정합니다.
+        if img_fp32.ndim == 3:
+            match_mask = np.all(img_fp32 == img_fp16, axis=-1)
+        else:
+            match_mask = img_fp32 == img_fp16
         matching_pixels = int(np.sum(match_mask))
-        frame_pixels = img_fp32.size
 
         total_matching_pixels += matching_pixels
         total_pixels += frame_pixels
 
         accuracy = (matching_pixels / frame_pixels) * 100.0
 
-        # 임계값을 하드코딩(95)에서 인자로 받은 threshold로 대체합니다.
         if accuracy >= threshold:
             matching_frames += 1
         else:
-            diff_img = np.abs(
+            diff_raw = np.abs(
                 img_fp32.astype(np.int16) - img_fp16.astype(np.int16)
             ).astype(np.uint8)
             diff_path = output_dir / f"diff_ts_{ts}.png"
-            cv2.imwrite(str(diff_path), diff_img * 50)  # 차이를 명확히 보기 위해 50배 증폭
+
+            # uint8에 50을 직접 곱하면 wrap-around(모듈로 256)가 발생합니다.
+            # uint16으로 확장 후 곱한 뒤 0~255로 클리핑하여 올바른 시각화를 보장합니다.
+            amplified = np.clip(diff_raw.astype(np.uint16) * 50, 0, 255).astype(np.uint8)
+            cv2.imwrite(str(diff_path), amplified)
             print(f"  -> [주의] TS:{ts} 프레임 일치율 {accuracy:.4f}% (오차 이미지 저장됨)")
 
     # ── 4단계: 최종 결과 산출 ─────────────────────────────────────────────────
@@ -165,12 +189,17 @@ def compare_synced_bags(
 
     overall_accuracy = (total_matching_pixels / total_pixels) * 100.0
 
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 55)
     print("🎯 최종 동기화 검증 결과")
-    print("=" * 50)
-    print(f"  전체 평균 일치율 : {overall_accuracy:.4f}%")
+    print("=" * 55)
+    print(f"  전체 평균 일치율 : {overall_accuracy:.4f}%  ← 최종 판정 기준")
     print(f"  통과 기준        : {threshold:.2f}%")
-    print(f"  통과 프레임      : {matching_frames} / {compared_frames}  (건너뜀: {skipped_frames})")
+    print(f"  통과 프레임      : {matching_frames} / {compared_frames}  "
+          f"(건너뜀: {skipped_frames})  ← 참고 지표")
+    print(
+        f"\n  [참고] 통과/실패 판정은 누적 픽셀 기준 전체 일치율(overall_accuracy)을\n"
+        f"         사용합니다. 통과 프레임 수는 별도 참고 지표입니다."
+    )
 
     if overall_accuracy >= threshold:
         print(
