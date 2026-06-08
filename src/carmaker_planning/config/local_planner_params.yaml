@@ -4,10 +4,16 @@
 
 topics:
   subscribe:
-    trajectory: "/planning/trajectory"
-    dynamics: "/carmaker/dynamic_info"
+    trajectory: "/planning/global/trajectory"
+    dynamics: "/carmaker/dynamic_info" # GT
+    odom: "/localization/odom" # EKF
   publish:
-    local_trajectory: "/planning/local_trajectory"
+    local_trajectory: "/planning/local/trajectory"
+    debug:
+      path: "/planning/debug/local/path"
+      pose: "/planning/debug/local/pose"
+      curvature: "/planning/debug/local/curvature"
+      velocity: "/planning/debug/local/velocity"
 
 # Frame / pose-source (must match global_planner_params.yaml)
 frames:
@@ -15,10 +21,7 @@ frames:
   rear_axle: "Fr1A_Rear_Axle_Pred"
 
 setting:
-  use_gt_pose: true # true → /carmaker/dynamic_info (GT)
-  use_manual_pose:
-    enabled: false # true → /planning/start (offline test)
-    topic: "/planning/start"
+  use_gt_pose: true # true → /carmaker/dynamic_info (GT), false → /localization/odom (EKF)
 
 # Vehicle geometry (copied from global_planner_params.yaml for self-containment)
 vehicle:

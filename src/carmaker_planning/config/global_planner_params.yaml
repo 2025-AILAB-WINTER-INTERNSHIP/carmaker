@@ -3,14 +3,14 @@ services:
 
 topics:
   publish:
-    trajectory: "/planning/trajectory"
+    trajectory: "/planning/global/trajectory"
     debug:
-      map: "/planning/debug/occupancy_grid"
-      path: "/planning/debug/global_path"
-      pose: "/planning/debug/global_pose"
-      curvature: "/planning/debug/curvature_path"
-      tree: "/planning/debug/search_tree"
-      velocity: "/planning/debug/velocity_profile"
+      map: "/planning/debug/global/map"
+      path: "/planning/debug/global/path"
+      pose: "/planning/debug/global/pose"
+      curvature: "/planning/debug/global/curvature"
+      tree: "/planning/debug/global/tree"
+      velocity: "/planning/debug/global/velocity"
   subscribe:
     goal: "/planning/goal"
     dynamics: "/carmaker/dynamic_info"
