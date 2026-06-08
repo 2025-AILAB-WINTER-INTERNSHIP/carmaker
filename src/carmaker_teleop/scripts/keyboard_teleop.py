@@ -3,90 +3,74 @@ import select
 import sys
 import termios
 import rospy
+import math
 
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Twist
 from carmaker_msgs.msg import Control_Signal
+from carmaker_msgs.msg import DynamicsInfo
 
 HELP = """
 ===========================================================
- CarMaker ROS Keyboard Teleop (Perfect Max Speed Lock)
+ CarMaker ROS Keyboard Teleop (Closed-Loop Feedback)
 ===========================================================
- [WASD 변형 게임 스타일 조작]
-  w : 전진 (자동 Drive 기어 + 가속)
-  s : 후진 (자동 Reverse 기어 + 가속)
-  a / d : 좌 / 우 조향
-  q / e : 전진 좌회전 / 전진 우회전
-  z / c : 후진 좌회전 / 후진 우회전
-  x : 코스팅 (가속/브레이크 페달 모두 해제)
-  space : 긴급 제동 및 조향 정렬
-  m : 정밀 주차 모드 토글 (속도 및 가속 제한)
-
- [수동 기어 조작]
-  r : Drive(전진)  |  n : Neutral(중립)
-  f : Reverse(후진)|  p : Parking(주차)
-
- CTRL-C를 누르면 안전하게 종료됩니다.
+  [주행] w: 전진 | s: 후진 | a/d: 좌우 조향 | q/e/z/c: 대각선
+  [제어] space: 브레이크 | x: 코스팅(페달 해제) | m: 정밀 모드
+  [기어] r: Drive | n: Neutral | f: Reverse | p: Parking
+  (CTRL-C to quit)
 ===========================================================
 """
 
-class KeyboardTeleop(object):
+class KeyboardTeleop:
     def __init__(self):
-        # 파라미터 로드
+        # 1. 기본 설정 및 제원 로드
         self.mode = rospy.get_param("~mode", "carmaker_control").strip().lower()
-        self.topic = rospy.get_param("~topic", "/carmaker/control_signal")
         self.rate_hz = float(rospy.get_param("~rate", 20.0))
+        self.pub_topic = rospy.get_param("~control_topic", "/carmaker/control_signal")
+        self.sub_topic = rospy.get_param("~dynamics_topic", "/carmaker/dynamics_info")
 
-        # 제한 제원
-        self.speed_step = float(rospy.get_param("~speed_step", 0.2))
-        self.steer_step = float(rospy.get_param("~steer_step", 0.08))
-        self.max_speed = float(rospy.get_param("~max_speed", 3.0))
-        self.max_steer = float(rospy.get_param("~max_steer", 0.65))
-        self.max_pedal = float(rospy.get_param("~max_pedal", 0.7))
-        self.max_accel = float(rospy.get_param("~max_accel", 3.0))
+        self.limits = {
+            "speed": float(rospy.get_param("~max_speed", 2.0)), # m/s (원하는 대로 정확히 제어됨)
+            "steer": float(rospy.get_param("~max_steer", 0.65)),
+            "pedal": float(rospy.get_param("~max_pedal", 0.7)),
+            "accel": float(rospy.get_param("~max_accel", 3.0))
+        }
         
-        # 기어 정의
-        self.drive_gear = int(rospy.get_param("~drive_gear", 1))
-        self.neutral_gear = int(rospy.get_param("~neutral_gear", 0))
-        self.reverse_gear = int(rospy.get_param("~reverse_gear", -1))
-        self.park_gear = int(rospy.get_param("~park_gear", -9))
+        self.steps = {
+            "gas": float(rospy.get_param("~gas_step", 0.08)),
+            "brake": float(rospy.get_param("~brake_step", 0.10)),
+            "steer": float(rospy.get_param("~steer_step", 0.08)),
+            "gas_decay": float(rospy.get_param("~gas_decay_step", 0.06)),
+            "brake_decay": float(rospy.get_param("~brake_decay_step", 0.08)),
+            "steer_return": float(rospy.get_param("~steer_return_rate", 0.10))
+        }
 
-        # 페달 스텝 및 감쇄
-        self.gas_step = float(rospy.get_param("~gas_step", 0.08))
-        self.brake_step = float(rospy.get_param("~brake_step", 0.10))
-        self.gas_decay_step = float(rospy.get_param("~gas_decay_step", 0.06))
-        self.brake_decay_step = float(rospy.get_param("~brake_decay_step", 0.08))
-        self.steer_return_rate = float(rospy.get_param("~steer_return_rate", 0.10))
-        
-        # 정밀 모드 제원
+        self.gears = {
+            "drive": int(rospy.get_param("~drive_gear", 1)),
+            "neutral": int(rospy.get_param("~neutral_gear", 0)),
+            "reverse": int(rospy.get_param("~reverse_gear", -1)),
+            "park": int(rospy.get_param("~park_gear", -9))
+        }
+
         self.precision_mode = bool(rospy.get_param("~precision_mode", False))
-        self.precision_gas_scale = float(rospy.get_param("~precision_gas_scale", 0.10))
-        self.precision_steer_scale = float(rospy.get_param("~precision_steer_scale", 1.60))
-        self.precision_steer_return_scale = float(rospy.get_param("~precision_steer_return_scale", 0.50))
-        self.precision_max_pedal = float(rospy.get_param("~precision_max_pedal", 0.10))
 
-        # 상태 변수
-        self.speed = 0.0
-        self.steer = 0.0
-        self.gas = 0.0
-        self.brake = 0.0
-        self.gear = int(rospy.get_param("~default_gear", 1))
+        # 2. 상태 변수 (State Machine)
+        self.state = {"steer": 0.0, "gas": 0.0, "brake": 0.0, "gear": self.gears["drive"]}
         
-        # 최고 속도 락을 위한 제어 변수들
-        self.virtual_speed = 0.0
-        self.calculated_accel = 0.0  # 시뮬레이터로 보낼 최종 억제된 가속도
+        # 시뮬레이터에서 피드백 받는 실제 차량의 종방향 속도 (m/s)
+        self.actual_vx = 0.0 
+        self.final_accel = 0.0
 
-        # Publisher
-        if self.mode == "ackermann":
-            self.pub = rospy.Publisher(self.topic, AckermannDriveStamped, queue_size=10)
-        elif self.mode == "carmaker_control":
-            self.pub = rospy.Publisher(self.topic, Control_Signal, queue_size=10)
-        else:
-            self.mode = "twist"
-            self.pub = rospy.Publisher(self.topic, Twist, queue_size=10)
+        # 3. ROS Publisher & Subscriber 설정
+        msg_types = {"ackermann": AckermannDriveStamped, "carmaker_control": Control_Signal, "twist": Twist}
+        msg_class = msg_types.get(self.mode, Twist)
+        self.pub = rospy.Publisher(self.pub_topic, msg_class, queue_size=10)
+        
+        # 실제 차량 상태 피드백 구독
+        rospy.Subscriber(self.sub_topic, DynamicsInfo, self._dynamics_cb)
 
         self.settings = termios.tcgetattr(sys.stdin)
-        rospy.loginfo("carmaker_teleop 가동 | Mode: %s | Topic: %s", self.mode, self.topic)
+        rospy.loginfo(f"가동 완료 | Mode: {self.mode} | Dynamics Sub: {self.sub_topic}")
         print(HELP)
 
     def _get_key(self):
@@ -94,68 +78,32 @@ class KeyboardTeleop(object):
         return sys.stdin.read(1) if rlist else ""
 
     @staticmethod
-    def _clamp(value, vmin, vmax):
-        return max(vmin, min(vmax, value))
+    def _clamp(val, v_min, v_max):
+        return max(v_min, min(v_max, val))
 
-    def _publish(self):
-        """현재 제어 상태를 퍼블리시 (최고 속도 도달 시 가속도 제한 반영)"""
-        if self.mode == "ackermann":
-            msg = AckermannDriveStamped()
-            msg.header.stamp = rospy.Time.now()
-            msg.drive.speed = self.speed
-            msg.drive.steering_angle = self.steer
-        elif self.mode == "carmaker_control":
-            msg = Control_Signal()
-            msg.header.stamp = rospy.Time.now()
-            msg.steerangle = self.steer
-            msg.gear = self.gear
-            msg.gas = self._clamp(self.gas, 0.0, self.max_pedal)
-            msg.brake = self._clamp(self.brake, 0.0, 1.0)
-            
-            # 무조건적인 페달 계산이 아닌, 물리 한계가 반영된 가속도(calculated_accel)를 송신
-            msg.accel = self.calculated_accel
-        else:
-            msg = Twist()
-            msg.linear.x = self.speed
-            msg.angular.z = self.steer
+    def _dynamics_cb(self, msg):
+        """CarMaker에서 올라오는 실제 속도(Car_vx) 피드백 갱신"""
+        absolute_speed = math.hypot(msg.Car_vx, msg.Car_vy)
+        direction = 1.0 if msg.Car_vx >= 0 else -1.0
+        self.actual_vx = absolute_speed * direction
 
-        self.pub.publish(msg)
-
-    def _update_carmaker_physics(self, key):
-        """사용자가 키를 누르고 있어도 꿀렁임 없이 최고 속도를 부드럽게 유지하는 로직"""
-        dt = 1.0 / self.rate_hz
-        direction = -1.0 if self.gear == self.reverse_gear else 1.0
+    def _calculate_commands(self, is_gas, is_brake):
+        """실제 차량 속도(Car_vx)를 피드백 받아 가속도를 물리적으로 제한하는 클램프 로직"""
+        d_mult = 1.0 if self.state["gear"] == self.gears["drive"] else (-1.0 if self.state["gear"] == self.gears["reverse"] else 0.0)
         
-        # 1. 페달 입력 기반 기본 가속도 계산
-        accel = direction * (self.gas - self.brake) * self.max_accel
-        if key == "":
-            accel -= 0.6 * self.virtual_speed  # 마찰 저항
-            
-        # 2. 미래 예측 속도 계산
-        predicted_speed = self.virtual_speed + accel * dt
-        
-        # 3. 최고 속도 제한 조건 검사 (가속 방향일 때만 차단)
-        if direction > 0 and predicted_speed >= self.max_speed:
-            # 전진 중 최고 속도 도달 -> 속도는 max_speed 고정, 유지 가속도는 0으로 락
-            self.virtual_speed = self.max_speed
-            self.calculated_accel = max(0.0, -self.brake * self.max_accel) # 브레이크 밟을 때만 감속 허용
-        elif direction < 0 and predicted_speed <= -self.max_speed:
-            # 후진 중 최고 속도 도달 -> 속도는 -max_speed 고정, 유지 가속도는 0으로 락
-            self.virtual_speed = -self.max_speed
-            self.calculated_accel = min(0.0, self.brake * self.max_accel)
+        # 1. 사용자의 페달 입력에 따른 목표 가속도
+        raw_accel = d_mult * (self.state["gas"] - self.state["brake"]) * self.limits["accel"]
+
+        # 2. 실제 속도 기반 최고 속도 제한 로직 (Feedback Limit)
+        if d_mult > 0 and self.actual_vx >= self.limits["speed"]:
+            # 전진 중 최고 속도(2.0m/s) 이상이면, 가속(양수)을 0으로 컷아웃 (브레이크인 음수만 허용)
+            self.final_accel = min(0.0, raw_accel)
+        elif d_mult < 0 and self.actual_vx <= -self.limits["speed"]:
+            # 후진 중 최고 속도 이상이면, 후진 가속(음수)을 0으로 컷아웃 (브레이크인 양수만 허용)
+            self.final_accel = max(0.0, raw_accel)
         else:
-            # 한계에 도달하지 않았다면 정상적으로 물리 법칙 적용
-            self.virtual_speed = predicted_speed
-            self.calculated_accel = self._clamp(accel, -self.max_accel, self.max_accel)
-            
-        # 중립/주차 기어 및 비정상 방향 흐름 방지 안전 클램핑
-        if self.gear in (self.neutral_gear, self.park_gear):
-            self.virtual_speed *= 0.7
-            self.calculated_accel = -0.5 * self.virtual_speed
-        elif self.gear == self.drive_gear and self.virtual_speed < 0:
-            self.virtual_speed = 0.0
-        elif self.gear == self.reverse_gear and self.virtual_speed > 0:
-            self.virtual_speed = 0.0
+            # 한계 미만이면 사용자의 가속 명령을 그대로 인가
+            self.final_accel = self._clamp(raw_accel, -self.limits["accel"], self.limits["accel"])
 
     def run(self):
         rate = rospy.Rate(self.rate_hz)
@@ -167,80 +115,77 @@ class KeyboardTeleop(object):
 
             while not rospy.is_shutdown():
                 key = self._get_key()
-                if key == "\x03":
-                    break
+                if key == "\x03": break
 
+                # [STEP 1] 사용자 의도 파악
+                intent = {
+                    "gas_fwd": key in ("w", "q", "e"),
+                    "gas_rev": key in ("s", "z", "c"),
+                    "steer_l": key in ("a", "q", "z"),
+                    "steer_r": key in ("d", "e", "c"),
+                    "brake": key == " ",
+                    "coast": key == "x"
+                }
+                is_gas = intent["gas_fwd"] or intent["gas_rev"]
+
+                if intent["gas_fwd"] or key == 'r': self.state["gear"] = self.gears["drive"]
+                elif intent["gas_rev"] or key == 'f': self.state["gear"] = self.gears["reverse"]
+                elif key == 'n': self.state["gear"] = self.gears["neutral"]
+                elif key == 'p': self.state["gear"] = self.gears["park"]
+                elif key == 'm': self.precision_mode = not self.precision_mode
+
+                g_cap = 0.1 if self.precision_mode else self.limits["pedal"]
+                s_scale = 1.6 if self.precision_mode else 1.0
+
+                # [STEP 2] 상태 갱신
                 if self.mode == "carmaker_control":
-                    g_scale = self.precision_gas_scale if self.precision_mode else 1.0
-                    s_scale = self.precision_steer_scale if self.precision_mode else 1.0
-                    ret_scale = self.precision_steer_return_scale if self.precision_mode else 1.0
-                    gas_cap = min(self.max_pedal, self.precision_max_pedal) if self.precision_mode else self.max_pedal
+                    # 종방향 페달 제어
+                    if is_gas:
+                        self.state["brake"] = 0.0
+                        self.state["gas"] = self._clamp(self.state["gas"] + self.steps["gas"], 0.0, g_cap)
+                    elif intent["brake"]:
+                        self.state["gas"] = 0.0
+                        self.state["brake"] = self._clamp(self.state["brake"] + self.steps["brake"], 0.0, 1.0)
+                    elif intent["coast"]:
+                        self.state["gas"], self.state["brake"] = 0.0, 0.0
+                    else: # 자연 감쇄
+                        self.state["gas"] = self._clamp(self.state["gas"] - self.steps["gas_decay"], 0.0, g_cap)
+                        self.state["brake"] = self._clamp(self.state["brake"] - self.steps["brake_decay"], 0.0, 1.0)
 
-                    # 페달 자연 감쇄
-                    if key == "":
-                        decay_multiplier = 0.8 if self.precision_mode else 1.0
-                        self.gas = self._clamp(self.gas - self.gas_decay_step * decay_multiplier, 0.0, self.max_pedal)
-                        self.brake = self._clamp(self.brake - self.brake_decay_step * decay_multiplier, 0.0, 1.0)
+                    # 횡방향 조향 제어
+                    if intent["steer_l"]:
+                        self.state["steer"] = self._clamp(self.state["steer"] + self.steps["steer"] * s_scale, -self.limits["steer"], self.limits["steer"])
+                    elif intent["steer_r"]:
+                        self.state["steer"] = self._clamp(self.state["steer"] - self.steps["steer"] * s_scale, -self.limits["steer"], self.limits["steer"])
+                    else:
+                        self.state["steer"] *= (1.0 - self._clamp(self.steps["steer_return"], 0.0, 1.0))
 
-                    # 키 입력 매핑 (w를 꾹 누르고 있어도 self.gas는 차단당하지 않고 최댓값 유지)
-                    if key in ("w", "q", "e"):
-                        if self.gear != self.drive_gear:
-                            self.gear = self.drive_gear
-                            rospy.loginfo("자동 기어 전환 -> DRIVE (%d)", self.gear)
-                        self.brake = 0.0
-                        self.gas = self._clamp(self.gas + self.gas_step * g_scale, 0.0, gas_cap)
+                    # [STEP 3] 피드백 기반 가속도 계산
+                    self._calculate_commands(is_gas, intent["brake"])
 
-                    elif key in ("s", "z", "c"):
-                        if self.gear != self.reverse_gear:
-                            self.gear = self.reverse_gear
-                            rospy.loginfo("자동 기어 전환 -> REAR (%d)", self.gear)
-                        self.brake = 0.0
-                        self.gas = self._clamp(self.gas + self.gas_step * g_scale, 0.0, gas_cap)
-
-                    if key == "x":
-                        self.gas, self.brake = 0.0, 0.0
-
-                    if key in ("a", "q", "z"):
-                        self.steer = self._clamp(self.steer + self.steer_step * s_scale, -self.max_steer, self.max_steer)
-                    elif key in ("d", "e", "c"):
-                        self.steer = self._clamp(self.steer - self.steer_step * s_scale, -self.max_steer, self.max_steer)
-
-                    if key == " ":
-                        self.gas, self.steer = 0.0, 0.0
-                        self.brake = self._clamp(self.brake + self.brake_step, 0.0, 1.0)
-
-                    elif key == "r": self.gear = self.drive_gear; rospy.loginfo("기어 -> DRIVE (%d)", self.gear)
-                    elif key == "n": self.gear = self.neutral_gear; rospy.loginfo("기어 -> NEUTRAL (%d)", self.gear)
-                    elif key == "f": self.gear = self.reverse_gear; rospy.loginfo("기어 -> REAR (%d)", self.gear)
-                    elif key == "p": self.gear = self.park_gear; rospy.loginfo("기어 -> PARKING (%d)", self.gear)
-                    elif key == "m":
-                        self.precision_mode = not self.precision_mode
-                        rospy.loginfo("정밀 주차 모드: %s", "ON" if self.precision_mode else "OFF")
-
-                    if key not in ("a", "d", "q", "e", "z", "c"):
-                        self.steer *= (1.0 - self._clamp(self.steer_return_rate * ret_scale, 0.0, 1.0))
-
-                    # 물리 시뮬레이션 및 속도 제한부 실행
-                    self._update_carmaker_physics(key)
-
+                # [STEP 4] 퍼블리시
+                msg = Control_Signal() if self.mode == "carmaker_control" else (AckermannDriveStamped() if self.mode == "ackermann" else Twist())
+                
+                if self.mode == "carmaker_control":
+                    msg.header.stamp = rospy.Time.now()
+                    msg.steerangle, msg.gear = self.state["steer"], self.state["gear"]
+                    msg.gas, msg.brake, msg.accel = self.state["gas"], self.state["brake"], self.final_accel
+                elif self.mode == "ackermann":
+                    msg.header.stamp = rospy.Time.now()
+                    # Ackermann 모드일 경우 가짜 speed 대신 실제 피드백 제한을 사용할 수 있으나 호환성을 위해 유지
+                    msg.drive.steering_angle = self.state["steer"]
                 else:
-                    if key == "w": self.speed = self._clamp(self.speed + self.speed_step, -self.max_speed, self.max_speed)
-                    elif key == "x": self.speed = self._clamp(self.speed - self.speed_step, -self.max_speed, self.max_speed)
-                    elif key == "a": self.steer = self._clamp(self.steer + self.steer_step, -self.max_steer, self.max_steer)
-                    elif key == "d": self.steer = self._clamp(self.steer - self.steer_step, -self.max_steer, self.max_steer)
-                    elif key in ("s", " "): self.speed, self.steer = 0.0, 0.0
+                    msg.angular.z = self.state["steer"]
 
-                self._publish()
+                self.pub.publish(msg)
                 rate.sleep()
 
         finally:
-            self.speed, self.steer, self.gas, self.brake, self.virtual_speed, self.calculated_accel = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-            self._publish()
+            self.state = {k: 0.0 for k in self.state} 
+            self.pub.publish(Twist()) 
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.settings)
 
 if __name__ == "__main__":
     rospy.init_node("carmaker_keyboard_teleop")
-    try:
-        KeyboardTeleop().run()
-    except rospy.ROSInterruptException:
-        pass
+    try: KeyboardTeleop().run()
+    except rospy.ROSInterruptException: pass

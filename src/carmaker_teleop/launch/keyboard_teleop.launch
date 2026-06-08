@@ -1,6 +1,7 @@
 <launch>
   <arg name="mode" default="carmaker_control" />
-  <arg name="topic" default="/carmaker/control_signal" />
+  <arg name="control_topic" default="/carmaker/control_signal" />
+  <arg name="dynamics_topic" default="/carmaker/dynamics_info" />
   <arg name="rate" default="20.0" />
 
   <arg name="max_speed" default="3.0" />
@@ -31,7 +32,8 @@
   <node pkg="carmaker_teleop" type="keyboard_teleop.py" name="carmaker_keyboard_teleop"
     output="screen">
     <param name="mode" value="$(arg mode)" />
-    <param name="topic" value="$(arg topic)" />
+    <param name="control_topic" value="$(arg control_topic)" />
+    <param name="dynamics_topic" value="$(arg dynamics_topic)" />
     <param name="rate" value="$(arg rate)" />
     <param name="max_speed" value="$(arg max_speed)" />
     <param name="max_steer" value="$(arg max_steer)" />
