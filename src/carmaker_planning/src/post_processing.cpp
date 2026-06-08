@@ -926,4 +926,37 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
   }
 }
 
+// ── Free function: profilePath ────────────────────────────────────────────────
+
+void profilePath(Path& path, const KinematicLimits& limits,
+                 double wheelbase, double start_vel, double goal_vel) {
+  if (path.size() < 2) return;
+
+  // Build a minimal PostProcessor config and delegate to the class.
+  // smoothing=false, resampling=false, profiling=true → only velocity profiling runs.
+  GlobalMainConfig tmp;
+  tmp.post_process.profiler.max_vel                  = limits.max_vel;
+  tmp.post_process.profiler.max_accel                = limits.max_accel;
+  tmp.post_process.profiler.max_decel                = limits.max_decel;
+  tmp.post_process.profiler.max_jerk                 = limits.max_jerk;
+  tmp.post_process.profiler.max_steer_vel            = limits.max_steer_vel;
+  tmp.post_process.profiler.max_lat_acc              = limits.max_lat_acc;
+  tmp.post_process.profiler.goal_vel                 = goal_vel;
+  tmp.post_process.profiler.min_velocity_denominator = limits.min_vel_denom;
+  tmp.post_process.profiler.gear_shift_duration      = 1.0;
+  tmp.vehicle.wheelbase                              = wheelbase;
+  tmp.vehicle.min_turning_radius = (limits.max_lat_acc > 1e-3)
+      ? limits.max_vel / limits.max_lat_acc : 5.5;
+
+  // PostProcessor::process() with smoothing=false, resampling=false does not touch GlobalMap.
+  GlobalMap dummy_map(tmp);  // empty map — not used when smoothing is disabled
+  PostProcessor pp(tmp);
+  GlobalPlanningResult result;
+  result.path = path;
+  pp.process(result, dummy_map, start_vel,
+             /*smoothing=*/false, /*resampling=*/false, /*profiling=*/true);
+  path = std::move(result.path);
+}
+
 } // namespace carmaker_planning
+

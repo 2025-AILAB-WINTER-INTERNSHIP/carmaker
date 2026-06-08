@@ -291,6 +291,45 @@ struct GlobalMainConfig {
   GlobalPostProcessConfig post_process;
 };
 
+struct LocalPlannerConfig {
+  // Arrival detection
+  double arrival_xy_tol  = 0.3;   ///< [m]   segment endpoint XY tolerance
+  double arrival_yaw_tol = 0.2;   ///< [rad]  segment endpoint yaw tolerance
+  double arrival_vel_tol = 0.05;  ///< [m/s]  velocity threshold at cusp stop
+
+  // Replanning
+  double replanning_rate_hz        = 10.0; ///< [Hz]  local path refresh rate
+  double replanning_dist_threshold = 0.5;  ///< [m]   lateral deviation triggering replan
+
+  // Polynomial path sampling
+  double sample_resolution = 0.1; ///< [m]   arc-length step for path point generation
+
+  // Velocity profiling (reuses KinematicLimits internally)
+  double max_vel    = 2.0;
+  double max_accel  = 0.8;
+  double max_decel  = 0.8;
+  double max_jerk   = 1.5;
+  double max_lat_acc = 0.8;
+};
+
+inline void loadLocalPlannerConfig(const ros::NodeHandle& nh, LocalPlannerConfig& cfg,
+                                   const std::string& ns = "local_planner") {
+  nh.param(ns + "/arrival/xy_tol",  cfg.arrival_xy_tol,  0.3);
+  nh.param(ns + "/arrival/yaw_tol", cfg.arrival_yaw_tol, 0.2);
+  nh.param(ns + "/arrival/vel_tol", cfg.arrival_vel_tol, 0.05);
+
+  nh.param(ns + "/replanning/rate_hz",         cfg.replanning_rate_hz,        10.0);
+  nh.param(ns + "/replanning/dist_threshold",  cfg.replanning_dist_threshold,  0.5);
+
+  nh.param(ns + "/sample_resolution", cfg.sample_resolution, 0.1);
+
+  nh.param(ns + "/profiler/max_vel",    cfg.max_vel,    2.0);
+  nh.param(ns + "/profiler/max_accel",  cfg.max_accel,  0.8);
+  nh.param(ns + "/profiler/max_decel",  cfg.max_decel,  0.8);
+  nh.param(ns + "/profiler/max_jerk",   cfg.max_jerk,   1.5);
+  nh.param(ns + "/profiler/max_lat_acc",cfg.max_lat_acc, 0.8);
+}
+
 // ── Quaternion Helpers ────────────────────────────────────────────────
 inline geometry_msgs::Quaternion yawToQuaternion(double yaw) {
   geometry_msgs::Quaternion q;

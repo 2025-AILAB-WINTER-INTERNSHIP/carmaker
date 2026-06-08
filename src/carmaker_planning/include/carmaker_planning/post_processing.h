@@ -75,6 +75,18 @@ private:
   double wheelbase_;
 };
 
+/**
+ * @brief Lightweight velocity profiling for an already-smoothed path.
+ *        Wraps profileKinematicPass without requiring a GlobalMap or full PostProcessor.
+ * @param path        Path to profile in-place (kappa must be pre-computed).
+ * @param limits      Kinematic constraints.
+ * @param wheelbase   Vehicle wheelbase [m].
+ * @param start_vel   Initial velocity [m/s].
+ * @param goal_vel    Target velocity at end [m/s] (usually 0).
+ */
+void profilePath(Path& path, const KinematicLimits& limits,
+                 double wheelbase, double start_vel, double goal_vel = 0.0);
+
 } // namespace carmaker_planning
 
 #endif // CARMAKER_PLANNING_POST_PROCESSING_H

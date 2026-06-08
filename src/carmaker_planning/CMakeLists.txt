@@ -24,6 +24,7 @@ find_package(Eigen3 REQUIRED)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${PROJECT_NAME}_global carmaker_planning_nodelet
+            ${PROJECT_NAME}_local  carmaker_planning_local_nodelet
   CATKIN_DEPENDS roscpp nodelet diagnostic_updater nav_msgs geometry_msgs visualization_msgs tf2 tf2_ros tf2_geometry_msgs std_msgs carmaker_msgs
   DEPENDS EIGEN3
 )
@@ -45,7 +46,7 @@ add_library(${PROJECT_NAME}_global
 )
 target_link_libraries(${PROJECT_NAME}_global ${catkin_LIBRARIES})
 
-# ── Nodelet Library ──────────────────────────────────────────────────
+# ── Global Planner Nodelet ───────────────────────────────────────────
 add_library(carmaker_planning_nodelet
   src/global_planner_nodelet.cpp
 )
@@ -54,11 +55,31 @@ target_link_libraries(carmaker_planning_nodelet
   ${catkin_LIBRARIES}
 )
 
+# ── Local Planning Library ───────────────────────────────────────────
+add_library(${PROJECT_NAME}_local
+  src/local_planner.cpp
+)
+target_link_libraries(${PROJECT_NAME}_local
+  ${PROJECT_NAME}_global   # provides post_processing, types, math
+  ${catkin_LIBRARIES}
+)
+
+# ── Local Planner Nodelet ────────────────────────────────────────────
+add_library(carmaker_planning_local_nodelet
+  src/local_planner_nodelet.cpp
+)
+target_link_libraries(carmaker_planning_local_nodelet
+  ${PROJECT_NAME}_local
+  ${catkin_LIBRARIES}
+)
+
 if(catkin_EXPORTED_TARGETS)
-  add_dependencies(carmaker_planning_nodelet ${catkin_EXPORTED_TARGETS})
+  add_dependencies(carmaker_planning_nodelet       ${catkin_EXPORTED_TARGETS})
+  add_dependencies(carmaker_planning_local_nodelet ${catkin_EXPORTED_TARGETS})
 endif()
 
 install(TARGETS ${PROJECT_NAME}_global carmaker_planning_nodelet
+                ${PROJECT_NAME}_local  carmaker_planning_local_nodelet
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -66,3 +87,4 @@ install(TARGETS ${PROJECT_NAME}_global carmaker_planning_nodelet
 install(DIRECTORY include/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
 install(FILES nodelet_plugins.xml DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 install(DIRECTORY launch config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+

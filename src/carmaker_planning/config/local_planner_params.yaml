@@ -1,0 +1,48 @@
+# ── Local Planner Configuration ───────────────────────────────────────────────
+# Quintic polynomial path tracking with cusp-segment management.
+# Loaded by LocalPlannerNodelet via private NodeHandle (rosparam namespace).
+
+topics:
+  subscribe:
+    trajectory: "/planning/trajectory"
+    dynamics: "/carmaker/dynamic_info"
+  publish:
+    local_trajectory: "/planning/local_trajectory"
+
+# Frame / pose-source (must match global_planner_params.yaml)
+frames:
+  global: "Fr0"
+  rear_axle: "Fr1A_Rear_Axle_Pred"
+
+setting:
+  use_gt_pose: true # true → /carmaker/dynamic_info (GT)
+  use_manual_pose:
+    enabled: false # true → /planning/start (offline test)
+    topic: "/planning/start"
+
+# Vehicle geometry (copied from global_planner_params.yaml for self-containment)
+vehicle:
+  wheelbase: 2.97
+  limits:
+    max_steer_vel: 0.6108 # [rad/s]
+
+# Local planner parameters
+local_planner:
+  arrival:
+    xy_tol: 0.05 # [m]     XY distance threshold to declare segment endpoint reached
+    yaw_tol: 0.2 # [rad]   heading error threshold at arrival
+    vel_tol: 0.05 # [m/s]   velocity threshold at cusp stop (intermediate segments only)
+
+  replanning:
+    rate_hz: 10.0 # [Hz]  local path refresh rate
+    dist_threshold: 0.5 # [m]   lateral deviation triggering immediate replan (reserved)
+
+  sample_resolution: 0.1 # [m]  uniform arc-length step between output path points
+
+  profiler:
+    max_vel: 2.0 # [m/s]
+    max_accel: 0.8 # [m/s^2]
+    max_decel: 0.8 # [m/s^2]
+    max_jerk: 1.5 # [m/s^3]
+    max_lat_acc: 0.8 # [m/s^2]
+    min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
