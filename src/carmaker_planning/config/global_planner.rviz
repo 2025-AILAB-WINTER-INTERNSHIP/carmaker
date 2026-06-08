@@ -100,7 +100,8 @@ Visualization Manager:
       Enabled: true
       Marker Topic: /planning/debug/curvature_path
       Name: Curvatures
-      Namespaces: {}
+      Namespaces:
+        curvature: true
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -124,14 +125,16 @@ Visualization Manager:
       Enabled: true
       Marker Topic: /planning/debug/velocity_profile
       Name: velocity
-      Namespaces: {}
+      Namespaces:
+        velocity: true
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /planning/debug/search_tree
       Name: tree
-      Namespaces: {}
+      Namespaces:
+        {}
       Queue Size: 100
       Value: false
     - Class: rviz/Marker
@@ -143,6 +146,46 @@ Visualization Manager:
         gt_label: true
         velocity_cylinder: true
       Queue Size: 100
+      Value: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz/Path
+      Color: 255; 236; 23
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: Control Path
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Queue Size: 10
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
+      Topic: /control/debug/active_segment_path
+      Unreliable: false
+      Value: true
+    - Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.10000000149011612
+      Class: rviz/Pose
+      Color: 255; 141; 11
+      Enabled: true
+      Head Length: 0.30000001192092896
+      Head Radius: 0.10000000149011612
+      Name: Lookahead
+      Queue Size: 10
+      Shaft Length: 1
+      Shaft Radius: 0.05000000074505806
+      Shape: Arrow
+      Topic: /control/debug/lookahead_pose
+      Unreliable: false
       Value: true
   Enabled: true
   Global Options:
@@ -172,7 +215,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 23.511817932128906
+      Distance: 29.49322509765625
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -209,4 +252,4 @@ Window Geometry:
     collapsed: false
   Width: 1200
   X: 72
-  Y: 101
+  Y: 64

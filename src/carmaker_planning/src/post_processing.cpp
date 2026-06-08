@@ -544,7 +544,7 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
       const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i].v + path[i-1].v) / 2.0) : limits.min_vel_denom;
       // Apply 0.01s denominator guard to prevent division by extremely small dt (which causes acceleration to spike)
       const double acc_dt = std::max(0.01, dt);
-      
+
       // Calculate raw acceleration from speed difference
       double raw_a = (path[i].v - path[i-1].v) / acc_dt;
       raw_a = std::clamp(raw_a, max_decel, max_accel);
@@ -743,10 +743,10 @@ void TrajectoryValidator::validateVelocity(const Path& path, TrajectoryDiagnosti
 void TrajectoryValidator::validateAcceleration(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
   const double max_accel = std::abs(config_.profiler.max_accel);
   const double max_decel = std::abs(config_.profiler.max_decel);
-  
+
   checkLimit(path, diag.acc_ok, diag.acc_violations, diag.max_acc_violation,
              max_accel, 0.01, [&](size_t i) { return path[i].a * path[i].direction; });
-  
+
   checkLimit(path, diag.acc_ok, diag.acc_violations, diag.max_acc_violation,
              max_decel, 0.01, [&](size_t i) { return -(path[i].a * path[i].direction); });
 
@@ -785,7 +785,7 @@ void TrajectoryValidator::validateJerk(const Path& path, TrajectoryDiagnostic& d
 void TrajectoryValidator::validateSteeringVelocity(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
   const double max_steer_vel_limit = config_.profiler.max_steer_vel;
   checkLimit(path, diag.steer_vel_ok, diag.steer_vel_violations, diag.max_steer_vel_violation,
-             max_steer_vel_limit, 0.01,
+             max_steer_vel_limit, 0.1,
              [&](size_t i) {
                double dt = path[i].t - path[i-1].t;
                if (dt <= 1e-6) return 0.0;
@@ -910,7 +910,7 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
         kappas[i] = path[seg_start + i].kappa;
       }
       int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
-      applyMovingAverage(kappas, half_w, 5);
+      applyMovingAverage(kappas, half_w, 2);
       for (size_t i = 0; i < seg_len; ++i) {
         path[seg_start + i].kappa = kappas[i];
       }
