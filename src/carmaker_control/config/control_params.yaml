@@ -40,6 +40,10 @@ control:
   lookahead_time: 0.2
   min_lookahead_distance: 0.2
   max_lookahead_distance: 0.8
+  # Stanley feedback은 nearest 기준으로 두고, 곡률 feedforward만 더 앞을 본다.
+  # preview_distance 지점 주변 preview_window 구간의 평균 곡률로 선제 조향을 만든다.
+  curvature_preview_distance: 0.8
+  curvature_preview_window: 0.4
 
   # nearest index가 경로 위에서 크게 튀지 않도록 이전 index 주변만 검색한다.
   nearest_search_back: 20

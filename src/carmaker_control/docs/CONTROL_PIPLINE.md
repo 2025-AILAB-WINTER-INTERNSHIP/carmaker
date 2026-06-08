@@ -581,14 +581,14 @@ cte_term = cte_gain * atan2(k * cte, abs(velocity) + k_soft)
 feedback_steer = heading_gain * heading_error + cte_term
 ```
 
-여기에 lookahead/target point에서 읽은 trajectory `curvature` 기반 feedforward를 더한다.
+여기에 별도 curvature preview point 주변에서 평균낸 trajectory `curvature` 기반 feedforward를 더한다.
 
 ```text
-curvature_ff = curvature_ff_gain * atan(wheelbase * trajectory_curvature)
+curvature_ff = curvature_ff_gain * atan(wheelbase * preview_curvature)
 steer = feedback_steer + curvature_ff
 ```
 
-feedback은 nearest point 기준 경로 오차가 생긴 뒤 보정하는 성격이고, curvature feedforward는 lookahead point의 path 곡률을 보고 미리 꺾는 성격이다. 주차처럼 곡률이 큰 path에서는 feedforward가 조향 반응 지연을 줄인다. 최종 조향각은 타이어 조향 한계 안으로 clamp된다.
+feedback은 nearest point 기준 경로 오차가 생긴 뒤 보정하는 성격이고, curvature feedforward는 더 앞의 path 곡률을 보고 미리 꺾는 성격이다. 주차처럼 곡률이 큰 path에서는 feedforward가 조향 반응 지연을 줄인다. 최종 조향각은 타이어 조향 한계 안으로 clamp된다.
 
 ### 7. 후진 segment 처리
 
@@ -708,6 +708,7 @@ steerangle = 0 또는 지정된 steer 값
 | `/control/debug/nearest_pose` | `geometry_msgs/PoseStamped` | 현재 active segment에서 차량과 가장 가까운 trajectory point |
 | `/control/debug/nearest_control_pose` | `geometry_msgs/PoseStamped` | Stanley 조향 오차 계산에 쓰는 rear axle 기준 nearest pose. 현재는 `/control/debug/nearest_pose`와 동일 |
 | `/control/debug/lookahead_pose` | `geometry_msgs/PoseStamped` | 목표 속도를 읽는 lookahead point |
+| `/control/debug/curvature_preview_pose` | `geometry_msgs/PoseStamped` | 곡률 feedforward가 미리 보는 preview point |
 | `/control/debug/active_segment_path` | `nav_msgs/Path` | 현재 추종 중인 전진/후진 segment |
 
 RViz 설정 예:
@@ -730,6 +731,9 @@ Add -> Pose
 Add -> Pose
   Topic: /control/debug/lookahead_pose
 
+Add -> Pose
+  Topic: /control/debug/curvature_preview_pose
+
 Add -> Path
   Topic: /control/debug/active_segment_path
 ```
@@ -742,7 +746,9 @@ Add -> Path
 | `/control/debug/target_speed` | `std_msgs/Float64` | lookahead point의 목표 속도 |
 | `/control/debug/speed_error` | `std_msgs/Float64` | `target_speed - current_speed` |
 | `/control/debug/steer_command` | `std_msgs/Float64` | 최종 `/carmaker/control_signal/steerangle`로 나가는 조향 명령 |
-| `/control/debug/curvature_feedforward` | `std_msgs/Float64` | lookahead trajectory curvature에서 미리 더한 조향 명령 성분 |
+| `/control/debug/curvature_feedforward` | `std_msgs/Float64` | preview trajectory curvature에서 미리 더한 조향 명령 성분 |
+| `/control/debug/curvature_preview` | `std_msgs/Float64` | preview window에서 평균낸 trajectory curvature |
+| `/control/debug/curvature_preview_distance` | `std_msgs/Float64` | 곡률 feedforward preview 중심 거리 |
 | `/control/debug/steer_saturated` | `std_msgs/Int32` | `1`: 조향 명령이 `max_steer_command` 근처에서 포화됨, `0`: 비포화 |
 | `/control/debug/cross_track_error` | `std_msgs/Float64` | nearest point 기준 lateral error |
 | `/control/debug/heading_error` | `std_msgs/Float64` | nearest point 기준 yaw error |
@@ -751,6 +757,7 @@ Add -> Path
 | `/control/debug/segment_count` | `std_msgs/Int32` | 현재 trajectory가 전진/후진 부호 기준으로 나뉜 segment 개수 |
 | `/control/debug/nearest_index` | `std_msgs/Int32` | active segment 안에서 현재 pose와 가장 가까운 point index. 추종 중이 아니면 `-1` |
 | `/control/debug/target_index` | `std_msgs/Int32` | target speed를 읽는 lookahead point index. 추종 중이 아니면 `-1` |
+| `/control/debug/curvature_preview_index` | `std_msgs/Int32` | 곡률 feedforward preview point index. 추종 중이 아니면 `-1` |
 | `/control/debug/distance_to_segment_end` | `std_msgs/Float64` | 현재 pose에서 active segment 마지막 point까지 거리. 추종 중이 아니면 `-1` |
 | `/control/debug/trajectory_age` | `std_msgs/Float64` | 마지막 `/planning/trajectory` 수신 후 지난 시간. trajectory를 받은 적 없으면 `-1` |
 | `/control/debug/trajectory_completed` | `std_msgs/Int32` | `1`: trajectory 완료 상태, `0`: 아직 완료 아님 |
@@ -768,6 +775,7 @@ PlotJuggler에서 함께 보면 좋은 기본 제어 출력:
 /carmaker/control_signal/accel
 /control/debug/steer_command
 /control/debug/curvature_feedforward
+/control/debug/curvature_preview
 /control/debug/steer_saturated
 /control/debug/current_speed
 /control/debug/target_speed
@@ -868,9 +876,13 @@ control:
   lookahead_time: 0.2
   min_lookahead_distance: 0.2
   max_lookahead_distance: 0.8
+  curvature_preview_distance: 0.8
+  curvature_preview_window: 0.4
 ```
 
 lookahead가 너무 짧으면 조향과 속도 목표가 자주 흔들릴 수 있고, 너무 길면 코너나 정지점 반영이 늦어질 수 있다.
+
+`curvature_preview_distance`는 곡률 feedforward가 미리 보는 중심 거리이고, `curvature_preview_window`는 그 주변에서 평균 곡률을 낼 구간 폭이다. Stanley feedback은 nearest point로 현재 오차를 잡고, curvature feedforward는 preview 곡률로 큰 조향을 먼저 준비한다.
 
 `min_tracking_speed`는 segment 완료 판정이 나기 전까지 적용되는 최소 속도 목표다. `/control/debug/target_speed`가 0이고 `/control/debug/tracking_state`가 1이면 차량이 끝점에 도착하기 전에 멈출 수 있으므로 이 값이 필요하다. 완료 판정 후에는 `tracking_state = 2`가 되고 stop/gear switch 로직이 brake와 다음 gear 전환을 처리한다.
 
@@ -963,12 +975,12 @@ atan(2.97 / 5.5) = 28.4 deg
 | 저속에서 조향이 튐 | `k_soft` 증가 |
 | 후진 조향이 과함 | `reverse_steering_scale` 감소 |
 | 후진 조향이 부족함 | `reverse_steering_scale` 증가 |
-| 코너 진입에서 늦게 꺾음 | `curvature_ff_gain` 증가 |
-| 코너 진입에서 너무 먼저/과하게 꺾음 | `curvature_ff_gain` 감소 |
+| 코너 진입에서 늦게 꺾음 | `curvature_ff_gain` 증가 또는 `curvature_preview_distance` 증가 |
+| 코너 진입에서 너무 먼저/과하게 꺾음 | `curvature_ff_gain` 감소 또는 `curvature_preview_distance` 감소 |
 
 후진 조향은 전진 Stanley 결과 전체를 단순히 뒤집지 않는다. trajectory pose yaw는 차량 자세 기준으로 유지하고, 후진에서는 heading error 항만 반대로 적용한다. lateral error 항은 path 좌우 기준을 유지하며, `reverse_steering_scale`은 후진 lateral error 보정 강도를 조절하는 값으로 보면 된다.
 
-`curvature_ff_gain`은 lookahead trajectory curvature를 이용한 선제 조향 비율이다. `0`이면 순수 feedback Stanley에 가깝고, 값을 키우면 큰 곡률에서 path를 따라 미리 꺾는다. 후진 feedforward는 차량 yaw dynamics가 전진과 반대이므로 `reverse_curvature_ff_sign: -1.0`을 기본값으로 둔다.
+`curvature_ff_gain`은 preview trajectory curvature를 이용한 선제 조향 비율이다. `0`이면 순수 feedback Stanley에 가깝고, 값을 키우면 큰 곡률에서 path를 따라 미리 꺾는다. 후진 feedforward는 차량 yaw dynamics가 전진과 반대이므로 `reverse_curvature_ff_sign: -1.0`을 기본값으로 둔다.
 
 ### CarMaker 조향 입력 범위
 
@@ -1128,7 +1140,7 @@ rostopic echo /carmaker/control_signal
 
 - `/localization/odom` pose frame과 `/planning/trajectory` frame이 맞지 않음
 - `heading_gain`, `cte_gain`, `k`가 너무 작음
-- `lookahead_distance`가 너무 커서 가까운 곡률 변화를 늦게 반영함
+- `lookahead_distance` 또는 `curvature_preview_distance`가 맞지 않아 곡률 변화를 늦게/과하게 반영함
 - `curvature_ff_gain`이 작아서 큰 곡률을 미리 반영하지 못함
 - `max_steer_command`가 너무 작아 조향이 일찍 포화됨
 - `steering_command_sign`이 차량 모델과 반대임

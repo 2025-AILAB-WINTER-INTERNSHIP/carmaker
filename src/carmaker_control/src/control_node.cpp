@@ -133,9 +133,13 @@ private:
   bool isSegmentComplete(const PathSegment& segment,
                          const Pose2D& pose,
                          std::size_t nearest_index) const;
+  double computePreviewCurvature(const PathSegment& segment,
+                                 std::size_t nearest_index,
+                                 std::size_t& preview_index) const;
+  double computeCurvatureFeedforward(double preview_curvature, int direction) const;
   double computeSteeringCommand(const Pose2D& pose,
                                 const PathPoint& feedback_reference,
-                                const PathPoint& feedforward_reference,
+                                double preview_curvature,
                                 double speed,
                                 int direction) const;
   double selectTargetSpeed(const PathSegment& segment, std::size_t target_index) const;
@@ -156,7 +160,10 @@ private:
                              double lookahead,
                              int tracking_state,
                              double steer_command,
-                             int stop_reason = 0);
+                             int stop_reason = 0,
+                             std::size_t preview_index = std::numeric_limits<std::size_t>::max(),
+                             double preview_distance = 0.0,
+                             double preview_curvature = 0.0);
   void publishStopReason(int stop_reason);
   void publishPoseDebug(const ros::Publisher& publisher,
                         double x,
@@ -184,12 +191,15 @@ private:
   ros::Publisher debug_nearest_pose_pub_;
   ros::Publisher debug_nearest_control_pose_pub_;
   ros::Publisher debug_lookahead_pose_pub_;
+  ros::Publisher debug_curvature_preview_pose_pub_;
   ros::Publisher debug_active_path_pub_;
   ros::Publisher debug_current_speed_pub_;
   ros::Publisher debug_target_speed_pub_;
   ros::Publisher debug_speed_error_pub_;
   ros::Publisher debug_steer_command_pub_;
   ros::Publisher debug_curvature_ff_pub_;
+  ros::Publisher debug_curvature_preview_pub_;
+  ros::Publisher debug_curvature_preview_distance_pub_;
   ros::Publisher debug_steer_saturated_pub_;
   ros::Publisher debug_cte_pub_;
   ros::Publisher debug_heading_error_pub_;
@@ -198,6 +208,7 @@ private:
   ros::Publisher debug_segment_count_pub_;
   ros::Publisher debug_nearest_index_pub_;
   ros::Publisher debug_target_index_pub_;
+  ros::Publisher debug_curvature_preview_index_pub_;
   ros::Publisher debug_distance_to_end_pub_;
   ros::Publisher debug_trajectory_age_pub_;
   ros::Publisher debug_trajectory_completed_pub_;
@@ -252,6 +263,8 @@ private:
   double lookahead_time_{0.2};
   double min_lookahead_distance_{0.2};
   double max_lookahead_distance_{0.8};
+  double curvature_preview_distance_{0.8};
+  double curvature_preview_window_{0.4};
   int nearest_search_back_{20};
   int nearest_search_ahead_{120};
 
@@ -352,6 +365,10 @@ void ControlNode::loadParameters()
   pnh_.param("control/lookahead_time", lookahead_time_, 0.2);
   pnh_.param("control/min_lookahead_distance", min_lookahead_distance_, 0.2);
   pnh_.param("control/max_lookahead_distance", max_lookahead_distance_, 0.8);
+  pnh_.param("control/curvature_preview_distance", curvature_preview_distance_, 0.8);
+  pnh_.param("control/curvature_preview_window", curvature_preview_window_, 0.4);
+  curvature_preview_distance_ = std::max(0.0, curvature_preview_distance_);
+  curvature_preview_window_ = std::max(0.0, curvature_preview_window_);
 
   // nearest search는 이전 index 주변만 훑어 경로가 겹칠 때 뒤쪽 segment로 튀는 것을 줄인다.
   pnh_.param("control/nearest_search_back", nearest_search_back_, 20);
@@ -735,10 +752,15 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
         clamp(lookahead_distance_, min_lookahead_distance_, max_lookahead_distance_);
     const std::size_t presteer_target_index =
         findLookaheadIndex(active_segment, nearest_index, presteer_lookahead);
+    std::size_t presteer_preview_index = presteer_target_index;
+    const double presteer_preview_curvature =
+        computePreviewCurvature(active_segment, nearest_index, presteer_preview_index);
     if (now < presteer_until || current_speed > gear_switch_speed_) {
       publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
                             nearest_index, presteer_target_index, 0.0,
-                            presteer_lookahead, 3, presteer_steer_command, 4);
+                            presteer_lookahead, 3, presteer_steer_command, 4,
+                            presteer_preview_index, curvature_preview_distance_,
+                            presteer_preview_curvature);
       publishStop(active_segment.direction, presteer_steer_command);
       speed_pid_.reset();
       return;
@@ -766,16 +788,20 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
       clamp(lookahead_distance_ + lookahead_time_ * current_speed,
             min_lookahead_distance_, max_lookahead_distance_);
   const std::size_t target_index = findLookaheadIndex(active_segment, nearest_index, lookahead);
+  std::size_t preview_index = target_index;
+  const double preview_curvature =
+      computePreviewCurvature(active_segment, nearest_index, preview_index);
 
   const double target_speed = selectTargetSpeed(active_segment, target_index);
   const double accel_command = speed_pid_.calculate(target_speed, current_speed, dt);
   const double steer_command =
       computeSteeringCommand(pose, active_segment.points[nearest_index],
-                             active_segment.points[target_index],
+                             preview_curvature,
                              std::max(current_speed, target_speed), active_segment.direction);
 
   publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
-                        nearest_index, target_index, target_speed, lookahead, 1, steer_command);
+                        nearest_index, target_index, target_speed, lookahead, 1, steer_command,
+                        0, preview_index, curvature_preview_distance_, preview_curvature);
   publishControl(active_segment.direction, steer_command, accel_command);
 }
 
@@ -845,9 +871,62 @@ bool ControlNode::isSegmentComplete(const PathSegment& segment,
   return near_end_index && near_end_position;
 }
 
+double ControlNode::computePreviewCurvature(const PathSegment& segment,
+                                            std::size_t nearest_index,
+                                            std::size_t& preview_index) const
+{
+  if (segment.points.empty()) {
+    preview_index = 0;
+    return 0.0;
+  }
+
+  const double preview_distance = std::max(0.0, curvature_preview_distance_);
+  preview_index = findLookaheadIndex(segment, nearest_index, preview_distance);
+
+  const double half_window = 0.5 * std::max(0.0, curvature_preview_window_);
+  const std::size_t start_index =
+      findLookaheadIndex(segment, nearest_index, std::max(0.0, preview_distance - half_window));
+  const std::size_t end_index =
+      findLookaheadIndex(segment, nearest_index, preview_distance + half_window);
+
+  const std::size_t first = std::min(start_index, end_index);
+  const std::size_t last = std::max(start_index, end_index);
+
+  double curvature_sum = 0.0;
+  std::size_t curvature_count = 0;
+  for (std::size_t i = first; i <= last && i < segment.points.size(); ++i) {
+    const double curvature = segment.points[i].curvature;
+    if (!std::isfinite(curvature)) {
+      continue;
+    }
+    curvature_sum += curvature;
+    ++curvature_count;
+  }
+
+  if (curvature_count > 0) {
+    return curvature_sum / static_cast<double>(curvature_count);
+  }
+
+  const double fallback_curvature =
+      segment.points[std::min(preview_index, segment.points.size() - 1)].curvature;
+  return std::isfinite(fallback_curvature) ? fallback_curvature : 0.0;
+}
+
+double ControlNode::computeCurvatureFeedforward(double preview_curvature, int direction) const
+{
+  if (!std::isfinite(preview_curvature)) {
+    return 0.0;
+  }
+
+  const double ff_direction_sign =
+      direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
+  return curvature_ff_gain_ * ff_direction_sign *
+         std::atan(wheelbase_ * preview_curvature);
+}
+
 double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            const PathPoint& feedback_reference,
-                                           const PathPoint& feedforward_reference,
+                                           double preview_curvature,
                                            double speed,
                                            int direction) const
 {
@@ -863,11 +942,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
 
   const double tire_steer =
       stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
-  const double ff_direction_sign =
-      direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
-  const double curvature_ff =
-      curvature_ff_gain_ * ff_direction_sign *
-      std::atan(wheelbase_ * feedforward_reference.curvature);
+  const double curvature_ff = computeCurvatureFeedforward(preview_curvature, direction);
   const double steer_command =
       steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 
@@ -936,9 +1011,12 @@ void ControlNode::advanceOrStop(const PathSegment& active_segment,
           clamp(lookahead_distance_, min_lookahead_distance_, max_lookahead_distance_);
       const std::size_t next_target_index =
           findLookaheadIndex(next_segment, next_nearest_index, presteer_lookahead);
+      std::size_t next_preview_index = next_target_index;
+      const double next_preview_curvature =
+          computePreviewCurvature(next_segment, next_nearest_index, next_preview_index);
       next_steer_command =
           computeSteeringCommand(pose, next_segment.points[next_nearest_index],
-                                 next_segment.points[next_target_index],
+                                 next_preview_curvature,
                                  min_tracking_speed_, next_segment.direction);
       presteer_active_ = true;
       presteer_segment_index_ = active_segment_index_;
@@ -985,6 +1063,8 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/nearest_control_pose", 10);
   debug_lookahead_pose_pub_ =
       nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/lookahead_pose", 10);
+  debug_curvature_preview_pose_pub_ =
+      nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/curvature_preview_pose", 10);
   debug_active_path_pub_ =
       nh_.advertise<nav_msgs::Path>(debug_topic_prefix_ + "/active_segment_path", 1, true);
 
@@ -998,6 +1078,10 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/steer_command", 10);
   debug_curvature_ff_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/curvature_feedforward", 10);
+  debug_curvature_preview_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/curvature_preview", 10);
+  debug_curvature_preview_distance_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/curvature_preview_distance", 10);
   debug_steer_saturated_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/steer_saturated", 10);
   debug_cte_pub_ =
@@ -1014,6 +1098,8 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/nearest_index", 10);
   debug_target_index_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/target_index", 10);
+  debug_curvature_preview_index_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/curvature_preview_index", 10);
   debug_distance_to_end_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/distance_to_segment_end", 10);
   debug_trajectory_age_pub_ =
@@ -1041,7 +1127,10 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
                                         double lookahead,
                                         int tracking_state,
                                         double steer_command,
-                                        int stop_reason)
+                                        int stop_reason,
+                                        std::size_t preview_index,
+                                        double preview_distance,
+                                        double preview_curvature)
 {
   if (!publish_debug_) {
     return;
@@ -1053,12 +1142,15 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   double cte = nan;
   double heading_error = nan;
   double curvature_ff = nan;
+  double preview_curvature_value = nan;
+  double preview_distance_value = nan;
   double distance_to_end = -1.0;
   double trajectory_age = -1.0;
   int direction = 0;
   int segment_index_value = segment ? static_cast<int>(segment_index) : -1;
   int nearest_index_value = -1;
   int target_index_value = -1;
+  int preview_index_value = -1;
   int segment_count = 0;
   int trajectory_completed = 0;
   int steer_saturated = 0;
@@ -1080,11 +1172,21 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     direction = segment->direction;
     const std::size_t nearest = std::min(nearest_index, segment->points.size() - 1);
     const std::size_t target = std::min(target_index, segment->points.size() - 1);
+    const bool has_preview =
+        preview_index != std::numeric_limits<std::size_t>::max();
+    const std::size_t preview =
+        has_preview ? std::min(preview_index, segment->points.size() - 1) : target;
     nearest_index_value = static_cast<int>(nearest);
     target_index_value = static_cast<int>(target);
+    preview_index_value = has_preview ? static_cast<int>(preview) : -1;
     const PathPoint& nearest_point = segment->points[nearest];
     const PathPoint& target_point = segment->points[target];
+    const PathPoint& preview_point = segment->points[preview];
     distance_to_end = distance2D(pose, segment->points.back());
+    if (has_preview) {
+      preview_curvature_value = preview_curvature;
+      preview_distance_value = preview_distance;
+    }
 
     publishPoseDebug(debug_nearest_pose_pub_,
                      nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
@@ -1092,17 +1194,19 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
                      nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
     publishPoseDebug(debug_lookahead_pose_pub_,
                      target_point.x, target_point.y, target_point.yaw, stamp);
+    if (has_preview) {
+      publishPoseDebug(debug_curvature_preview_pose_pub_,
+                       preview_point.x, preview_point.y, preview_point.yaw, stamp);
+    }
 
     const double dx = pose.x - nearest_point.x;
     const double dy = pose.y - nearest_point.y;
     cte = std::sin(nearest_point.yaw) * dx -
           std::cos(nearest_point.yaw) * dy;
     heading_error = normalizeAngle(nearest_point.yaw - pose.yaw);
-    const double ff_direction_sign =
-        direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
     curvature_ff =
-        steering_command_sign_ * steering_ratio_ * curvature_ff_gain_ *
-        ff_direction_sign * std::atan(wheelbase_ * target_point.curvature);
+        steering_command_sign_ * steering_ratio_ *
+        computeCurvatureFeedforward(preview_curvature, direction);
     steer_saturated =
         std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
@@ -1129,6 +1233,10 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_steer_command_pub_.publish(float_msg);
   float_msg.data = curvature_ff;
   debug_curvature_ff_pub_.publish(float_msg);
+  float_msg.data = preview_curvature_value;
+  debug_curvature_preview_pub_.publish(float_msg);
+  float_msg.data = preview_distance_value;
+  debug_curvature_preview_distance_pub_.publish(float_msg);
   float_msg.data = cte;
   debug_cte_pub_.publish(float_msg);
   float_msg.data = heading_error;
@@ -1149,6 +1257,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_nearest_index_pub_.publish(int_msg);
   int_msg.data = target_index_value;
   debug_target_index_pub_.publish(int_msg);
+  int_msg.data = preview_index_value;
+  debug_curvature_preview_index_pub_.publish(int_msg);
   int_msg.data = trajectory_completed;
   debug_trajectory_completed_pub_.publish(int_msg);
   int_msg.data = steer_saturated;
