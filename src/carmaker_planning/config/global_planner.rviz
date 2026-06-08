@@ -100,8 +100,7 @@ Visualization Manager:
       Enabled: true
       Marker Topic: /planning/debug/curvature_path
       Name: Curvatures
-      Namespaces:
-        {}
+      Namespaces: {}
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -125,18 +124,26 @@ Visualization Manager:
       Enabled: true
       Marker Topic: /planning/debug/velocity_profile
       Name: velocity
-      Namespaces:
-        {}
+      Namespaces: {}
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /planning/debug/search_tree
       Name: tree
-      Namespaces:
-        {}
+      Namespaces: {}
       Queue Size: 100
       Value: false
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /carmaker/map/ego_marker
+      Name: Ego(GT)
+      Namespaces:
+        gt_ego: true
+        gt_label: true
+        velocity_cylinder: true
+      Queue Size: 100
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -201,5 +208,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1200
-  X: 1419
-  Y: 161
+  X: 72
+  Y: 101
