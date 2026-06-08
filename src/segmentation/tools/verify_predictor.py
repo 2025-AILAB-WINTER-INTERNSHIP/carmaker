@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations  # Python 3.7+ 호환: 타입 힌트 지연 평가 활성화
 import os
 import sys
 import torch
