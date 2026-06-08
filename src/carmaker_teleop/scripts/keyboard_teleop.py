@@ -3,6 +3,7 @@ import select
 import sys
 import termios
 import rospy
+import math
 
 from ackermann_msgs.msg import AckermannDriveStamped
 from geometry_msgs.msg import Twist
@@ -27,7 +28,7 @@ class KeyboardTeleop:
         self.mode = rospy.get_param("~mode", "carmaker_control").strip().lower()
         self.rate_hz = float(rospy.get_param("~rate", 20.0))
         self.pub_topic = rospy.get_param("~control_topic", "/carmaker/control_signal")
-        self.sub_topic = rospy.get_param("~dynamics_topic", "/carmaker/dynamics_info")
+        self.sub_topic = rospy.get_param("~dynamic_topic", "/carmaker/dynamic_info")
 
         self.limits = {
             "speed": float(rospy.get_param("~max_speed", 2.0)), 
@@ -58,7 +59,7 @@ class KeyboardTeleop:
         self.state = {"steer": 0.0, "gas": 0.0, "brake": 0.0, "gear": self.gears["drive"]}
         
         # 최종 전송 변수 및 시스템 감시 플래그
-        self.actual_vx = 0.0 
+        self.actual_speed_2d = 0.0 
         self.final_gas = 0.0
         self.final_brake = 0.0
         self.final_accel = 0.0
@@ -84,9 +85,11 @@ class KeyboardTeleop:
     def _dynamics_cb(self, msg):
         """CarMaker에서 올라오는 실제 속도 피드백 갱신"""
         if not self.feedback_received:
-            rospy.loginfo(f"✅ 차량 피드백(DynamicsInfo) 수신 연결 완료! (정상 작동 중)")
+            rospy.loginfo(f"✅ 차량 피드백(DynamicInfo) 수신 연결 완료! (정상 작동 중)")
             self.feedback_received = True
-        self.actual_vx = msg.Car_vx
+        absolute_speed = math.hypot(msg.Car_vx, msg.Car_vy)
+        direction = 1.0 if msg.Car_vx >= 0 else -1.0
+        self.actual_speed_2d = direction * absolute_speed
 
     def _calculate_commands(self):
         """실제 차량 속도를 피드백 받아 가스 페달과 가속도를 물리적으로 차단"""
@@ -99,25 +102,22 @@ class KeyboardTeleop:
         self.final_accel = self._clamp(raw_accel, -self.limits["accel"], self.limits["accel"])
 
         # 2. 퓨얼 컷 개입 (엔진 차단 로직)
-        if d_mult > 0 and self.actual_vx >= self.limits["speed"]:
+        if d_mult > 0 and self.actual_speed_2d >= self.limits["speed"]:
             self.final_gas = 0.0  # 엑셀 강제 해제
             self.final_accel = min(0.0, raw_accel)
             
             if not self.fuel_cut_active:
-                rospy.logwarn(f"🚨 [전진] 최고 속도({self.limits['speed']}m/s) 도달 -> 퓨얼 컷 개입!")
                 self.fuel_cut_active = True
 
-        elif d_mult < 0 and self.actual_vx <= -self.limits["speed"]:
+        elif d_mult < 0 and self.actual_speed_2d <= -self.limits["speed"]:
             self.final_gas = 0.0  # 엑셀 강제 해제
             self.final_accel = max(0.0, raw_accel)
             
             if not self.fuel_cut_active:
-                rospy.logwarn(f"🚨 [후진] 최고 속도({self.limits['speed']}m/s) 도달 -> 퓨얼 컷 개입!")
                 self.fuel_cut_active = True
 
         else:
             if self.fuel_cut_active:
-                rospy.loginfo("🟢 한계 속도 미만 -> 퓨얼 컷 해제 (정상 가속)")
                 self.fuel_cut_active = False
 
     def run(self):
@@ -157,7 +157,7 @@ class KeyboardTeleop:
                 elif key == 'p': self.state["gear"] = self.gears["park"]
                 elif key == 'm': self.precision_mode = not self.precision_mode
 
-                # [복구된 로깅 기능] 기어 또는 모드가 변경되었을 때만 출력
+                # 기어 또는 모드가 변경되었을 때만 출력
                 if self.state["gear"] != prev_gear:
                     gear_name = {v: k.upper() for k, v in self.gears.items()}.get(self.state["gear"], "UNKNOWN")
                     rospy.loginfo(f"⚙️ 기어 변경됨: {gear_name} ({self.state['gear']})")
