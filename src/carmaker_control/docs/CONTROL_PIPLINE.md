@@ -386,13 +386,14 @@ int32 gear
 ### `carmaker_msgs/DynamicsInfo` 중 control GT mode에서 쓰는 필드
 
 ```text
-float64 Car_x
-float64 Car_y
+float64 RearAxle_x
+float64 RearAxle_y
+float64 RearAxle_z
 float64 Car_Yaw
 float64 Car_vx
 ```
 
-`Car_x`, `Car_y`, `Car_Yaw`는 GT pose로 사용하고, `Car_vx`는 signed longitudinal speed로 사용한다.
+`RearAxle_x`, `RearAxle_y`, `Car_Yaw`는 rear axle 기준 GT pose로 사용하고, `Car_vx`는 signed longitudinal speed로 사용한다. `RearAxle_z`는 메시지에 포함되지만 2D control pose에서는 사용하지 않는다.
 
 planning은 rear axle 기준으로 경로를 만들고 `/planning/trajectory`도 rear axle 기준점으로 내보낸다. 따라서 control도 현재 pose를 rear axle 기준으로 맞춰서 nearest point, segment 완료 판정, Stanley 오차 계산을 수행한다.
 
@@ -476,13 +477,13 @@ speed = odom.twist.twist.linear.x
 localization 없이 GT로 테스트할 때는 `/carmaker/dynamic_info`에서 다음 값을 사용한다.
 
 ```text
-pose.x = dynamics.Car_x + rear_axle_offset * cos(dynamics.Car_Yaw)  # GT가 rear bumper 기준일 때
-pose.y = dynamics.Car_y + rear_axle_offset * sin(dynamics.Car_Yaw)
+pose.x = dynamics.RearAxle_x
+pose.y = dynamics.RearAxle_y
 pose.yaw = dynamics.Car_Yaw
 speed = dynamics.Car_vx
 ```
 
-기본 설정은 `DynamicsInfo.Car_x/y`가 Fr1A/rear bumper 기준으로 들어온다고 보고, control 내부에서 rear axle 기준으로 변환한다. 만약 CarMaker 설정상 `DynamicsInfo.Car_x/y`가 이미 rear axle 기준이면 `vehicle/dynamics_pose_reference: "rear_axle"`로 두어 변환 없이 사용한다.
+`DynamicsInfo.Car_x/y`가 bumper 기준으로 들어오더라도 control GT mode는 `RearAxle_x/y`를 직접 사용하므로 내부에서 별도 기준점 보정을 하지 않는다.
 
 이 정보가 있어야 planning이 만든 trajectory 중 현재 차량과 가장 가까운 지점을 찾을 수 있고, 차량이 경로에서 얼마나 벗어났는지도 계산할 수 있다.
 
@@ -703,9 +704,9 @@ steerangle = 0 또는 지정된 steer 값
 | 토픽 | 타입 | 설명 |
 | --- | --- | --- |
 | `/control/debug/current_pose` | `geometry_msgs/PoseStamped` | control이 현재 상태로 사용 중인 차량 pose. `odom` 모드면 localization pose, `dynamics` 모드면 GT pose |
-| `/control/debug/current_control_pose` | `geometry_msgs/PoseStamped` | Stanley 조향 오차 계산에 쓰는 control point pose. 기본값은 rear axle |
+| `/control/debug/current_control_pose` | `geometry_msgs/PoseStamped` | Stanley 조향 오차 계산에 쓰는 rear axle pose. 현재는 `/control/debug/current_pose`와 동일 |
 | `/control/debug/nearest_pose` | `geometry_msgs/PoseStamped` | 현재 active segment에서 차량과 가장 가까운 trajectory point |
-| `/control/debug/nearest_control_pose` | `geometry_msgs/PoseStamped` | nearest trajectory point를 Stanley control point 기준으로 변환한 pose |
+| `/control/debug/nearest_control_pose` | `geometry_msgs/PoseStamped` | Stanley 조향 오차 계산에 쓰는 rear axle 기준 nearest pose. 현재는 `/control/debug/nearest_pose`와 동일 |
 | `/control/debug/lookahead_pose` | `geometry_msgs/PoseStamped` | 목표 속도를 읽는 lookahead point |
 | `/control/debug/active_segment_path` | `nav_msgs/Path` | 현재 추종 중인 전진/후진 segment |
 
@@ -827,30 +828,11 @@ control:
 
 `gt`는 `dynamics`, `localization`은 `odom`의 alias로 처리된다.
 
-### GT 입력 기준점 선택
+### GT 입력 기준점
 
-```yaml
-vehicle:
-  rear_axle_offset: 0.82
-  dynamics_pose_reference: "rear_bumper"
-```
+`/planning/trajectory`는 rear axle 기준점으로 publish된다. GT mode에서도 control은 `DynamicsInfo.RearAxle_x/y`를 그대로 사용해 `/control/debug/current_pose`를 rear axle 기준으로 둔다.
 
-`/planning/trajectory`는 rear axle 기준점으로 publish된다. 그래서 GT mode에서도 `/control/debug/current_pose`가 rear axle 기준으로 맞춰져야 한다.
-
-| 값 | 의미 | 언제 사용 |
-| --- | --- | --- |
-| `rear_bumper` | `Car_x/y`에서 `rear_axle_offset`만큼 앞으로 옮겨 rear axle current pose로 사용 | CarMaker `Car_x/y`가 Fr1A/rear bumper center일 때 |
-| `rear_axle` | `DynamicsInfo.Car_x/y`를 그대로 rear axle current pose로 사용 | CarMaker `Car_x/y`가 rear axle center일 때 |
-
-예를 들어 `Car_x/y`가 rear axle 기준이면:
-
-```yaml
-# src/carmaker_control/config/control_params.yaml
-vehicle:
-  dynamics_pose_reference: "rear_axle"
-```
-
-RViz에서 `/control/debug/current_pose`가 `/control/debug/nearest_pose`나 `/control/debug/active_segment_path`보다 차량 진행 방향으로 약 `0.82m` 앞에 보이면 GT가 이미 rear axle 기준인데 중복 변환된 것이다. 이때는 `dynamics_pose_reference`를 `"rear_axle"`로 바꿔서 다시 실행한다.
+따라서 control에는 GT 기준점 보정용 `rear_axle_offset`이나 `dynamics_pose_reference` 파라미터가 없다.
 
 ### 안전 timeout
 
@@ -994,19 +976,16 @@ atan(2.97 / 5.5) = 28.4 deg
 vehicle:
   wheelbase: 2.97
   min_turning_radius: 5.5
-  rear_axle_offset: 0.82
-  dynamics_pose_reference: "rear_bumper"
   steering_ratio: 9.0
   max_steer_command: 4.5
   steering_command_sign: 1.0
-  steering_control_point: "rear_axle"
 ```
 
 Stanley는 타이어 조향각을 계산한다. CarMaker `control_signal/steerangle`이 steering wheel command 범위를 기대하는 프로젝트라면 `steering_ratio`와 `max_steer_command`를 프로젝트 입력 범위와 맞춰야 한다. 현재 tight parking 기본값은 조향 부족을 줄이기 위해 `max_steer_command: 4.5`까지 허용한다.
 
 `steering_command_sign`은 조향 부호 테스트용이다. RViz/PlotJuggler에서 `cross_track_error`가 줄지 않고 커지거나, 좌회전해야 하는데 우회전으로 반응하면 `-1.0`으로 바꿔서 바로 비교한다.
 
-`steering_control_point`는 Stanley 오차 계산 기준점이다. `/planning/trajectory`와 current pose가 rear axle 기준이므로 기본값 `rear_axle`에서는 추가 변환 없이 cte/heading error를 계산한다. 특수한 비교가 필요할 때 `rear_bumper`로 바꾸면 pose와 reference를 함께 후방 범퍼 기준으로 옮겨 계산한다.
+Stanley 오차 계산은 `/planning/trajectory`와 current pose가 공유하는 rear axle 기준에서 바로 수행한다.
 
 ### Debug publish
 
@@ -1047,13 +1026,12 @@ rostopic echo /carmaker/dynamic_info
 
 확인할 것:
 
-- `Car_x`, `Car_y`가 차량 위치와 맞는지
+- `RearAxle_x`, `RearAxle_y`가 후륜축 위치와 맞는지
 - `Car_Yaw`가 radian 기준 yaw로 들어오는지
 - `Car_vx`가 차량 전후방 속도와 맞는지
 - 후진 시 `Car_vx` 부호가 실제 후진 방향과 일관되는지
 - RViz에서 `/control/debug/current_pose`가 `/control/debug/active_segment_path` 위에 놓이는지
-- current pose가 경로보다 차량 진행 방향으로 약 `rear_axle_offset`만큼 앞에 있으면 `vehicle/dynamics_pose_reference: "rear_axle"`로 바꿔야 한다.
-- current pose가 경로보다 차량 진행 방향 반대로 약 `rear_axle_offset`만큼 뒤에 있으면 GT가 bumper 기준인데 변환되지 않은 상태이므로 `vehicle/dynamics_pose_reference: "rear_bumper"`인지 확인한다.
+- current pose가 경로보다 진행 방향으로 어긋나면 `/carmaker/dynamic_info`의 `RearAxle_x/y` publish 값과 planning/control이 보는 dynamic info 토픽이 같은지 확인한다.
 
 ### planning 확인
 

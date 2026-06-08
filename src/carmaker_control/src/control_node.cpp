@@ -133,8 +133,6 @@ private:
   bool isSegmentComplete(const PathSegment& segment,
                          const Pose2D& pose,
                          std::size_t nearest_index) const;
-  Pose2D toSteeringControlPose(const Pose2D& pose) const;
-  PathPoint toSteeringControlPoint(const PathPoint& point) const;
   double computeSteeringCommand(const Pose2D& pose,
                                 const PathPoint& feedback_reference,
                                 const PathPoint& feedforward_reference,
@@ -274,15 +272,12 @@ private:
   int reverse_gear_{-1};
 
   double wheelbase_{2.97};
-  double rear_axle_offset_{0.82};
-  std::string dynamics_pose_reference_{"rear_bumper"};
   double steering_ratio_{9.0};
   double max_steer_command_{4.5};
   double steering_command_sign_{1.0};
   double reverse_steering_scale_{1.0};
   double curvature_ff_gain_{0.6};
   double reverse_curvature_ff_sign_{-1.0};
-  std::string steering_control_point_{"rear_axle"};
 
   ros::Time last_control_time_;
   ros::Time last_debug_path_time_;
@@ -388,15 +383,6 @@ void ControlNode::loadParameters()
   double min_turning_radius = 5.5;
   pnh_.param("vehicle/wheelbase", wheelbase_, wheelbase_);
   pnh_.param("vehicle/min_turning_radius", min_turning_radius, min_turning_radius);
-  pnh_.param("vehicle/rear_axle_offset", rear_axle_offset_, 0.82);
-  pnh_.param<std::string>("vehicle/dynamics_pose_reference",
-                          dynamics_pose_reference_, "rear_bumper");
-  if (dynamics_pose_reference_ != "rear_bumper" &&
-      dynamics_pose_reference_ != "rear_axle") {
-    ROS_WARN("Unknown vehicle/dynamics_pose_reference='%s'. Falling back to 'rear_bumper'.",
-             dynamics_pose_reference_.c_str());
-    dynamics_pose_reference_ = "rear_bumper";
-  }
 
   double max_tire_steer_deg = 28.4;
   if (wheelbase_ > 1e-6 && min_turning_radius > 1e-6) {
@@ -435,14 +421,6 @@ void ControlNode::loadParameters()
   pnh_.param("vehicle/max_steer_command", max_steer_command_, max_steer_command_);
   pnh_.param("vehicle/steering_command_sign", steering_command_sign_, 1.0);
   steering_command_sign_ = steering_command_sign_ < 0.0 ? -1.0 : 1.0;
-  pnh_.param<std::string>("vehicle/steering_control_point",
-                          steering_control_point_, "rear_axle");
-  if (steering_control_point_ != "rear_bumper" &&
-      steering_control_point_ != "rear_axle") {
-    ROS_WARN("Unknown vehicle/steering_control_point='%s'. Falling back to 'rear_axle'.",
-             steering_control_point_.c_str());
-    steering_control_point_ = "rear_axle";
-  }
 
   pnh_.param("debug/publish", publish_debug_, true);
   pnh_.param<std::string>("debug/topic_prefix", debug_topic_prefix_, "/control/debug");
@@ -636,16 +614,11 @@ bool ControlNode::getCurrentState(Pose2D& pose, double& signed_speed) const
       return false;
     }
 
-    // DynamicsInfo의 Car_* 값은 CarMaker GT 상태다.
-    // Controller 내부 pose와 /planning/trajectory는 rear axle 기준으로 맞춘다.
-    // CarMaker GT가 Fr1A/rear bumper 기준이면 후륜축 중심으로 변환한다.
+    // DynamicsInfo는 rear axle 기준 GT를 직접 제공한다.
+    // Controller 내부 pose와 /planning/trajectory도 같은 rear axle 기준으로 맞춘다.
     const double yaw = normalizeAngle(dynamics.Car_Yaw);
-    pose.x = dynamics.Car_x;
-    pose.y = dynamics.Car_y;
-    if (dynamics_pose_reference_ == "rear_bumper") {
-      pose.x += rear_axle_offset_ * std::cos(yaw);
-      pose.y += rear_axle_offset_ * std::sin(yaw);
-    }
+    pose.x = dynamics.RearAxle_x;
+    pose.y = dynamics.RearAxle_y;
     pose.yaw = yaw;
     signed_speed = dynamics.Car_vx;
     return true;
@@ -872,49 +845,21 @@ bool ControlNode::isSegmentComplete(const PathSegment& segment,
   return near_end_index && near_end_position;
 }
 
-ControlNode::Pose2D ControlNode::toSteeringControlPose(const Pose2D& pose) const
-{
-  if (steering_control_point_ != "rear_bumper") {
-    return pose;
-  }
-
-  Pose2D control_pose = pose;
-  control_pose.x -= rear_axle_offset_ * std::cos(pose.yaw);
-  control_pose.y -= rear_axle_offset_ * std::sin(pose.yaw);
-  return control_pose;
-}
-
-ControlNode::PathPoint ControlNode::toSteeringControlPoint(const PathPoint& point) const
-{
-  if (steering_control_point_ != "rear_bumper") {
-    return point;
-  }
-
-  PathPoint control_point = point;
-  control_point.x -= rear_axle_offset_ * std::cos(point.yaw);
-  control_point.y -= rear_axle_offset_ * std::sin(point.yaw);
-  return control_point;
-}
-
 double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            const PathPoint& feedback_reference,
                                            const PathPoint& feedforward_reference,
                                            double speed,
                                            int direction) const
 {
-  const Pose2D control_pose = toSteeringControlPose(pose);
-  const PathPoint control_feedback_reference = toSteeringControlPoint(feedback_reference);
-  const PathPoint control_feedforward_reference = toSteeringControlPoint(feedforward_reference);
-
   // cte 부호 규약:
   // 경로 yaw 기준 차량이 왼쪽에 있으면 cte가 음수가 된다.
   // CarMaker/teleop 기준 positive steer가 좌회전이므로, 왼쪽으로 벗어난 차량은 음수 조향으로
   // 오른쪽 복귀를 하게 된다.
-  const double dx = control_pose.x - control_feedback_reference.x;
-  const double dy = control_pose.y - control_feedback_reference.y;
-  const double cte = std::sin(control_feedback_reference.yaw) * dx -
-                     std::cos(control_feedback_reference.yaw) * dy;
-  const double heading_error = normalizeAngle(control_feedback_reference.yaw - control_pose.yaw);
+  const double dx = pose.x - feedback_reference.x;
+  const double dy = pose.y - feedback_reference.y;
+  const double cte = std::sin(feedback_reference.yaw) * dx -
+                     std::cos(feedback_reference.yaw) * dy;
+  const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
 
   const double tire_steer =
       stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
@@ -922,7 +867,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
       direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
   const double curvature_ff =
       curvature_ff_gain_ * ff_direction_sign *
-      std::atan(wheelbase_ * control_feedforward_reference.curvature);
+      std::atan(wheelbase_ * feedforward_reference.curvature);
   const double steer_command =
       steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 
@@ -1128,9 +1073,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   }
 
   publishPoseDebug(debug_current_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
-  const Pose2D control_pose = toSteeringControlPose(pose);
   publishPoseDebug(debug_current_control_pose_pub_,
-                   control_pose.x, control_pose.y, control_pose.yaw, stamp);
+                   pose.x, pose.y, pose.yaw, stamp);
 
   if (segment && !segment->points.empty()) {
     direction = segment->direction;
@@ -1140,28 +1084,25 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     target_index_value = static_cast<int>(target);
     const PathPoint& nearest_point = segment->points[nearest];
     const PathPoint& target_point = segment->points[target];
-    const PathPoint control_nearest_point = toSteeringControlPoint(nearest_point);
-    const PathPoint control_target_point = toSteeringControlPoint(target_point);
     distance_to_end = distance2D(pose, segment->points.back());
 
     publishPoseDebug(debug_nearest_pose_pub_,
                      nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
     publishPoseDebug(debug_nearest_control_pose_pub_,
-                     control_nearest_point.x, control_nearest_point.y,
-                     control_nearest_point.yaw, stamp);
+                     nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
     publishPoseDebug(debug_lookahead_pose_pub_,
                      target_point.x, target_point.y, target_point.yaw, stamp);
 
-    const double dx = control_pose.x - control_nearest_point.x;
-    const double dy = control_pose.y - control_nearest_point.y;
-    cte = std::sin(control_nearest_point.yaw) * dx -
-          std::cos(control_nearest_point.yaw) * dy;
-    heading_error = normalizeAngle(control_nearest_point.yaw - control_pose.yaw);
+    const double dx = pose.x - nearest_point.x;
+    const double dy = pose.y - nearest_point.y;
+    cte = std::sin(nearest_point.yaw) * dx -
+          std::cos(nearest_point.yaw) * dy;
+    heading_error = normalizeAngle(nearest_point.yaw - pose.yaw);
     const double ff_direction_sign =
         direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
     curvature_ff =
         steering_command_sign_ * steering_ratio_ * curvature_ff_gain_ *
-        ff_direction_sign * std::atan(wheelbase_ * control_target_point.curvature);
+        ff_direction_sign * std::atan(wheelbase_ * target_point.curvature);
     steer_saturated =
         std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
