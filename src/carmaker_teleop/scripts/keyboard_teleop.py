@@ -59,7 +59,10 @@ class KeyboardTeleop:
         
         # 시뮬레이터에서 피드백 받는 실제 차량의 종방향 속도 (m/s)
         self.actual_vx = 0.0 
+
         self.final_accel = 0.0
+        self.final_gas = 0.0
+        self.final_brake = 0.0
 
         # 3. ROS Publisher & Subscriber 설정
         msg_types = {"ackermann": AckermannDriveStamped, "carmaker_control": Control_Signal, "twist": Twist}
@@ -94,16 +97,27 @@ class KeyboardTeleop:
         # 1. 사용자의 페달 입력에 따른 목표 가속도
         raw_accel = d_mult * (self.state["gas"] - self.state["brake"]) * self.limits["accel"]
 
-        # 2. 실제 속도 기반 최고 속도 제한 로직 (Feedback Limit)
+        self.final_gas = self.state["gas"]
+        self.final_brake = self.state["brake"]
+        self.final_accel = self._clamp(raw_accel, -self.limits["accel"], self.limits["accel"])
+
+        # 2. 실제 속도 기반 엔진/페달 차단 로직 (Fuel Cut)
         if d_mult > 0 and self.actual_vx >= self.limits["speed"]:
-            # 전진 중 최고 속도(2.0m/s) 이상이면, 가속(양수)을 0으로 컷아웃 (브레이크인 음수만 허용)
-            self.final_accel = min(0.0, raw_accel)
+            # 전진 중 최고 속도 도달 시:
+            self.final_gas = 0.0                    # 스로틀 즉시 차단 (엔진 힘 제거)
+            self.final_accel = min(0.0, raw_accel)  # 가속도 목표치 제거
+
+            # 내리막길 등에서 관성으로 속도가 초과하면 자동 브레이크 개입
+            if self.actual_vx > self.limits["speed"] + 0.2:
+                self.final_brake = max(self.final_brake, 0.3) 
+
         elif d_mult < 0 and self.actual_vx <= -self.limits["speed"]:
-            # 후진 중 최고 속도 이상이면, 후진 가속(음수)을 0으로 컷아웃 (브레이크인 양수만 허용)
-            self.final_accel = max(0.0, raw_accel)
-        else:
-            # 한계 미만이면 사용자의 가속 명령을 그대로 인가
-            self.final_accel = self._clamp(raw_accel, -self.limits["accel"], self.limits["accel"])
+            # 후진 중 최고 속도 도달 시:
+            self.final_gas = 0.0  
+            self.final_accel = max(0.0, raw_accel) 
+
+            if self.actual_vx < -self.limits["speed"] - 0.2:
+                self.final_brake = max(self.final_brake, 0.3)
 
     def run(self):
         rate = rospy.Rate(self.rate_hz)
@@ -169,7 +183,7 @@ class KeyboardTeleop:
                 if self.mode == "carmaker_control":
                     msg.header.stamp = rospy.Time.now()
                     msg.steerangle, msg.gear = self.state["steer"], self.state["gear"]
-                    msg.gas, msg.brake, msg.accel = self.state["gas"], self.state["brake"], self.final_accel
+                    msg.gas, msg.brake, msg.accel = self.final_gas, self.final_brake, self.final_accel
                 elif self.mode == "ackermann":
                     msg.header.stamp = rospy.Time.now()
                     # Ackermann 모드일 경우 가짜 speed 대신 실제 피드백 제한을 사용할 수 있으나 호환성을 위해 유지
