@@ -15,6 +15,9 @@ float64 altitude                               # Altitude [m]
 float64 Car_x
 float64 Car_y
 float64 Car_z
+float64 RearAxle_x
+float64 RearAxle_y
+float64 RearAxle_z
 float64 Car_Roll
 float64 Car_Pitch
 float64 Car_Yaw

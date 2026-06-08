@@ -20,7 +20,8 @@ void GlobalPlannerNodelet::onInit() {
 
   // Load frame ID parameters
   pnh_.param<std::string>("frames/global", global_frame_, "Fr0");
-  pnh_.param<std::string>("frames/ego", ego_frame_, "Fr1A_pred");
+  pnh_.param<std::string>("frames/ego", ego_frame_, "Fr1A_Pred");
+  pnh_.param<std::string>("frames/rear_axle", rear_axle_frame_, "Fr1A_Rear_Axle_Pred");
   pnh_.param<bool>("setting/use_gt_pose", use_gt_pose_, false);
   pnh_.param<bool>("setting/use_manual_pose/enabled", use_manual_pose_, false);
 
@@ -62,7 +63,7 @@ void GlobalPlannerNodelet::onInit() {
     manual_pose_sub_ = nh_.subscribe(manual_topic, 1, &GlobalPlannerNodelet::manualPoseCallback, this);
     NODELET_INFO("Ego Pose Source: Manual Pose Topic (%s) active - simulation-free test mode", manual_topic.c_str());
   } else {
-    NODELET_INFO("Ego Pose Source: TF Lookup (global: %s -> ego: %s) active", global_frame_.c_str(), ego_frame_.c_str());
+    NODELET_INFO("Ego Pose Source: TF Lookup (global: %s -> ego: %s -> rear_axle: %s) active", global_frame_.c_str(), ego_frame_.c_str(), rear_axle_frame_.c_str());
   }
   goal_sub_ = nh_.subscribe(goal_topic, 1, &GlobalPlannerNodelet::goalCallback, this);
 
@@ -91,8 +92,8 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
       dyn = latest_dynamics_;
     }
     // Translate start pose from rear bumper forward to rear axle center
-    start_state.x = dyn.Car_x + config_.vehicle.rear_axle_offset * std::cos(dyn.Car_Yaw);
-    start_state.y = dyn.Car_y + config_.vehicle.rear_axle_offset * std::sin(dyn.Car_Yaw);
+    start_state.x = dyn.RearAxle_x;
+    start_state.y = dyn.RearAxle_y;
     start_state.theta = dyn.Car_Yaw;
   }
   else if (use_manual_pose_) {
@@ -117,8 +118,8 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
   }
   else {
     try {
-      // Look up latest transform from global to ego frame
-      geometry_msgs::TransformStamped transform = tf_buffer_->lookupTransform(global_frame_, ego_frame_, ros::Time(0));
+      // Look up latest transform from global to rear axle frame
+      geometry_msgs::TransformStamped transform = tf_buffer_->lookupTransform(global_frame_, rear_axle_frame_, ros::Time(0));
       double tx = transform.transform.translation.x;
       double ty = transform.transform.translation.y;
 
@@ -129,9 +130,9 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
       double qw_rot = transform.transform.rotation.w;
       double yaw = std::atan2(2.0 * (qw_rot * qz_rot + qx_rot * gq_y_rot), 1.0 - 2.0 * (gq_y_rot * gq_y_rot + qz_rot * qz_rot));
 
-      // Translate start pose from rear bumper (Fr1A_pred/Fr1A) forward to rear axle center
-      start_state.x = tx + config_.vehicle.rear_axle_offset * std::cos(yaw);
-      start_state.y = ty + config_.vehicle.rear_axle_offset * std::sin(yaw);
+      // Translate start pose from rear bumper (Fr1A_Pred/Fr1A) forward to rear axle center
+      start_state.x = tx;
+      start_state.y = ty;
       start_state.theta = yaw;
     }
     catch (tf2::TransformException &ex) {

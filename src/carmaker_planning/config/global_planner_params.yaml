@@ -18,8 +18,7 @@ topics:
 setting:
   # use_gt_pose: true        → /carmaker/dynamic_info topic (Simulator GT)
   # use_manual_pose: true    → /planning/start topic (manual input for testing)
-  # (both false)             → TF lookup (Fr0 → Fr1A_pred, actual deployment EKF)
-
+  # (both false)             → TF lookup (Fr0 → Fr1A_Rear_Axle_Pred, actual deployment EKF)
   use_gt_pose: false # Set to true to use GT pose, false to use EKF pose from TF
   use_manual_pose:
     enabled: true # Set to true for offline testing (no simulator). Overrides TF lookup.
@@ -28,7 +27,8 @@ setting:
 # Frame configurations matching carmaker_localization
 frames:
   global: "Fr0"
-  ego: "Fr1A_pred" # Use "base_footprint" for GT frame, "Fr1A_pred" for EKF prediction frame
+  ego: "Fr1A_Pred" # Use "base_footprint" for GT frame, "Fr1A_Pred" for EKF prediction frame
+  rear_axle: "Fr1A_Rear_Axle_Pred"
 
 # Vehicle geometry and kinematic parameters
 vehicle:

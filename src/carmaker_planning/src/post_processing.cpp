@@ -447,8 +447,8 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
     double phi_prev = std::atan(wheelbase_ * path[i-1].kappa);
     double dphi_ds = (ds > 1e-4) ? std::abs(phi_i - phi_prev) / ds : 0.0;
     if (dphi_ds > 1e-4) {
-      // Apply 0.9 safety margin on steering velocity limit to absorb profile numerical noises
-      double v_steer = (max_steer_vel * 0.9) / dphi_ds;
+      // Apply 0.95 safety margin on steering velocity limit to absorb profile numerical noises
+      double v_steer = (max_steer_vel * 0.95) / dphi_ds;
       v_static[i] = std::min(v_static[i], v_steer);
       v_static[i-1] = std::min(v_static[i-1], v_steer);
     }
@@ -894,7 +894,7 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
         double raw_kappa = symmetricDiffCurvature(
           path[global_idx - 1].theta, path[global_idx].theta, path[global_idx + 1].theta,
           ds1, ds2);
-        path[global_idx].kappa = std::clamp(raw_kappa, -max_kappa_, max_kappa_);
+        path[global_idx].kappa = raw_kappa;
       }
     }
 
@@ -912,7 +912,7 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
       applyMovingAverage(kappas, half_w, 5);
       for (size_t i = 0; i < seg_len; ++i) {
-        path[seg_start + i].kappa = std::clamp(kappas[i], -max_kappa_, max_kappa_);
+        path[seg_start + i].kappa = kappas[i];
       }
     }
   }

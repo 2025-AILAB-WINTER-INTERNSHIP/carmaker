@@ -10,7 +10,8 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
 
     // 1. Frame configuration
     global_frame_ = pnh.param("frames/global", std::string("map"));
-    prediction_frame_ = pnh.param("frames/prediction", std::string("Fr1A_pred"));
+    prediction_bumper_frame_ = pnh.param("frames/prediction_bumper", std::string("Fr1A_Pred"));
+    prediction_rear_axle_frame_ = pnh.param("frames/prediction_rear_axle", std::string("Fr1A_Rear_Axle_Pred"));
     estimation_trajectory_.header.frame_id = global_frame_;
 
     // 2. Topic names
@@ -32,6 +33,7 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
     vehicle_length_ = pnh.param("vehicle/length", 4.635);
     vehicle_height_ = pnh.param("vehicle/height", 1.605);
     vehicle_length_offset_ = pnh.param("vehicle/center_offset_x", 2.3175);
+    rear_axle_x_ = pnh.param("vehicle/rear_axle_offset_x", 0.82);
 
     resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
     viz_seam_line_ = pnh.param("svm/viz_seam_line", true);
@@ -57,7 +59,7 @@ void Visualizer::publishSvmImage(const cv::Mat& svm_image, const std::vector<cv:
 
         std_msgs::Header header;
         header.stamp = ros::Time::now();
-        header.frame_id = prediction_frame_;
+        header.frame_id = prediction_bumper_frame_;
         cv_bridge::CvImage cv_img(header, "rgb8", final_image);
         svm_pub_.publish(cv_img.toImageMsg());
     }
@@ -84,7 +86,7 @@ void Visualizer::publishBevImage(const std::string& camera_name, const cv::Mat& 
 
         std_msgs::Header header;
         header.stamp = ros::Time::now();
-        header.frame_id = prediction_frame_;
+        header.frame_id = prediction_bumper_frame_;
         cv_bridge::CvImage cv_img(header, "rgb8", final_image);
         pub.publish(cv_img.toImageMsg());
     }
@@ -178,8 +180,8 @@ void Visualizer::publishObservation(const std::string& channel_name, const carma
         q.setRPY(0, 0, angle);
         cov.pose.orientation = tf2::toMsg(q);
 
-        cov.scale.x = sigma_major * 4.0;
-        cov.scale.y = sigma_minor * 4.0;
+        cov.scale.x = sigma_major * 2.0;
+        cov.scale.y = sigma_minor * 2.0;
         cov.scale.z = 0.0025;
 
         cov.color = m.color;
@@ -236,14 +238,14 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
     cov.pose.orientation = tf2::toMsg(q);
 
     cov.color.r = 0.0; cov.color.g = 1.0; cov.color.b = 0.0; cov.color.a = 0.3;
-    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 4.0;
-    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 4.0;
+    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 2.0;
+    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 2.0;
     cov.scale.z = 0.01;
     marker_array.markers.push_back(cov);
 
     // 3. Vehicle Body & Label
     std::vector<double> color = {0.0, 1.0, 0.0, 0.7};
-    _addVehicleMarker(marker_array, pose.pose.pose, "estimation", "Estimation", color);
+    _addVehicleMarker(marker_array, pose.pose.pose, "estimation", "Estimation", color, false);
 
     estimation_marker_pub_.publish(marker_array);
 
@@ -296,14 +298,14 @@ void Visualizer::publishCorrection(const geometry_msgs::PoseWithCovarianceStampe
     cov.pose.orientation = tf2::toMsg(q);
 
     cov.color.r = 1.0; cov.color.g = 0.0; cov.color.b = 0.0; cov.color.a = 0.3;
-    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 4.0;
-    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 4.0;
+    cov.scale.x = std::sqrt(std::max(0.001, lambda1)) * 2.0;
+    cov.scale.y = std::sqrt(std::max(0.001, lambda2)) * 2.0;
     cov.scale.z = 0.01;
     marker_array.markers.push_back(cov);
 
     // 2. Vehicle Body & Label
     std::vector<double> color = {1.0, 0.0, 0.0, 0.7};
-    _addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color);
+    _addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color, true);
 
     correction_marker_pub_.publish(marker_array);
 }
@@ -396,7 +398,8 @@ void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array
                                     const geometry_msgs::Pose& pose,
                                     const std::string& ns,
                                     const std::string& label,
-                                    const std::vector<double>& color) {
+                                    const std::vector<double>& color,
+                                    bool is_bumper_frame) {
     double yaw = tf2::getYaw(pose.orientation);
 
     visualization_msgs::Marker body;
@@ -407,8 +410,17 @@ void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array
     body.type = visualization_msgs::Marker::CUBE;
     body.action = visualization_msgs::Marker::ADD;
 
-    body.pose.position.x = pose.position.x + vehicle_length_offset_ * std::cos(yaw);
-    body.pose.position.y = pose.position.y + vehicle_length_offset_ * std::sin(yaw);
+    // 입력 포즈가 후륜축 기준일 경우에만 후방 범퍼 좌표로 1차 역변환 수행
+    double bumper_x = pose.position.x;
+    double bumper_y = pose.position.y;
+    if (!is_bumper_frame) {
+        bumper_x -= rear_axle_x_ * std::cos(yaw);
+        bumper_y -= rear_axle_x_ * std::sin(yaw);
+    }
+
+    // 후방 범퍼 기준으로 차량 중심 오프셋 적용하여 시각화 큐브 배치 (Rear Bumper -> Vehicle Center)
+    body.pose.position.x = bumper_x + vehicle_length_offset_ * std::cos(yaw);
+    body.pose.position.y = bumper_y + vehicle_length_offset_ * std::sin(yaw);
     body.pose.position.z = vehicle_height_ / 2.0;
     body.pose.orientation = pose.orientation;
 
