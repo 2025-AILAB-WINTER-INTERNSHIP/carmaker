@@ -18,6 +18,7 @@ enum RSPartType {
 
 struct RSCandidate {
   const RSPartType *type = nullptr;
+  RSPathType path_type = RSPathType::UNKNOWN;
   double length[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
   double total_length = std::numeric_limits<double>::infinity();
 

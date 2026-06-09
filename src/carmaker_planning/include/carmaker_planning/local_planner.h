@@ -7,20 +7,19 @@
  *  - SegmentManager  : splits a global Path at direction-change (cusp) boundaries,
  *                      stores the active segment index, and advances on request.
  *  - QuinticPathFitter: fits 5th-order polynomials x(s), y(s) from current ego state
- *                      to the active segment endpoint, satisfying 6 boundary conditions
- *                      per axis (position, heading, curvature) at both ends.
- *
- * Sampling guarantee:
- *  - Output points are uniformly spaced at exactly `resolution` [m] in arc-length,
- *    except the final point which always coincides with the target endpoint.
+ *                      to the active segment endpoint as a raw geometric path.
+ *                      Final sampling, heading, curvature, and timing are filled by
+ *                      the common post-processing helpers.
  */
 #ifndef CARMAKER_PLANNING_LOCAL_PLANNER_H
 #define CARMAKER_PLANNING_LOCAL_PLANNER_H
 
+#include <memory>
 #include <vector>
 #include <string>
 #include <Eigen/Dense>
 #include "carmaker_planning/types.h"
+#include "carmaker_planning/post_processing.h"
 
 namespace carmaker_planning {
 
@@ -76,15 +75,16 @@ private:
 // ── QuinticPathFitter ─────────────────────────────────────────────────────────
 
 /**
- * @brief Generates a uniform-spacing local path by fitting quintic (5th-order)
+ * @brief Generates a raw local path by fitting quintic (5th-order)
  *        polynomials x(s) and y(s) between ego and target.
  *
  * Boundary conditions (6 per axis, using fixed-size Eigen per RULE §3):
  *   s=0 : x, y,  dx/ds=cosθ₀,  dy/ds=sinθ₀,  x''=-κ₀sinθ₀,  y''=κ₀cosθ₀
  *   s=L : x, y,  dx/ds=cosθ_f, dy/ds=sinθ_f,  x''=-κ_f sinθ_f, y''=κ_f cosθ_f
  *
- * Sampling: points are spaced at exactly `resolution` [m] in arc-length parameter s.
- * The last point always matches the target endpoint exactly.
+ * Sampling: points are spaced in the polynomial parameter before the path is
+ * resampled by the common post-processing helper. The last point always matches
+ * the target endpoint exactly.
  *
  * Returns empty path on degenerate input (L < 1e-3 m).
  */
@@ -92,7 +92,7 @@ class QuinticPathFitter {
 public:
   QuinticPathFitter() = default;
 
-  Path fit(const State& ego, double ego_kappa,
+  Path fit(const State& ego, double start_kappa,
            const PathPoint& target, double resolution) const;
 
 private:
@@ -107,6 +107,37 @@ private:
   static double curvature(const Eigen::Matrix<double,6,1>& cx,
                           const Eigen::Matrix<double,6,1>& cy, double s);
   static Path makeShortDistanceFallback(const State& ego, const PathPoint& target, double length);
+};
+
+// ── LocalTrajectoryPlanner ───────────────────────────────────────────────────
+
+class LocalTrajectoryPlanner {
+public:
+  struct PlanRequest {
+    State ego;
+    double start_kappa = 0.0;
+    PathPoint target;
+    double start_vel = 0.0;
+  };
+
+  LocalTrajectoryPlanner() = default;
+
+  void configure(const PostProcessConfig& post_process_config,
+                 double wheelbase,
+                 double min_turning_radius);
+
+  LocalPlanningResult planToEndpoint(const PlanRequest& request) const;
+
+private:
+  bool validateRequest(const PlanRequest& request,
+                       LocalPlanningResult& result) const;
+
+  PostProcessConfig post_process_config_;
+  std::unique_ptr<PostProcessor> post_processor_;
+  bool configured_ = false;
+  double wheelbase_ = 2.97;
+  double min_turning_radius_ = 5.2;
+  QuinticPathFitter fitter_;
 };
 
 } // namespace carmaker_planning

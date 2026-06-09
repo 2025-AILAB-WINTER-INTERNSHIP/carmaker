@@ -10,6 +10,7 @@
 #include <cmath>
 #include <string>
 #include <limits>
+#include <utility>
 #include <ros/ros.h>
 #include <geometry_msgs/Quaternion.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -23,8 +24,6 @@ struct State {
   double y = 0.0;
   double theta = 0.0;
   double v = 0.0;
-  double a = 0.0;
-  double theta_rate = 0.0;
 
   State() = default;
   State(double _x, double _y, double _theta) : x(_x), y(_y), theta(_theta) {}
@@ -41,7 +40,6 @@ struct PathPoint {
   double s = 0.0;
   int direction = 1;  // 1: forward, -1: reverse
   double t = 0.0;
-  double d_lat = 0.0;
 
   PathPoint() = default;
   PathPoint(double _x, double _y, double _theta) : x(_x), y(_y), theta(_theta) {}
@@ -74,19 +72,25 @@ struct VehicleSpec {
   std::vector<CollisionCircle> collision_circles;
 };
 
-enum class DubinsPathType { LSL=0, LSR, RSL, RSR, RLR, LRL };
-
-struct DubinsPath {
-  DubinsPathType type;
-  double t, p, q, total_length, rho;
-  std::vector<PathPoint> points;
-};
-
 enum class RSPathType {
-  LfSfLf, LfSfRf, RfSfLf, RfSfRf,
-  LfRbLf, RfLbRf,
-  LfRbLb, RfLbRb,
-  LbSbRb, RbSbLb, LbSbLb, RbSbRb,
+  kPath0,
+  kPath1,
+  kPath2,
+  kPath3,
+  kPath4,
+  kPath5,
+  kPath6,
+  kPath7,
+  kPath8,
+  kPath9,
+  kPath10,
+  kPath11,
+  kPath12,
+  kPath13,
+  kPath14,
+  kPath15,
+  kPath16,
+  kPath17,
   UNKNOWN
 };
 
@@ -210,6 +214,44 @@ struct GlobalPlanningDiagnostic {
   const char* statusString() const { return carmaker_planning::statusString(status); }
 };
 
+struct LocalPlanningResult {
+  bool success = false;
+  Path path;
+  double resampling_time = -1.0;
+  double profiling_time = -1.0;
+  double total_time = -1.0;
+  std::vector<std::pair<std::string, std::string>> logs;
+  TrajectoryDiagnostic diagnostic;
+
+  void addLog(const std::string& level, const std::string& msg) {
+    logs.push_back({level, msg});
+  }
+  void warn(const std::string& msg) { addLog("WARN", msg); }
+  void info(const std::string& msg) { addLog("INFO", msg); }
+  void error(const std::string& msg) { addLog("ERROR", msg); }
+  void debug(const std::string& msg) { addLog("DEBUG", msg); }
+};
+
+struct LocalPlanningDiagnostic {
+  bool success = false;
+  double total_time = -1.0;
+  double resampling_time = -1.0;
+  double profiling_time = -1.0;
+  double path_length = -1.0;
+  size_t path_size = 0;
+  TrajectoryDiagnostic diagnostic;
+
+  LocalPlanningDiagnostic() = default;
+  explicit LocalPlanningDiagnostic(const LocalPlanningResult& res)
+    : success(res.success),
+      total_time(res.total_time),
+      resampling_time(res.resampling_time),
+      profiling_time(res.profiling_time),
+      path_length(res.path.empty() ? -1.0 : res.path.back().s),
+      path_size(res.path.size()),
+      diagnostic(res.diagnostic) {}
+};
+
 struct GlobalGridIndex { int x=0, y=0, theta=0; };
 
 struct GlobalNode3D {
@@ -262,7 +304,7 @@ struct GlobalPlannerConfig {
   struct Weights { double turn, reverse, change_dir, heuristic; } weights;
 };
 
-struct GlobalPostProcessConfig {
+struct PostProcessConfig {
   struct Smoother {
     double weight_data, weight_smooth, tolerance;
     int max_iterations;
@@ -288,7 +330,7 @@ struct GlobalMainConfig {
   VehicleSpec vehicle;
   GlobalCostmapConfig global_costmap;
   GlobalPlannerConfig planner;
-  GlobalPostProcessConfig post_process;
+  PostProcessConfig post_process;
 };
 
 struct LocalPlannerConfig {
@@ -296,42 +338,28 @@ struct LocalPlannerConfig {
   double endpoint_xy_tol  = 0.3;  ///< [m] endpoint XY tolerance
   double endpoint_yaw_tol = 0.2;  ///< [rad] endpoint yaw tolerance
   double stop_vel_tol = 0.05;     ///< [m/s] velocity threshold before segment transition
-  double precision_zone_distance = 0.3; ///< [m] final approach speed-cap zone
 
   // Replanning
   double replanning_rate_hz        = 10.0; ///< [Hz]  local path refresh rate
-  double replanning_dist_threshold = 0.5;  ///< [m]   lateral deviation triggering replan
 
-  // Polynomial path sampling
-  double sample_resolution = 0.1; ///< [m]   arc-length step for path point generation
-
-  // Velocity profiling (reuses KinematicLimits internally)
-  double max_vel    = 2.0;
-  double max_accel  = 0.8;
-  double max_decel  = 0.8;
-  double max_jerk   = 1.5;
-  double max_lat_acc = 0.8;
+  PostProcessConfig post_process;
 };
+
+inline void loadPostProcessConfig(const ros::NodeHandle& nh,
+                                  PostProcessConfig& cfg,
+                                  const std::string& ns);
+inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg);
+inline void loadLocalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg);
 
 inline void loadLocalPlannerConfig(const ros::NodeHandle& nh, LocalPlannerConfig& cfg,
                                    const std::string& ns = "local_planner") {
   nh.param(ns + "/arrival/endpoint_xy_tol",  cfg.endpoint_xy_tol,  0.3);
   nh.param(ns + "/arrival/endpoint_yaw_tol", cfg.endpoint_yaw_tol, 0.2);
   nh.param(ns + "/arrival/stop_vel_tol", cfg.stop_vel_tol, 0.05);
-  nh.param(ns + "/arrival/precision_zone_distance",
-           cfg.precision_zone_distance,
-           cfg.endpoint_xy_tol);
 
   nh.param(ns + "/replanning/rate_hz",         cfg.replanning_rate_hz,        10.0);
-  nh.param(ns + "/replanning/dist_threshold",  cfg.replanning_dist_threshold,  0.5);
 
-  nh.param(ns + "/sample_resolution", cfg.sample_resolution, 0.1);
-
-  nh.param(ns + "/profiler/max_vel",    cfg.max_vel,    2.0);
-  nh.param(ns + "/profiler/max_accel",  cfg.max_accel,  0.8);
-  nh.param(ns + "/profiler/max_decel",  cfg.max_decel,  0.8);
-  nh.param(ns + "/profiler/max_jerk",   cfg.max_jerk,   1.5);
-  nh.param(ns + "/profiler/max_lat_acc",cfg.max_lat_acc, 0.8);
+  loadLocalPostProcessConfig(nh, cfg.post_process);
 }
 
 // ── Quaternion Helpers ────────────────────────────────────────────────
@@ -421,8 +449,9 @@ inline void loadGlobalPlannerConfig(const ros::NodeHandle& nh, GlobalPlannerConf
   nh.param(ns + "/weights/heuristic",       cfg.weights.heuristic,      1.0);
 }
 
-inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostProcessConfig& cfg,
-                                        const std::string& ns = "global_post_processing") {
+inline void loadPostProcessConfig(const ros::NodeHandle& nh,
+                                  PostProcessConfig& cfg,
+                                  const std::string& ns) {
   nh.param(ns + "/smoother/weight_data",    cfg.smoother.weight_data,   0.2);
   nh.param(ns + "/smoother/weight_smooth",  cfg.smoother.weight_smooth, 0.35);
   nh.param(ns + "/smoother/tolerance",      cfg.smoother.tolerance,     0.001);
@@ -443,6 +472,14 @@ inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostPro
   nh.param(ns + "/profiler/min_velocity_denominator", cfg.profiler.min_velocity_denominator, 0.02);
 
   nh.param(ns + "/visualization/arrow_spacing_meters", cfg.visualization.arrow_spacing_meters, 0.2);
+}
+
+inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg) {
+  loadPostProcessConfig(nh, cfg, "global_post_processing");
+}
+
+inline void loadLocalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg) {
+  loadPostProcessConfig(nh, cfg, "local_post_processing");
 }
 
 inline void loadGlobalMainConfig(const ros::NodeHandle& nh, GlobalMainConfig& cfg) {

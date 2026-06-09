@@ -34,6 +34,36 @@ const RSPartType reedsSheppPathType[18][5] = {
     {RS_RIGHT, RS_LEFT, RS_STRAIGHT, RS_RIGHT, RS_LEFT}   // 17
 };
 
+const RSPathType reedsSheppPathTypes[18] = {
+    RSPathType::kPath0,
+    RSPathType::kPath1,
+    RSPathType::kPath2,
+    RSPathType::kPath3,
+    RSPathType::kPath4,
+    RSPathType::kPath5,
+    RSPathType::kPath6,
+    RSPathType::kPath7,
+    RSPathType::kPath8,
+    RSPathType::kPath9,
+    RSPathType::kPath10,
+    RSPathType::kPath11,
+    RSPathType::kPath12,
+    RSPathType::kPath13,
+    RSPathType::kPath14,
+    RSPathType::kPath15,
+    RSPathType::kPath16,
+    RSPathType::kPath17
+};
+
+RSPathType rsPathTypeFromParts(const RSPartType* parts) {
+  for (size_t i = 0; i < 18; ++i) {
+    if (parts == reedsSheppPathType[i]) {
+      return reedsSheppPathTypes[i];
+    }
+  }
+  return RSPathType::UNKNOWN;
+}
+
 } // anonymous namespace
 
 
@@ -492,6 +522,7 @@ bool ReedsSheppCurve::calculatePath(const State& start, const State& goal,
   if (best.total_length == std::numeric_limits<double>::infinity()) {
     return false;
   }
+  best.path_type = rsPathTypeFromParts(best.type);
 
   path.rho = rho;
   path.total_length = best.total_length * rho;
@@ -519,9 +550,7 @@ bool ReedsSheppCurve::calculatePath(const State& start, const State& goal,
     }
   }
 
-  // 실제 경로 타입 정보는 seg_steer / seg_dir / seg_lengths 배열로 완전히 전달된다.
-  // RSPathType 열거형과 1:1 매핑이 복잡하므로 UNKNOWN으로 명시적으로 표기한다.
-  path.type = RSPathType::UNKNOWN;
+  path.type = best.path_type;
   return true;
 }
 

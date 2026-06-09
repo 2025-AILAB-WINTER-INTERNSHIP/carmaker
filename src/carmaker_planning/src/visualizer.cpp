@@ -32,7 +32,7 @@ Visualizer::Visualizer(const ros::NodeHandle& advertise_nh,
   }
 
   param_nh_.param("global_post_processing/visualization/arrow_spacing_meters", arrow_spacing_meters_, 0.2);
-  param_nh_.param("local_planner/visualization/arrow_spacing_meters", arrow_spacing_meters_, arrow_spacing_meters_);
+  param_nh_.param("local_post_processing/visualization/arrow_spacing_meters", arrow_spacing_meters_, arrow_spacing_meters_);
 }
 
 void Visualizer::visualize(const Path& path,

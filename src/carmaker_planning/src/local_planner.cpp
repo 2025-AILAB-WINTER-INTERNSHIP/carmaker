@@ -8,6 +8,8 @@
 
 #include "carmaker_planning/local_planner.h"
 #include "carmaker_planning/math.h"
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace carmaker_planning {
@@ -126,7 +128,7 @@ double QuinticPathFitter::curvature(const Eigen::Matrix<double,6,1>& cx,
   return (denom > 1e-9) ? (xp*ypp - yp*xpp) / denom : 0.0;
 }
 
-Path QuinticPathFitter::fit(const State& ego, double ego_kappa,
+Path QuinticPathFitter::fit(const State& ego, double start_kappa,
                              const PathPoint& target, double resolution) const {
   const double L = dist(ego.x, ego.y, target.x, target.y);
   if (L < 1e-3) {
@@ -141,9 +143,9 @@ Path QuinticPathFitter::fit(const State& ego, double ego_kappa,
 
   // Second derivatives from curvature (unit-speed parametrization):
   //   x'' = -κ sinθ,   y'' = κ cosθ
-  const auto cx = solveAxis(ego.x,   cos0, -ego_kappa    * sin0,
+  const auto cx = solveAxis(ego.x,   cos0, -start_kappa    * sin0,
                              target.x, cosF, -target.kappa * sinF, L);
-  const auto cy = solveAxis(ego.y,   sin0,  ego_kappa    * cos0,
+  const auto cy = solveAxis(ego.y,   sin0,  start_kappa    * cos0,
                              target.y, sinF,  target.kappa * cosF, L);
 
   // Uniform arc-length sampling:
@@ -201,6 +203,95 @@ Path QuinticPathFitter::makeShortDistanceFallback(
   path.push_back(end);
 
   return path;
+}
+
+// ── LocalTrajectoryPlanner ───────────────────────────────────────────────────
+
+void LocalTrajectoryPlanner::configure(
+    const PostProcessConfig& post_process_config,
+    double wheelbase,
+    double min_turning_radius) {
+  post_process_config_ = post_process_config;
+  wheelbase_ = wheelbase > 0.1 ? wheelbase : 2.97;
+  min_turning_radius_ = min_turning_radius > 0.1 ? min_turning_radius : 5.2;
+  post_processor_ = std::make_unique<PostProcessor>(post_process_config_,
+                                                    wheelbase_,
+                                                    min_turning_radius_);
+  configured_ = true;
+}
+
+LocalPlanningResult LocalTrajectoryPlanner::planToEndpoint(
+    const PlanRequest& request) const {
+  using Clock = std::chrono::steady_clock;
+  const auto total_start = Clock::now();
+
+  LocalPlanningResult local_result;
+  if (!configured_ || !post_processor_) {
+    local_result.error("LocalTrajectoryPlanner: post processor is not configured.");
+    local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+    return local_result;
+  }
+
+  if (!validateRequest(request, local_result)) {
+    local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+    return local_result;
+  }
+
+  Path raw_path = fitter_.fit(request.ego,
+                              request.start_kappa,
+                              request.target,
+                              post_process_config_.resampler.resolution);
+  if (raw_path.empty()) {
+    local_result.warn("LocalTrajectoryPlanner: quintic fit returned an empty path.");
+    local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+    return local_result;
+  }
+
+  GlobalPlanningResult result;
+  result.path = std::move(raw_path);
+
+  const bool ok = post_processor_->process(result,
+                                           std::abs(request.start_vel),
+                                           /*enable_resampling=*/true,
+                                           /*enable_profiling=*/true);
+  local_result.logs = std::move(result.logs);
+  local_result.diagnostic = result.diagnostic;
+  local_result.resampling_time = result.resampling_time;
+  local_result.profiling_time = result.profiling_time;
+  local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+  if (!ok) {
+    return local_result;
+  }
+  local_result.path = std::move(result.path);
+  local_result.success = true;
+  return local_result;
+}
+
+bool LocalTrajectoryPlanner::validateRequest(
+    const PlanRequest& request,
+    LocalPlanningResult& result) const {
+  const auto finite = [](double value) { return std::isfinite(value); };
+  if (!finite(request.ego.x) || !finite(request.ego.y) ||
+      !finite(request.ego.theta) || !finite(request.ego.v) ||
+      !finite(request.start_kappa) ||
+      !finite(request.target.x) || !finite(request.target.y) ||
+      !finite(request.target.theta) || !finite(request.target.kappa) ||
+      !finite(request.start_vel)) {
+    result.error("LocalTrajectoryPlanner: request contains non-finite values.");
+    return false;
+  }
+
+  if (post_process_config_.resampler.resolution <= 1e-4) {
+    result.error("LocalTrajectoryPlanner: post-process resampling resolution must be positive.");
+    return false;
+  }
+
+  if (request.target.direction == 0) {
+    result.error("LocalTrajectoryPlanner: target direction must be non-zero.");
+    return false;
+  }
+
+  return true;
 }
 
 } // namespace carmaker_planning

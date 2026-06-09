@@ -36,7 +36,6 @@ void LocalizationNodelet::onInit() {
     ros::NodeHandle& nh = getNodeHandle();
     visualizer_ = std::make_shared<Visualizer>(nh);
 
-
     // SRP-based partitioned lifecycle initialization
     if (!loadParameters()) {
         NODELET_ERROR("Failed to load parameters. Aborting initialization to prevent crash.");

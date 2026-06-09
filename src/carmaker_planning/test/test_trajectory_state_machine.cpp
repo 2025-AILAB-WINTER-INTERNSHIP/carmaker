@@ -40,14 +40,13 @@ TrajectoryStateMachine::Config makeConfig(
   cfg.endpoint_xy_tol = 0.05;
   cfg.endpoint_yaw_tol = 0.2;
   cfg.stop_vel_tol = 0.05;
-  cfg.precision_zone_distance = 0.3;
   cfg.stop_duration = 0.5;
   cfg.presteer_duration = 0.5;
   cfg.idle_after_finish_duration = 0.5;
   return cfg;
 }
 
-TEST(TrajectoryStateMachineTest, FinalApproachZoneOutsideEndpointToleranceKeepsTracking) {
+TEST(TrajectoryStateMachineTest, OutsideEndpointToleranceKeepsTracking) {
   TrajectoryStateMachine state_machine(makeConfig());
   state_machine.setGlobalPath(makeSingleSegmentPath());
 
@@ -55,7 +54,6 @@ TEST(TrajectoryStateMachineTest, FinalApproachZoneOutsideEndpointToleranceKeepsT
 
   EXPECT_TRUE(result.publish);
   EXPECT_FALSE(result.finished);
-  EXPECT_TRUE(result.use_final_approach_speed_cap);
   EXPECT_EQ(result.state, TrajectoryStateMachine::PlannerState::kTracking);
   EXPECT_EQ(result.intent, TrajectoryStateMachine::TrajectoryIntent::kTrack);
   EXPECT_EQ(result.path_source, TrajectoryStateMachine::TrajectorySource::kLocalToEndpoint);

@@ -431,8 +431,8 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
     return;
   }
 
-  const int direction = trajectoryDirection(*msg);
-  if (direction == 0) {
+  const int new_direction = trajectoryDirection(*msg);
+  if (new_direction == 0) {
     ROS_WARN_THROTTLE(1.0, "Active trajectory has no valid direction field; ignoring.");
     return;
   }
@@ -441,10 +441,10 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
   new_trajectory.points.reserve(msg->points.size());
   bool mixed_direction = false;
   for (const auto& point : msg->points) {
-    if (point.direction == 0 || (point.direction < 0 ? -1 : 1) != direction) {
+    if (point.direction == 0 || (point.direction < 0 ? -1 : 1) != new_direction) {
       mixed_direction = true;
     }
-    new_trajectory.points.push_back(makePathPoint(point, direction));
+    new_trajectory.points.push_back(makePathPoint(point, new_direction));
   }
 
   if (mixed_direction) {
@@ -453,16 +453,36 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
     return;
   }
 
+  const bool new_stop_trajectory =
+      std::all_of(new_trajectory.points.begin(), new_trajectory.points.end(),
+                  [this](const PathPoint& point) {
+                    return point.target_speed <= stop_trajectory_velocity_epsilon_;
+                  });
+
+  std::size_t preserved_nearest_index = 0;
+  bool preserved_index = false;
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
+    const bool had_trajectory = trajectory_received_ && !active_trajectory_.empty();
+    preserved_index =
+        !new_stop_trajectory && had_trajectory &&
+        active_trajectory_.direction() == new_direction;
+    if (preserved_index) {
+      preserved_nearest_index =
+          std::min(nearest_index_, new_trajectory.points.size() - 1);
+    }
     active_trajectory_ = std::move(new_trajectory);
-    nearest_index_ = 0;
+    nearest_index_ = preserved_nearest_index;
     trajectory_received_ = !active_trajectory_.empty();
     last_trajectory_time_ = ros::Time::now();
   }
 
-  ROS_INFO_THROTTLE(1.0, "Active trajectory received: %zu points direction=%s",
-                    msg->points.size(), direction > 0 ? "D" : "R");
+  ROS_INFO_THROTTLE(1.0,
+                    "Active trajectory received: %zu points direction=%s nearest_index=%zu (%s)",
+                    msg->points.size(),
+                    new_direction > 0 ? "D" : "R",
+                    preserved_nearest_index,
+                    preserved_index ? "preserved" : "reset");
 }
 
 void ControlNode::odomCallback(const nav_msgs::OdometryConstPtr& msg)
@@ -827,22 +847,27 @@ double ControlNode::selectTargetSpeed(const ActiveTrajectory& trajectory,
     return 0.0;
   }
 
-  double target_speed = path[target_index].target_speed;
-  if (!std::isfinite(target_speed)) {
-    target_speed = 0.0;
+  const double raw_target_speed = path[target_index].target_speed;
+  if (std::isfinite(raw_target_speed) &&
+      raw_target_speed <= stop_trajectory_velocity_epsilon_) {
+    return 0.0;
   }
+  double target_speed = std::isfinite(raw_target_speed) ? raw_target_speed : 0.0;
 
-  double path_max_speed = 0.0;
-  for (const auto& point : path) {
-    if (std::isfinite(point.target_speed)) {
-      path_max_speed = std::max(path_max_speed, point.target_speed);
+  bool has_future_tracking_speed = false;
+  for (std::size_t i = target_index; i < path.size(); ++i) {
+    if (std::isfinite(path[i].target_speed) &&
+        path[i].target_speed > min_tracking_speed_) {
+      has_future_tracking_speed = true;
+      break;
     }
   }
 
   // Planner owns segment completion. If this is not an all-zero stop trajectory,
-  // keep a small tracking speed, but respect intentionally slow creep trajectories.
-  const double floor_speed = std::min(min_tracking_speed_, path_max_speed);
-  target_speed = std::max(target_speed, floor_speed);
+  // keep a small tracking speed only while there is still a cruising segment ahead.
+  if (has_future_tracking_speed) {
+    target_speed = std::max(target_speed, min_tracking_speed_);
+  }
 
   return clamp(target_speed, 0.0, max_target_speed_);
 }

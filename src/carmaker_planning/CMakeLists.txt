@@ -42,6 +42,7 @@ add_library(${PROJECT_NAME}_global
   src/hybrid_astar.cpp
   src/reeds_shepp.cpp
   src/post_processing.cpp
+  src/ros_utils.cpp
   src/visualizer.cpp
 )
 target_link_libraries(${PROJECT_NAME}_global ${catkin_LIBRARIES})

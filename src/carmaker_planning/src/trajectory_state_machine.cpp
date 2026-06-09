@@ -22,7 +22,6 @@ void TrajectoryStateMachine::configure(const Config& config) {
   config_.endpoint_xy_tol = std::max(0.0, config_.endpoint_xy_tol);
   config_.endpoint_yaw_tol = std::max(0.0, config_.endpoint_yaw_tol);
   config_.stop_vel_tol = std::max(0.0, config_.stop_vel_tol);
-  config_.precision_zone_distance = std::max(0.0, config_.precision_zone_distance);
   config_.stop_duration = std::max(0.0, config_.stop_duration);
   config_.presteer_duration = std::max(0.0, config_.presteer_duration);
   config_.idle_after_finish_duration = std::max(0.0, config_.idle_after_finish_duration);
@@ -100,17 +99,12 @@ TrajectoryStateMachine::update(const carmaker_planning::State& ego, double now_s
                         TrajectoryIntent::kFinishedHold, true);
   }
 
-  const bool use_final_approach_speed_cap = inFinalApproachZone(ego, endpoint);
   if (config_.mode == Mode::kGlobal) {
     return makeDecision(TrajectorySource::kActiveSegment,
-                        TrajectoryIntent::kTrack,
-                        false,
-                        use_final_approach_speed_cap);
+                        TrajectoryIntent::kTrack);
   }
   return makeDecision(TrajectorySource::kLocalToEndpoint,
-                      TrajectoryIntent::kTrack,
-                      false,
-                      use_final_approach_speed_cap);
+                      TrajectoryIntent::kTrack);
 }
 
 TrajectoryStateMachine::TrajectoryDecision TrajectoryStateMachine::stopForTimeout(double) {
@@ -160,14 +154,6 @@ bool TrajectoryStateMachine::endpointReachedWithTolerances(
   return endpointPoseReached(ego, endpoint, xy_tol, yaw_tol) && v <= vel_tol;
 }
 
-bool TrajectoryStateMachine::inFinalApproachZone(const carmaker_planning::State& ego,
-                                       const PathPoint& endpoint) const {
-  if (!activeSegmentIsFinal()) return false;
-  const double d_xy = dist(ego.x, ego.y, endpoint.x, endpoint.y);
-  return d_xy <= config_.precision_zone_distance &&
-         !endpointPoseReached(ego, endpoint, config_.endpoint_xy_tol, config_.endpoint_yaw_tol);
-}
-
 bool TrajectoryStateMachine::activeSegmentIsFinal() const {
   return segment_manager_.segmentCount() > 0 &&
          segment_manager_.activeSegmentIndex() + 1 >= segment_manager_.segmentCount();
@@ -176,8 +162,7 @@ bool TrajectoryStateMachine::activeSegmentIsFinal() const {
 TrajectoryStateMachine::TrajectoryDecision
 TrajectoryStateMachine::makeDecision(TrajectorySource path_source,
                            TrajectoryIntent intent,
-                           bool finished,
-                           bool use_final_approach_speed_cap) const {
+                           bool finished) const {
   Path active_segment;
   Path global_path;
   PathPoint endpoint;
@@ -193,7 +178,6 @@ TrajectoryStateMachine::makeDecision(TrajectorySource path_source,
   TrajectoryDecision result;
   result.publish = path_source != TrajectorySource::kNone && !active_segment.empty();
   result.finished = finished;
-  result.use_final_approach_speed_cap = use_final_approach_speed_cap;
   result.active_direction = pathDirection(active_segment, has_endpoint ? endpoint.direction : 1);
   result.active_segment_index = segment_manager_.activeSegmentIndex();
   result.state = state_;

@@ -62,12 +62,45 @@ PostProcessor::PostProcessor(const GlobalMainConfig& config)
     max_kappa_((config.vehicle.min_turning_radius > 0.1) ? (1.0 / config.vehicle.min_turning_radius) : 0.2),
     wheelbase_((config.vehicle.wheelbase > 0.1) ? config.vehicle.wheelbase : 2.97) {}
 
+PostProcessor::PostProcessor(const PostProcessConfig& config,
+                             double wheelbase,
+                             double min_turning_radius)
+  : config_(config),
+    max_kappa_((min_turning_radius > 0.1) ? (1.0 / min_turning_radius) : 0.2),
+    wheelbase_((wheelbase > 0.1) ? wheelbase : 2.97) {}
+
 bool PostProcessor::process(GlobalPlanningResult& result,
                             const GlobalMap& map,
                             double start_vel,
                             bool enable_smoothing,
                             bool enable_resampling,
                             bool enable_profiling) {
+  return runPipeline(result,
+                     &map,
+                     start_vel,
+                     enable_smoothing,
+                     enable_resampling,
+                     enable_profiling);
+}
+
+bool PostProcessor::process(GlobalPlanningResult& result,
+                            double start_vel,
+                            bool enable_resampling,
+                            bool enable_profiling) {
+  return runPipeline(result,
+                     nullptr,
+                     start_vel,
+                     /*enable_smoothing=*/false,
+                     enable_resampling,
+                     enable_profiling);
+}
+
+bool PostProcessor::runPipeline(GlobalPlanningResult& result,
+                                const GlobalMap* map,
+                                double start_vel,
+                                bool enable_smoothing,
+                                bool enable_resampling,
+                                bool enable_profiling) {
   using Clock = std::chrono::steady_clock;
 
   // 1. Resampling
@@ -82,8 +115,12 @@ bool PostProcessor::process(GlobalPlanningResult& result,
 
   // 2. Smoothing
   if (enable_smoothing) {
+    if (!map) {
+      result.logs.push_back({"ERROR", "PostProcessor smoothing requested without a map."});
+      return false;
+    }
     const auto start = Clock::now();
-    smooth(result.path, map, result.logs);
+    smooth(result.path, *map, result.logs);
     result.smoothing_time = std::chrono::duration<double>(Clock::now() - start).count();
   }
 
@@ -254,37 +291,35 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
     return true;
   }
 
-  resampled_path.clear();
   double step_size = config_.resampler.resolution;
   if (step_size <= 1e-4) {
     step_size = 0.1;
   }
 
-  double total_dist = 0;
+  double total_dist = 0.0;
   for (size_t i = 1; i < path.size(); ++i) {
-    total_dist += dist(path[i-1], path[i]);
+    total_dist += dist(path[i - 1], path[i]);
   }
+
+  resampled_path.clear();
   resampled_path.reserve(static_cast<size_t>(total_dist / step_size) + path.size());
 
-  std::vector<std::pair<size_t, size_t>> segments = splitIntoSegments(path);
-
-  for (size_t j = 0; j < segments.size(); ++j) {
-    size_t seg_start = segments[j].first;
-    size_t seg_end = segments[j].second;
-
-    Path segment(path.begin() + seg_start, path.begin() + seg_end + 1);
-
+  const auto segments = splitIntoSegments(path);
+  for (const auto& seg : segments) {
+    Path segment(path.begin() + static_cast<std::ptrdiff_t>(seg.first),
+                 path.begin() + static_cast<std::ptrdiff_t>(seg.second + 1));
     Path segment_resampled;
-    resampleSegment(segment, segment_resampled, logs);
-
+    if (!resampleSegment(segment, segment_resampled, logs)) {
+      return false;
+    }
     resampled_path.insert(resampled_path.end(), segment_resampled.begin(), segment_resampled.end());
   }
 
   // 1. Recalculate accumulated distance s
   double s = 0.0;
-  if (!resampled_path.empty()) resampled_path[0].s = 0.0;
+  if (!resampled_path.empty()) resampled_path.front().s = 0.0;
   for (size_t i = 1; i < resampled_path.size(); ++i) {
-    s += dist(resampled_path[i-1], resampled_path[i]);
+    s += dist(resampled_path[i - 1], resampled_path[i]);
     resampled_path[i].s = s;
   }
 
@@ -293,8 +328,13 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
 
 bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs) {
   if (input_segment.empty()) {
-    logs.push_back({"WARN", "resampleSegment bypassed: Input segment is empty."});
+    logs.push_back({"WARN", "resampleSegment bypassed: input segment is empty."});
     return false;
+  }
+
+  double step_size = config_.resampler.resolution;
+  if (step_size <= 1e-4) {
+    step_size = 0.1;
   }
 
   std::vector<double> s_vals;
@@ -303,27 +343,33 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
 
   double segment_len = 0.0;
   for (size_t i = 1; i < input_segment.size(); ++i) {
-    segment_len += dist(input_segment[i-1], input_segment[i]);
+    segment_len += dist(input_segment[i - 1], input_segment[i]);
     s_vals.push_back(segment_len);
   }
 
-  const double step_size = config_.resampler.resolution;
-  const int num_steps = std::floor(segment_len / step_size);
-  const int direction = input_segment[0].direction;
+  if (segment_len < 1e-6) {
+    output_path.push_back(input_segment.back());
+    output_path.back().s = 0.0;
+    return true;
+  }
+
+  const int num_steps = static_cast<int>(std::floor(segment_len / step_size));
+  const int direction = input_segment.front().direction < 0 ? -1 : 1;
 
   size_t current_idx = 0;
   for (int i = 0; i <= num_steps; ++i) {
-    double s_req = i * step_size;
-    while (current_idx < s_vals.size() - 1 && s_vals[current_idx + 1] < s_req) {
-      current_idx++;
+    const double s_req = i * step_size;
+    while (current_idx + 1 < s_vals.size() && s_vals[current_idx + 1] < s_req) {
+      ++current_idx;
     }
-    if (current_idx >= s_vals.size() - 1) {
+    if (current_idx + 1 >= s_vals.size()) {
       break;
     }
-    double s0 = s_vals[current_idx];
-    double s1 = s_vals[current_idx + 1];
-    double denominator = s1 - s0;
-    double ratio = (std::abs(denominator) > 1e-6) ? (s_req - s0) / denominator : 0.0;
+
+    const double s0 = s_vals[current_idx];
+    const double s1 = s_vals[current_idx + 1];
+    const double denominator = s1 - s0;
+    const double ratio = std::abs(denominator) > 1e-6 ? (s_req - s0) / denominator : 0.0;
 
     const auto& p0 = input_segment[current_idx];
     const auto& p1 = input_segment[current_idx + 1];
@@ -333,24 +379,22 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
     p.s = s_req;
     p.x = p0.x + ratio * (p1.x - p0.x);
     p.y = p0.y + ratio * (p1.y - p0.y);
-    p.theta = wrap_to_pi(p0.theta + ratio * wrap_to_pi(p1.theta - p0.theta));
     output_path.push_back(p);
   }
 
   const auto& last_pt = input_segment.back();
   if (output_path.empty()) {
-    logs.push_back({"WARN", "resampleSegment: Output path is empty after interpolation. Defaulting to last point."});
+    logs.push_back({"WARN", "resampleSegment: output path is empty after interpolation. Using last point."});
     output_path.push_back(last_pt);
+  } else if (dist(output_path.back(), last_pt) > 1e-3) {
+    PathPoint p_last = last_pt;
+    p_last.s = segment_len;
+    p_last.direction = direction;
+    output_path.push_back(p_last);
   } else {
-    double d = dist(output_path.back(), last_pt);
-    if (d > 1e-3) {
-      PathPoint p_last = last_pt;
-      p_last.s = segment_len;
-      output_path.push_back(p_last);
-    } else {
-      output_path.back() = last_pt;
-      output_path.back().s = segment_len;
-    }
+    output_path.back() = last_pt;
+    output_path.back().s = segment_len;
+    output_path.back().direction = direction;
   }
 
   return true;
@@ -579,7 +623,7 @@ std::vector<std::pair<size_t, size_t>> PostProcessor::splitIntoSegments(const Pa
 
 // ── TrajectoryValidator Implementation ────────────────────────────────
 
-TrajectoryValidator::TrajectoryValidator(const GlobalPostProcessConfig& config, double max_kappa, double wheelbase)
+TrajectoryValidator::TrajectoryValidator(const PostProcessConfig& config, double max_kappa, double wheelbase)
   : config_(config), max_kappa_(max_kappa), wheelbase_(wheelbase) {}
 
 TrajectoryDiagnostic TrajectoryValidator::validate(const Path& path, std::vector<std::pair<std::string, std::string>>& logs) const {
@@ -838,25 +882,25 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
   double s = 0.0;
   path[0].s = 0.0;
   for (size_t i = 1; i < path.size(); ++i) {
-    s += dist(path[i-1], path[i]);
+    s += dist(path[i - 1], path[i]);
     path[i].s = s;
   }
 
   // 2. Split path into segments of uniform direction
-  std::vector<std::pair<size_t, size_t>> segments = splitIntoSegments(path);
-
+  const auto segments = splitIntoSegments(path);
   for (const auto& seg : segments) {
-    size_t seg_start = seg.first;
-    size_t seg_end = seg.second;
-    size_t seg_len = seg_end - seg_start + 1;
+    const size_t seg_start = seg.first;
+    const size_t seg_end = seg.second;
+    const size_t seg_len = seg_end - seg_start + 1;
     if (seg_len == 0) continue;
 
-    int direction = path[seg_start].direction;
+    const int direction = path[seg_start].direction < 0 ? -1 : 1;
 
     // 2-1) Calculate heading (yaw) for this segment
     for (size_t i = 0; i < seg_len; ++i) {
-      size_t global_idx = seg_start + i;
-      double dx = 0.0, dy = 0.0;
+      const size_t global_idx = seg_start + i;
+      double dx = 0.0;
+      double dy = 0.0;
       if (i == 0) {
         if (seg_len > 1) {
           dx = path[global_idx + 1].x - path[global_idx].x;
@@ -881,20 +925,23 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       } else {
         path[global_idx].theta = (i > 0) ? path[global_idx - 1].theta : path[seg_start].theta;
       }
+      path[global_idx].direction = direction;
     }
 
     // 2-2) Calculate curvature (kappa) for this segment
     for (size_t i = 0; i < seg_len; ++i) {
-      size_t global_idx = seg_start + i;
+      const size_t global_idx = seg_start + i;
       if (i == 0 || i == seg_len - 1) {
         path[global_idx].kappa = 0.0;
       } else {
-        double ds1 = dist(path[global_idx - 1], path[global_idx]);
-        double ds2 = dist(path[global_idx], path[global_idx + 1]);
-        double raw_kappa = symmetricDiffCurvature(
-          path[global_idx - 1].theta, path[global_idx].theta, path[global_idx + 1].theta,
-          ds1, ds2);
-        path[global_idx].kappa = raw_kappa;
+        const double ds1 = dist(path[global_idx - 1], path[global_idx]);
+        const double ds2 = dist(path[global_idx], path[global_idx + 1]);
+        path[global_idx].kappa = symmetricDiffCurvature(
+            path[global_idx - 1].theta,
+            path[global_idx].theta,
+            path[global_idx + 1].theta,
+            ds1,
+            ds2);
       }
     }
 
@@ -909,7 +956,7 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       for (size_t i = 0; i < seg_len; ++i) {
         kappas[i] = path[seg_start + i].kappa;
       }
-      int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
+      const int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
       applyMovingAverage(kappas, half_w, 2);
       for (size_t i = 0; i < seg_len; ++i) {
         path[seg_start + i].kappa = kappas[i];
@@ -919,8 +966,8 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
 
   // 3. Cusp points (where direction changes) must have zero curvature for safety
   for (size_t i = 1; i < path.size(); ++i) {
-    if (path[i-1].direction != path[i].direction) {
-      path[i-1].kappa = 0.0;
+    if (path[i - 1].direction != path[i].direction) {
+      path[i - 1].kappa = 0.0;
       path[i].kappa = 0.0;
     }
   }
@@ -959,4 +1006,3 @@ void profilePath(Path& path, const KinematicLimits& limits,
 }
 
 } // namespace carmaker_planning
-

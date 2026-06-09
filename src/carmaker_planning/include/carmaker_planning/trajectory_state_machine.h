@@ -46,7 +46,6 @@ public:
     double endpoint_xy_tol = 0.3;
     double endpoint_yaw_tol = 0.2;
     double stop_vel_tol = 0.05;
-    double precision_zone_distance = 0.3;
     double stop_duration = 0.5;
     double presteer_duration = 0.5;
     double idle_after_finish_duration = 0.5;
@@ -55,7 +54,6 @@ public:
   struct TrajectoryDecision {
     bool publish = false;
     bool finished = false;
-    bool use_final_approach_speed_cap = false;
     int active_direction = 1;
     size_t active_segment_index = 0;
     PlannerState state = PlannerState::kIdle;
@@ -78,6 +76,7 @@ public:
   bool hasPath() const { return segment_manager_.hasPath(); }
   bool isIdle() const { return state_ == PlannerState::kIdle; }
   size_t segmentCount() const { return segment_manager_.segmentCount(); }
+  size_t activeSegmentIndex() const { return segment_manager_.activeSegmentIndex(); }
   PlannerState state() const { return state_; }
 
   static Mode parseMode(const std::string& mode);
@@ -95,13 +94,10 @@ private:
                                      double xy_tol,
                                      double yaw_tol,
                                      double vel_tol) const;
-  bool inFinalApproachZone(const carmaker_planning::State& ego,
-                           const PathPoint& endpoint) const;
   bool activeSegmentIsFinal() const;
   TrajectoryDecision makeDecision(TrajectorySource path_source,
                                   TrajectoryIntent intent,
-                                  bool finished = false,
-                                  bool use_final_approach_speed_cap = false) const;
+                                  bool finished = false) const;
   static int pathDirection(const Path& path, int fallback = 1);
 
   Config config_;

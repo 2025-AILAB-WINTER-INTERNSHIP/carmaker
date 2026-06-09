@@ -3,7 +3,7 @@
  * @brief ROS1 Nodelet: cusp-segment local planner with quintic polynomial paths.
  *
  * RULE §1 — SRP Callbacks: callbacks only store data under lock; processing delegated
- *            to processNewGlobalPath() and publishActiveTrajectory().
+ *            to consumePendingTrajectory() and publishTrackingTrajectory().
  * RULE §3 — Fine-grained Locks: lock scope restricted to data copy only; heavy
  *            operations (conversion, fitting, profiling) run outside the lock.
  * RULE §4 — YAML Config: all parameters loaded via NodeHandle::param().
@@ -12,7 +12,6 @@
 #include "carmaker_planning/local_planner_nodelet.h"
 #include "carmaker_planning/math.h"
 #include <pluginlib/class_list_macros.h>
-#include <carmaker_msgs/TrajectoryPoint.h>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -39,12 +38,10 @@ void LocalPlannerNodelet::onInit() {
 
   pose_timeout_ = std::max(0.0, pnh_.param<double>("local_planner/pose_timeout", 0.5));
 
-  final_approach_max_vel_ = std::max(0.0, pnh_.param<double>("local_planner/final_approach/max_vel", 0.15));
   state_machine_config_.mode = TrajectoryStateMachine::parseMode(mode_);
   state_machine_config_.endpoint_xy_tol = cfg_.endpoint_xy_tol;
   state_machine_config_.endpoint_yaw_tol = cfg_.endpoint_yaw_tol;
   state_machine_config_.stop_vel_tol = cfg_.stop_vel_tol;
-  state_machine_config_.precision_zone_distance = cfg_.precision_zone_distance;
   state_machine_config_.stop_duration =
       pnh_.param<double>("local_planner/transition/stop_duration", 0.6);
   state_machine_config_.presteer_duration =
@@ -53,18 +50,11 @@ void LocalPlannerNodelet::onInit() {
       pnh_.param<double>("local_planner/transition/idle_after_finish_duration", 0.5);
   trajectory_state_machine_.configure(state_machine_config_);
 
-  // KinematicLimits assembled from local_planner config
   wheelbase_ = pnh_.param<double>("vehicle/wheelbase", 2.97);
   min_turning_radius_ = pnh_.param<double>("vehicle/min_turning_radius", 5.2);
-
-  kinematic_limits_.max_vel       = cfg_.max_vel;
-  kinematic_limits_.max_accel     = cfg_.max_accel;
-  kinematic_limits_.max_decel     = cfg_.max_decel;
-  kinematic_limits_.max_jerk      = cfg_.max_jerk;
-  kinematic_limits_.max_steer_vel = pnh_.param<double>("vehicle/limits/max_steer_vel", 0.6108);
-  kinematic_limits_.max_lat_acc   = cfg_.max_lat_acc;
-  kinematic_limits_.min_vel_denom = pnh_.param<double>(
-    "local_planner/profiler/min_velocity_denominator", 0.02);
+  local_trajectory_planner_.configure(cfg_.post_process,
+                                      wheelbase_,
+                                      min_turning_radius_);
 
   // Topics (RULE §4 — no hardcoding)
   const std::string traj_in  = pnh_.param<std::string>(
@@ -101,17 +91,25 @@ void LocalPlannerNodelet::onInit() {
   const double period = 1.0 / std::max(cfg_.replanning_rate_hz, 1.0);
   publish_timer_ = nh_.createTimer(ros::Duration(period), &LocalPlannerNodelet::timerCallback, this);
 
+  diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh_, pnh_);
+  diagnostic_updater_->setHardwareID("carmaker_local_planner");
+  diagnostic_updater_->add("Planner Status", this, &LocalPlannerNodelet::produceDiagnostics);
+  pnh_.param<double>("diagnostic_period", diag_period_, 1.0);
+  diag_timer_ = nh_.createWallTimer(ros::WallDuration(diag_period_),
+                                    &LocalPlannerNodelet::diagTimerCallback,
+                                    this);
+
   NODELET_INFO("[LocalPlanner] Initialized (%.1f Hz).", cfg_.replanning_rate_hz);
   NODELET_INFO("[LocalPlanner] mode=%s trajectory_in=%s trajectory_out=%s",
                mode_.c_str(), traj_in.c_str(), traj_out.c_str());
   NODELET_DEBUG("[LocalPlanner] limits: max_vel=%.2f max_accel=%.2f max_decel=%.2f "
                 "max_jerk=%.2f max_lat_acc=%.2f max_steer_vel=%.2f",
-                kinematic_limits_.max_vel,
-                kinematic_limits_.max_accel,
-                kinematic_limits_.max_decel,
-                kinematic_limits_.max_jerk,
-                kinematic_limits_.max_lat_acc,
-                kinematic_limits_.max_steer_vel);
+                cfg_.post_process.profiler.max_vel,
+                cfg_.post_process.profiler.max_accel,
+                cfg_.post_process.profiler.max_decel,
+                cfg_.post_process.profiler.max_jerk,
+                cfg_.post_process.profiler.max_lat_acc,
+                cfg_.post_process.profiler.max_steer_vel);
 }
 
 // ── Callbacks (RULE §1 — store only, no processing) ──────────────────────────
@@ -163,10 +161,10 @@ void LocalPlannerNodelet::testPoseCallback(
 // ── Timer: main replanning loop ───────────────────────────────────────────────
 
 void LocalPlannerNodelet::timerCallback(const ros::TimerEvent&) {
-  if (resetOnTimeJump()) return;
+  if (handleTimeJump()) return;
 
   // Step 1: Consume pending global path (RULE §3 — lock only for flag/pointer swap)
-  processNewGlobalPath();
+  consumePendingTrajectory();
 
   // Step 2: Gate check
   {
@@ -183,18 +181,22 @@ void LocalPlannerNodelet::timerCallback(const ros::TimerEvent&) {
 
   // Step 3: Get ego state
   State ego;
-  if (!getEgoState(ego)) {
-    publishTimeoutStop();
+  if (!readEgoState(ego)) {
+    publishTimeoutStopTrajectory();
     return;
   }
 
   // Step 4: Publish active trajectory
-  publishActiveTrajectory(ego);
+  publishTrackingTrajectory(ego);
+}
+
+void LocalPlannerNodelet::diagTimerCallback(const ros::WallTimerEvent&) {
+  processDiagnostics();
 }
 
 // ── Core logic ────────────────────────────────────────────────────────────────
 
-bool LocalPlannerNodelet::resetOnTimeJump() {
+bool LocalPlannerNodelet::handleTimeJump() {
   const ros::Time now = ros::Time::now();
   if (now.isZero()) return false;
 
@@ -220,19 +222,24 @@ bool LocalPlannerNodelet::resetOnTimeJump() {
   return false;
 }
 
-void LocalPlannerNodelet::processNewGlobalPath() {
+bool LocalPlannerNodelet::consumePendingTrajectory() {
   carmaker_msgs::TrajectoryPath::ConstPtr msg;
   {
     // RULE §3 — minimal lock scope: only swap the pointer
     std::lock_guard<std::mutex> lock(raw_trajectory_mutex_);
-    if (!new_trajectory_flag_) return;
+    if (!new_trajectory_flag_) return false;
     msg = pending_trajectory_;
     new_trajectory_flag_ = false;
     pending_trajectory_.reset();
   }
 
+  if (!msg) {
+    NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Pending trajectory flag was set without a message.");
+    return false;
+  }
+
   // Heavy conversion happens OUTSIDE the lock (RULE §3 — scoped locks)
-  Path gp = fromTrajectoryMsg(*msg);
+  Path gp = trajectoryMsgToPath(*msg);
 
   {
     std::lock_guard<std::mutex> lock(state_machine_mutex_);
@@ -253,9 +260,10 @@ void LocalPlannerNodelet::processNewGlobalPath() {
                  gp.front().x, gp.front().y, gp.front().theta,
                  gp.back().x, gp.back().y, gp.back().theta);
   }
+  return true;
 }
 
-bool LocalPlannerNodelet::getEgoState(State& ego) {
+bool LocalPlannerNodelet::readEgoState(State& ego) {
   if (use_test_pose_) {
     if (!test_pose_received_) {
       NODELET_WARN_THROTTLE(2.0, "[LocalPlanner] Offline test pose not yet received.");
@@ -298,7 +306,87 @@ bool LocalPlannerNodelet::getEgoState(State& ego) {
   return true;
 }
 
-void LocalPlannerNodelet::publishActiveTrajectory(const State& ego) {
+void LocalPlannerNodelet::processDiagnostics() {
+  if (diagnostic_updater_) {
+    diagnostic_updater_->update();
+  }
+}
+
+void LocalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
+  LocalPlanningDiagnostic last_res;
+  {
+    std::lock_guard<std::mutex> lock(diag_mutex_);
+    last_res = last_diag_;
+  }
+
+  bool has_path = false;
+  bool idle = true;
+  size_t segment_count = 0;
+  size_t active_segment = 0;
+  TrajectoryStateMachine::PlannerState state = TrajectoryStateMachine::PlannerState::kIdle;
+  {
+    std::lock_guard<std::mutex> lock(state_machine_mutex_);
+    has_path = trajectory_state_machine_.hasPath();
+    idle = trajectory_state_machine_.isIdle();
+    segment_count = trajectory_state_machine_.segmentCount();
+    active_segment = trajectory_state_machine_.activeSegmentIndex();
+    state = trajectory_state_machine_.state();
+  }
+
+  if (!has_path) {
+    stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Waiting for global trajectory");
+  } else if (last_res.success) {
+    stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Publishing trajectory");
+  } else if (idle) {
+    stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Idle");
+  } else {
+    stat.summary(diagnostic_updater::DiagnosticStatusWrapper::WARN, "Last local trajectory failed");
+  }
+
+  stat.add("Has Global Path", has_path ? "True" : "False");
+  stat.add("Mode", mode_);
+  stat.add("State", trajectoryStateString(state));
+  stat.add("Active Segment Index", active_segment);
+  stat.add("Segment Count", segment_count);
+  stat.add("Total Trajectories", total_trajectories_.load());
+  stat.add("Successful Trajectories", successful_trajectories_.load());
+  stat.add("Failed Trajectories", failed_trajectories_.load());
+  stat.add("Last Success", last_res.success ? "True" : "False");
+  stat.add("Last Path Points", static_cast<int>(last_res.path_size));
+  stat.add("Last Path Length (m)", last_res.path_length);
+  stat.add("Last Total Time (s)", last_res.total_time);
+  stat.add("Resampling Time (s)", last_res.resampling_time);
+  stat.add("Velocity Profiling Time (s)", last_res.profiling_time);
+  stat.add("Trajectory Valid", last_res.diagnostic.is_valid ? "True" : "False");
+  stat.add("Curvature Violations Count", last_res.diagnostic.curv_violations);
+  stat.add("Yaw Violations Count", last_res.diagnostic.yaw_violations);
+  stat.add("Timestamp Violations Count", last_res.diagnostic.time_violations);
+  stat.add("Velocity Violations Count", last_res.diagnostic.vel_violations);
+  stat.add("Acceleration Violations Count", last_res.diagnostic.acc_violations);
+  stat.add("Jerk Violations Count", last_res.diagnostic.jerk_violations);
+  stat.add("Steering Velocity Violations Count", last_res.diagnostic.steer_vel_violations);
+  stat.add("Max Curvature Violation (rad/m)", last_res.diagnostic.max_curv_violation);
+  stat.add("Max Yaw Error (deg)", last_res.diagnostic.max_yaw_error_rad < 0.0 ? -1.0 : last_res.diagnostic.max_yaw_error_rad * 180.0 / M_PI);
+  stat.add("Max Time Error (s)", last_res.diagnostic.max_time_error_sec);
+  stat.add("Max Velocity Violation (m/s)", last_res.diagnostic.max_vel_violation);
+  stat.add("Max Acceleration Violation (m/s^2)", last_res.diagnostic.max_acc_violation);
+  stat.add("Max Jerk Violation (m/s^3)", last_res.diagnostic.max_jerk_violation);
+  stat.add("Max Steering Velocity Violation (rad/s)", last_res.diagnostic.max_steer_vel_violation);
+}
+
+void LocalPlannerNodelet::updateLocalDiagnostics(const LocalPlanningResult& result) {
+  total_trajectories_++;
+  if (result.success) {
+    successful_trajectories_++;
+  } else {
+    failed_trajectories_++;
+  }
+
+  std::lock_guard<std::mutex> lock(diag_mutex_);
+  last_diag_ = LocalPlanningDiagnostic(result);
+}
+
+void LocalPlannerNodelet::publishTrackingTrajectory(const State& ego) {
   TrajectoryStateMachine::TrajectoryDecision decision;
   {
     std::lock_guard<std::mutex> lock(state_machine_mutex_);
@@ -316,24 +404,24 @@ void LocalPlannerNodelet::publishActiveTrajectory(const State& ego) {
     return;
   }
 
-  Path path = buildPublishPath(decision, ego);
-  if (path.empty()) {
+  Path path;
+  if (!composeTrajectoryForDecision(decision, ego, path)) {
     NODELET_WARN_THROTTLE(1.0,
-                          "[LocalPlanner] Built an empty trajectory: state=%s intent=%s source=%s",
+                          "[LocalPlanner] Failed to build trajectory: state=%s intent=%s source=%s",
                           trajectoryStateString(decision.state),
                           trajectoryIntentString(decision.intent),
                           trajectorySourceString(decision.path_source));
     return;
   }
 
-  trajectory_pub_.publish(toTrajectoryMsg(path, global_frame_));
-  publishDebug(path);
+  trajectory_pub_.publish(pathToTrajectoryMsg(path, global_frame_));
+  publishDebugTrajectory(path);
 
   const double endpoint_dist = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
   NODELET_DEBUG_THROTTLE(1.0,
                          "[LocalPlanner] Publish: state=%s intent=%s source=%s seg=%zu "
                          "dir=%d pts=%zu len=%.2f m duration=%.2f s "
-                         "ego=(%.2f, %.2f, %.2f, v=%.2f) endpoint_dist=%.2f m final_cap=%s",
+                         "ego=(%.2f, %.2f, %.2f, v=%.2f) endpoint_dist=%.2f m",
                          trajectoryStateString(decision.state),
                          trajectoryIntentString(decision.intent),
                          trajectorySourceString(decision.path_source),
@@ -346,8 +434,7 @@ void LocalPlannerNodelet::publishActiveTrajectory(const State& ego) {
                          ego.y,
                          ego.theta,
                          ego.v,
-                         endpoint_dist,
-                         decision.use_final_approach_speed_cap ? "true" : "false");
+                         endpoint_dist);
 
 }
 
@@ -394,7 +481,7 @@ void LocalPlannerNodelet::logDecisionTransition(
   last_logged_intent_ = decision.intent;
 }
 
-void LocalPlannerNodelet::publishTimeoutStop() {
+void LocalPlannerNodelet::publishTimeoutStopTrajectory() {
   TrajectoryStateMachine::TrajectoryDecision decision;
   {
     std::lock_guard<std::mutex> lock(state_machine_mutex_);
@@ -403,13 +490,13 @@ void LocalPlannerNodelet::publishTimeoutStop() {
   if (!decision.publish) return;
   State ego;
   ego.v = 0.0;
-  Path path = buildPublishPath(decision, ego);
-  if (path.empty()) {
-    NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Timeout stop produced an empty trajectory.");
+  Path path;
+  if (!composeTrajectoryForDecision(decision, ego, path)) {
+    NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Timeout stop failed to build a trajectory.");
     return;
   }
-  trajectory_pub_.publish(toTrajectoryMsg(path, global_frame_));
-  publishDebug(path);
+  trajectory_pub_.publish(pathToTrajectoryMsg(path, global_frame_));
+  publishDebugTrajectory(path);
   NODELET_WARN_THROTTLE(1.0,
                         "[LocalPlanner] Timeout stop publish: state=%s source=%s pts=%zu",
                         trajectoryStateString(decision.state),
@@ -419,44 +506,57 @@ void LocalPlannerNodelet::publishTimeoutStop() {
 
 // ── Debug Visualization ───────────────────────────────────────────────────────
 
-void LocalPlannerNodelet::publishDebug(const Path& path) {
+void LocalPlannerNodelet::publishDebugTrajectory(const Path& path) {
   if (!visualizer_) return;
   visualizer_->visualize(path, {}, {}, global_frame_, min_turning_radius_);
 }
 
-Path LocalPlannerNodelet::buildPublishPath(const TrajectoryStateMachine::TrajectoryDecision& decision,
-                                           const State& ego) const {
-  Path path;
+bool LocalPlannerNodelet::composeTrajectoryForDecision(
+    const TrajectoryStateMachine::TrajectoryDecision& decision,
+    const State& ego,
+    Path& path) {
+  path.clear();
   if (decision.path_source == TrajectoryStateMachine::TrajectorySource::kActiveSegment) {
     path = decision.active_segment;
+    LocalPlanningResult result;
+    result.success = !path.empty();
+    result.path = path;
+    updateLocalDiagnostics(result);
   } else if (decision.path_source == TrajectoryStateMachine::TrajectorySource::kLocalToEndpoint) {
-    QuinticPathFitter fitter;
-    path = fitter.fit(ego,
-                      getEgoKappa(ego, decision.global_path),
-                      decision.endpoint,
-                      cfg_.sample_resolution);
-    if (path.empty()) return {};
-
-    normalizePath(path, decision.endpoint.direction);
-    KinematicLimits limits = kinematic_limits_;
-    if (decision.use_final_approach_speed_cap) {
-      limits.max_vel = std::min(limits.max_vel, final_approach_max_vel_);
+    double start_kappa = 0.0;
+    if (!estimateStartKappa(ego, decision.global_path, start_kappa)) {
+      NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Cannot estimate ego curvature: global path is empty.");
+      LocalPlanningResult result;
+      result.error("LocalPlannerNodelet: cannot estimate start curvature because global path is empty.");
+      updateLocalDiagnostics(result);
+      return false;
     }
-    profilePath(path, limits, wheelbase_, std::abs(ego.v));
+    LocalTrajectoryPlanner::PlanRequest request;
+    request.ego = ego;
+    request.start_kappa = start_kappa;
+    request.target = decision.endpoint;
+    request.start_vel = ego.v;
+    LocalPlanningResult result = local_trajectory_planner_.planToEndpoint(request);
+    logPlannerMessages("[LocalPlanner]", result.logs);
+    updateLocalDiagnostics(result);
+    if (!result.success) {
+      return false;
+    }
+    path = std::move(result.path);
   } else {
-    return {};
+    return false;
   }
 
-  normalizePath(path, decision.active_direction);
-  if (decision.use_final_approach_speed_cap) {
-    capVelocity(path, final_approach_max_vel_);
-  }
-  applyTrajectoryIntent(path, decision.intent);
-  return path;
+  applyStopIntentIfNeeded(path, decision.intent);
+  return !path.empty();
 }
 
-double LocalPlannerNodelet::getEgoKappa(const State& ego, const Path& global_path) const {
-  if (global_path.empty()) return 0.0;
+bool LocalPlannerNodelet::estimateStartKappa(
+    const State& ego,
+    const Path& global_path,
+    double& start_kappa) const {
+  start_kappa = 0.0;
+  if (global_path.empty()) return false;
 
   size_t best_idx = 0;
   double best_d = std::numeric_limits<double>::max();
@@ -467,10 +567,11 @@ double LocalPlannerNodelet::getEgoKappa(const State& ego, const Path& global_pat
       best_idx = i;
     }
   }
-  return global_path[best_idx].kappa;
+  start_kappa = global_path[best_idx].kappa;
+  return true;
 }
 
-void LocalPlannerNodelet::applyTrajectoryIntent(
+void LocalPlannerNodelet::applyStopIntentIfNeeded(
     Path& path,
     TrajectoryStateMachine::TrajectoryIntent intent) const {
   if (intent != TrajectoryStateMachine::TrajectoryIntent::kStopCurrent &&
@@ -485,102 +586,6 @@ void LocalPlannerNodelet::applyTrajectoryIntent(
     pt.a = 0.0;
     pt.t = 0.0;
   }
-}
-
-void LocalPlannerNodelet::normalizePath(Path& path, int direction) const {
-  if (path.empty()) return;
-  direction = direction < 0 ? -1 : 1;
-  path[0].s = 0.0;
-  path[0].direction = direction;
-  for (size_t i = 1; i < path.size(); ++i) {
-    path[i].s = path[i - 1].s + dist(path[i - 1], path[i]);
-    path[i].direction = direction;
-  }
-}
-
-void LocalPlannerNodelet::capVelocity(Path& path, double max_velocity) const {
-  const double cap = std::max(0.0, max_velocity);
-  for (auto& pt : path) {
-    pt.v = std::min(std::max(0.0, pt.v), cap);
-    if (std::abs(pt.a) > cap && cap > 0.0) {
-      pt.a = std::copysign(cap, pt.a);
-    }
-  }
-}
-
-// ── Message Conversion (static helpers) ──────────────────────────────────────
-
-Path LocalPlannerNodelet::fromTrajectoryMsg(const carmaker_msgs::TrajectoryPath& msg) {
-  Path path;
-  path.reserve(msg.points.size());
-  std::vector<int> raw_direction(msg.points.size(), 0);
-  for (size_t i = 0; i < msg.points.size(); ++i) {
-    const double sv = msg.points[i].longitudinal_velocity;
-    if (sv > 1e-3) {
-      raw_direction[i] = 1;
-    } else if (sv < -1e-3) {
-      raw_direction[i] = -1;
-    }
-  }
-
-  std::vector<int> next_non_zero(msg.points.size(), 0);
-  int upcoming = 0;
-  for (size_t i = msg.points.size(); i-- > 0;) {
-    if (raw_direction[i] != 0) upcoming = raw_direction[i];
-    next_non_zero[i] = upcoming;
-  }
-
-  int active_direction =
-      next_non_zero.empty() || next_non_zero.front() == 0 ? 1 : next_non_zero.front();
-  for (size_t i = 0; i < msg.points.size(); ++i) {
-    const auto& tp = msg.points[i];
-    if (tp.direction != 0) {
-      active_direction = tp.direction < 0 ? -1 : 1;
-    } else if (raw_direction[i] != 0) {
-      active_direction = raw_direction[i];
-    }
-    PathPoint pt;
-    pt.x         = tp.pose.position.x;
-    pt.y         = tp.pose.position.y;
-    pt.theta     = quaternionToYaw(tp.pose.orientation);
-    pt.kappa     = tp.curvature;
-    pt.t         = tp.time_from_start.toSec();
-    const double sv = tp.longitudinal_velocity;
-    pt.direction = active_direction;
-    pt.v         = std::abs(sv);
-    pt.a         = tp.longitudinal_acceleration * pt.direction;
-    path.push_back(pt);
-  }
-  if (!path.empty()) {
-    path[0].s = 0.0;
-    for (size_t i = 1; i < path.size(); ++i)
-      path[i].s = path[i-1].s + dist(path[i-1], path[i]);
-  }
-  return path;
-}
-
-carmaker_msgs::TrajectoryPath LocalPlannerNodelet::toTrajectoryMsg(
-    const Path& path, const std::string& frame_id) {
-  carmaker_msgs::TrajectoryPath msg;
-  msg.header.stamp    = ros::Time::now();
-  msg.header.frame_id = frame_id;
-  msg.points.reserve(path.size());
-  for (const auto& pt : path) {
-    carmaker_msgs::TrajectoryPoint tp;
-    tp.pose.position.x    = pt.x;
-    tp.pose.position.y    = pt.y;
-    tp.pose.position.z    = 0.0;
-    const double hy       = pt.theta * 0.5;
-    tp.pose.orientation.z = std::sin(hy);
-    tp.pose.orientation.w = std::cos(hy);
-    tp.longitudinal_velocity     = pt.v * pt.direction;
-    tp.longitudinal_acceleration = pt.a * pt.direction;
-    tp.curvature                 = pt.kappa;
-    tp.direction                 = pt.direction < 0 ? -1 : 1;
-    tp.time_from_start           = ros::Duration(pt.t);
-    msg.points.push_back(tp);
-  }
-  return msg;
 }
 
 } // namespace carmaker_planning

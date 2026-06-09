@@ -5,6 +5,8 @@
 #ifndef CARMAKER_PLANNING_POST_PROCESSING_H
 #define CARMAKER_PLANNING_POST_PROCESSING_H
 
+#include <utility>
+
 #include "carmaker_planning/types.h"
 #include "carmaker_planning/global_map.h"
 
@@ -23,6 +25,9 @@ struct KinematicLimits {
 class PostProcessor {
 public:
   explicit PostProcessor(const GlobalMainConfig& config);
+  PostProcessor(const PostProcessConfig& config,
+                double wheelbase,
+                double min_turning_radius);
   ~PostProcessor() = default;
   PostProcessor(const PostProcessor&) = delete;
   PostProcessor& operator=(const PostProcessor&) = delete;
@@ -33,8 +38,18 @@ public:
                bool enable_smoothing,
                bool enable_resampling,
                bool enable_profiling);
+  bool process(GlobalPlanningResult& result,
+               double start_vel,
+               bool enable_resampling,
+               bool enable_profiling);
 
 private:
+  bool runPipeline(GlobalPlanningResult& result,
+                   const GlobalMap* map,
+                   double start_vel,
+                   bool enable_smoothing,
+                   bool enable_resampling,
+                   bool enable_profiling);
   bool smooth(Path& path, const GlobalMap& map, std::vector<std::pair<std::string, std::string>>& logs);
   bool resample(const Path& path, Path& resampled_path, std::vector<std::pair<std::string, std::string>>& logs);
   bool resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs);
@@ -46,14 +61,14 @@ private:
   std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) const;
   void updateGeometryProperties(Path& path) const;
 
-  GlobalPostProcessConfig config_;
+  PostProcessConfig config_;
   double max_kappa_ = 0.2;
   double wheelbase_ = 2.97;
 };
 
 class TrajectoryValidator {
 public:
-  TrajectoryValidator(const GlobalPostProcessConfig& config, double max_kappa, double wheelbase);
+  TrajectoryValidator(const PostProcessConfig& config, double max_kappa, double wheelbase);
   ~TrajectoryValidator() = default;
   TrajectoryValidator(const TrajectoryValidator&) = delete;
   TrajectoryValidator& operator=(const TrajectoryValidator&) = delete;
@@ -70,7 +85,7 @@ private:
   void validateSteeringVelocity(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
   bool isNearCusp(const Path& path, size_t index, double radius_threshold = 0.2) const;
 
-  GlobalPostProcessConfig config_;
+  PostProcessConfig config_;
   double max_kappa_;
   double wheelbase_;
 };

@@ -40,31 +40,32 @@ local_planner:
 
   replanning:
     rate_hz: 10.0 # [Hz]  local path refresh rate
-    dist_threshold: 0.5 # [m]   lateral deviation triggering immediate replan (reserved)
 
   arrival:
     endpoint_xy_tol: 0.05 # [m] XY distance threshold to declare endpoint reached
     endpoint_yaw_tol: 0.2 # [rad] heading error threshold to declare endpoint reached
     stop_vel_tol: 0.05 # [m/s] velocity threshold before segment transition/final hold
-    precision_zone_distance: 0.3 # [m] final endpoint zone where creep speed cap applies
-
-  final_approach:
-    max_vel: 0.15 # [m/s] creep speed cap inside final precision zone
 
   transition:
     stop_duration: 0.5 # [s] hold zero-speed current segment after cusp/final arrival
     presteer_duration: 0.5 # [s] publish zero-speed next segment before tracking
     idle_after_finish_duration: 0.5 # [s] publish final zero-speed trajectory before idle
 
-  sample_resolution: 0.1 # [m]  uniform arc-length step between output path points
-
+local_post_processing:
+  resampler:
+    resolution: 0.1 # [m] common local/global path resampling interval
   profiler:
     max_vel: 2.0 # [m/s]
     max_accel: 0.8 # [m/s^2]
     max_decel: 0.8 # [m/s^2]
     max_jerk: 1.5 # [m/s^3]
+    max_steer_vel: 0.6108 # [rad/s]
     max_lat_acc: 0.8 # [m/s^2]
+    goal_vel: 0.0
+    gear_shift_duration: 1.0
     min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
-
+  validator:
+    time_tolerance_ms: 1.0
+    yaw_tolerance_deg: 5.0
   visualization:
     arrow_spacing_meters: 0.2

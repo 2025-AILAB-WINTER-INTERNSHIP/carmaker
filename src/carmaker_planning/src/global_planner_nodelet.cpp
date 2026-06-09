@@ -6,8 +6,6 @@
 #include "carmaker_planning/global_planner_nodelet.h"
 #include <pluginlib/class_list_macros.h>
 #include <cmath>
-#include <carmaker_msgs/TrajectoryPath.h>
-#include <carmaker_msgs/TrajectoryPoint.h>
 
 namespace carmaker_planning {
 
@@ -137,10 +135,8 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
       start_state.theta = yaw;
     }
     catch (tf2::TransformException &ex) {
-      NODELET_WARN("[GlobalPlanner] Could not look up ego pose from TF: %s. Using origin (0, 0, 0) as start.", ex.what());
-      start_state.x = 0.0;
-      start_state.y = 0.0;
-      start_state.theta = 0.0;
+      NODELET_WARN("[GlobalPlanner] Could not look up ego pose from TF: %s. Dropping plan request.", ex.what());
+      return false;
     }
   }
   return true;
@@ -164,37 +160,6 @@ State GlobalPlannerNodelet::getGoalState(const geometry_msgs::PoseStamped& msg) 
 void GlobalPlannerNodelet::publishVisualization(const Path& path) {
   visualizer_->visualize(path, planner_->getSearchTree(), planner_->getTreeBranches(),
                          global_frame_, config_.vehicle.min_turning_radius);
-}
-
-void GlobalPlannerNodelet::publishTrajectory(const Path& path) {
-  carmaker_msgs::TrajectoryPath traj_msg;
-  traj_msg.header.stamp = ros::Time::now();
-  traj_msg.header.frame_id = global_frame_;
-  traj_msg.points.reserve(path.size());
-
-  for (const auto& pt : path) {
-    carmaker_msgs::TrajectoryPoint tp;
-
-    // Publish trajectory referred directly to the rear axle center (no bumper shift)
-    tp.pose.position.x = pt.x;
-    tp.pose.position.y = pt.y;
-    tp.pose.position.z = 0.0;
-
-    double half_theta = pt.theta * 0.5;
-    tp.pose.orientation.x = 0.0;
-    tp.pose.orientation.y = 0.0;
-    tp.pose.orientation.z = std::sin(half_theta);
-    tp.pose.orientation.w = std::cos(half_theta);
-
-    tp.longitudinal_velocity = pt.v * pt.direction;
-    tp.longitudinal_acceleration = pt.a * pt.direction;
-    tp.curvature = pt.kappa;
-    tp.direction = pt.direction < 0 ? -1 : 1;
-    tp.time_from_start = ros::Duration(pt.t);
-
-    traj_msg.points.push_back(tp);
-  }
-  trajectory_pub_.publish(traj_msg);
 }
 
 void GlobalPlannerNodelet::goalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
@@ -258,18 +223,7 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
     last_diag_ = GlobalPlanningDiagnostic(result);
   }
 
-  // Log bubbled diagnostic messages from core planner & post-processor via Nodelet logger
-  for (const auto& log : result.logs) {
-    if (log.first == "WARN") {
-      NODELET_WARN("[GlobalPlanner] %s", log.second.c_str());
-    } else if (log.first == "INFO") {
-      NODELET_INFO("[GlobalPlanner] %s", log.second.c_str());
-    } else if (log.first == "ERROR") {
-      NODELET_ERROR("[GlobalPlanner] %s", log.second.c_str());
-    } else if (log.first == "DEBUG") {
-      NODELET_DEBUG("[GlobalPlanner] %s", log.second.c_str());
-    }
-  }
+  logPlannerMessages("[GlobalPlanner]", result.logs);
 
   if (result.success()) {
     successful_plans_++;
@@ -292,7 +246,7 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
     publishVisualization(result.path);
 
     // Publish TrajectoryPath msg
-    publishTrajectory(result.path);
+    trajectory_pub_.publish(pathToTrajectoryMsg(result.path, global_frame_));
   }
   else {
     failed_plans_++;

@@ -20,6 +20,7 @@
 
 #include "carmaker_planning/global_planner.h"
 #include "carmaker_planning/global_map.h"
+#include "carmaker_planning/ros_utils.h"
 #include "carmaker_planning/visualizer.h"
 #include <carmaker_msgs/DynamicsInfo.h>
 
@@ -51,7 +52,6 @@ private:
   bool getStartState(State& start_state);
   State getGoalState(const geometry_msgs::PoseStamped& msg);
   void publishVisualization(const Path& path);
-  void publishTrajectory(const Path& path);
 
   // ROS Infrastructure
   ros::NodeHandle nh_, pnh_;
