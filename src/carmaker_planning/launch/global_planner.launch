@@ -19,5 +19,5 @@
   </node>
 
   <!-- RViz Visualizer -->
-  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find carmaker_planning)/config/global_planner.rviz" required="false" if="$(arg rviz)" />
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find carmaker_planning)/config/planner.rviz" required="false" if="$(arg rviz)" />
 </launch>

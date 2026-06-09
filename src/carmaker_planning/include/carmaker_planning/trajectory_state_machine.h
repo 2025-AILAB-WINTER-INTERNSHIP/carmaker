@@ -110,6 +110,38 @@ private:
   double transition_until_sec_ = 0.0;
 };
 
+inline const char* trajectoryStateString(TrajectoryStateMachine::PlannerState state) {
+  switch (state) {
+    case TrajectoryStateMachine::PlannerState::kIdle: return "Idle";
+    case TrajectoryStateMachine::PlannerState::kTracking: return "Tracking";
+    case TrajectoryStateMachine::PlannerState::kStopping: return "Stopping";
+    case TrajectoryStateMachine::PlannerState::kPresteering: return "Presteering";
+    case TrajectoryStateMachine::PlannerState::kFinishedHold: return "FinishedHold";
+  }
+  return "Unknown";
+}
+
+inline const char* trajectoryIntentString(TrajectoryStateMachine::TrajectoryIntent intent) {
+  switch (intent) {
+    case TrajectoryStateMachine::TrajectoryIntent::kNone: return "None";
+    case TrajectoryStateMachine::TrajectoryIntent::kTrack: return "Track";
+    case TrajectoryStateMachine::TrajectoryIntent::kStopCurrent: return "StopCurrent";
+    case TrajectoryStateMachine::TrajectoryIntent::kPresteerNext: return "PresteerNext";
+    case TrajectoryStateMachine::TrajectoryIntent::kEmergencyStop: return "EmergencyStop";
+    case TrajectoryStateMachine::TrajectoryIntent::kFinishedHold: return "FinishedHold";
+  }
+  return "Unknown";
+}
+
+inline const char* trajectorySourceString(TrajectoryStateMachine::TrajectorySource source) {
+  switch (source) {
+    case TrajectoryStateMachine::TrajectorySource::kNone: return "None";
+    case TrajectoryStateMachine::TrajectorySource::kActiveSegment: return "ActiveSegment";
+    case TrajectoryStateMachine::TrajectorySource::kLocalToEndpoint: return "LocalToEndpoint";
+  }
+  return "Unknown";
+}
+
 } // namespace carmaker_planning
 
 #endif // CARMAKER_PLANNING_TRAJECTORY_STATE_MACHINE_H

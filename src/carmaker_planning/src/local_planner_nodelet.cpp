@@ -33,7 +33,7 @@ void LocalPlannerNodelet::onInit() {
   pnh_.param<bool>("setting/test_pose/enabled", use_test_pose_, false);
   pnh_.param<std::string>("local_planner/mode", mode_, "local");
   if (mode_ != "local" && mode_ != "global") {
-    NODELET_WARN("Unknown local_planner/mode='%s'. Falling back to 'local'.", mode_.c_str());
+    NODELET_WARN("[LocalPlanner] Unknown local_planner/mode='%s'. Falling back to 'local'.", mode_.c_str());
     mode_ = "local";
   }
 
@@ -83,26 +83,35 @@ void LocalPlannerNodelet::onInit() {
         "setting/test_pose/topic", "/planning/start");
     test_pose_sub_ = nh_.subscribe(topic, 1,
         &LocalPlannerNodelet::testPoseCallback, this);
-    NODELET_INFO("LocalPlanner pose source: offline test pose (%s)", topic.c_str());
+    NODELET_INFO("[LocalPlanner] Pose source: offline test pose (%s)", topic.c_str());
   } else if (use_gt_pose_) {
     const std::string dyn = pnh_.param<std::string>(
         "topics/subscribe/dynamics", "/carmaker/dynamic_info");
     dynamics_sub_ = nh_.subscribe(dyn, 10,
                        &LocalPlannerNodelet::dynamicsCallback, this);
-    NODELET_INFO("LocalPlanner pose source: GT dynamics (%s)", dyn.c_str());
+    NODELET_INFO("[LocalPlanner] Pose source: GT dynamics (%s)", dyn.c_str());
   } else {
     const std::string odom = pnh_.param<std::string>(
         "topics/subscribe/odom", "/localization/odom");
     odom_sub_ = nh_.subscribe(odom, 10,
                     &LocalPlannerNodelet::odomCallback, this);
-    NODELET_INFO("LocalPlanner pose source: EKF odom (%s)", odom.c_str());
+    NODELET_INFO("[LocalPlanner] Pose source: EKF odom (%s)", odom.c_str());
   }
 
   const double period = 1.0 / std::max(cfg_.replanning_rate_hz, 1.0);
   publish_timer_ = nh_.createTimer(ros::Duration(period), &LocalPlannerNodelet::timerCallback, this);
 
-  NODELET_INFO("LocalPlannerNodelet initialized (%.1f Hz).", cfg_.replanning_rate_hz);
-  NODELET_INFO("LocalPlanner mode=%s trajectory=%s", mode_.c_str(), traj_out.c_str());
+  NODELET_INFO("[LocalPlanner] Initialized (%.1f Hz).", cfg_.replanning_rate_hz);
+  NODELET_INFO("[LocalPlanner] mode=%s trajectory_in=%s trajectory_out=%s",
+               mode_.c_str(), traj_in.c_str(), traj_out.c_str());
+  NODELET_DEBUG("[LocalPlanner] limits: max_vel=%.2f max_accel=%.2f max_decel=%.2f "
+                "max_jerk=%.2f max_lat_acc=%.2f max_steer_vel=%.2f",
+                kinematic_limits_.max_vel,
+                kinematic_limits_.max_accel,
+                kinematic_limits_.max_decel,
+                kinematic_limits_.max_jerk,
+                kinematic_limits_.max_lat_acc,
+                kinematic_limits_.max_steer_vel);
 }
 
 // ── Callbacks (RULE §1 — store only, no processing) ──────────────────────────
@@ -110,7 +119,7 @@ void LocalPlannerNodelet::onInit() {
 void LocalPlannerNodelet::trajectoryCallback(
     const carmaker_msgs::TrajectoryPath::ConstPtr& msg) {
   if (!msg || msg->points.empty()) {
-    NODELET_WARN_THROTTLE(1.0, "Empty global trajectory received — ignoring.");
+    NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Empty global trajectory received; ignoring.");
     return;
   }
   std::lock_guard<std::mutex> lock(raw_trajectory_mutex_);
@@ -139,22 +148,37 @@ void LocalPlannerNodelet::odomCallback(
 void LocalPlannerNodelet::testPoseCallback(
     const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
   if (!msg) return;
-  std::lock_guard<std::mutex> lock(test_pose_mutex_);
-  latest_test_pose_.header = msg->header;
-  latest_test_pose_.pose   = msg->pose.pose;
-  test_pose_received_      = true;
+  {
+    std::lock_guard<std::mutex> lock(test_pose_mutex_);
+    latest_test_pose_.header = msg->header;
+    latest_test_pose_.pose   = msg->pose.pose;
+    test_pose_received_      = true;
+  }
+  NODELET_INFO("[LocalPlanner] Offline test pose received: (%.2f, %.2f, %.2f deg)",
+               msg->pose.pose.position.x,
+               msg->pose.pose.position.y,
+               quaternionToYaw(msg->pose.pose.orientation) * 180.0 / M_PI);
 }
 
 // ── Timer: main replanning loop ───────────────────────────────────────────────
 
 void LocalPlannerNodelet::timerCallback(const ros::TimerEvent&) {
+  if (resetOnTimeJump()) return;
+
   // Step 1: Consume pending global path (RULE §3 — lock only for flag/pointer swap)
   processNewGlobalPath();
 
   // Step 2: Gate check
   {
     std::lock_guard<std::mutex> lock(state_machine_mutex_);
-    if (!trajectory_state_machine_.hasPath() || trajectory_state_machine_.isIdle()) return;
+    if (!trajectory_state_machine_.hasPath()) {
+      NODELET_DEBUG_THROTTLE(2.0, "[LocalPlanner] Waiting for global trajectory.");
+      return;
+    }
+    if (trajectory_state_machine_.isIdle()) {
+      NODELET_DEBUG_THROTTLE(2.0, "[LocalPlanner] Idle after completing active path.");
+      return;
+    }
   }
 
   // Step 3: Get ego state
@@ -169,6 +193,32 @@ void LocalPlannerNodelet::timerCallback(const ros::TimerEvent&) {
 }
 
 // ── Core logic ────────────────────────────────────────────────────────────────
+
+bool LocalPlannerNodelet::resetOnTimeJump() {
+  const ros::Time now = ros::Time::now();
+  if (now.isZero()) return false;
+
+  if (last_timer_time_valid_ && now < last_timer_time_) {
+    {
+      std::lock_guard<std::mutex> lock(raw_trajectory_mutex_);
+      pending_trajectory_.reset();
+      new_trajectory_flag_ = false;
+    }
+    {
+      std::lock_guard<std::mutex> lock(state_machine_mutex_);
+      trajectory_state_machine_.setGlobalPath(Path{});
+      last_decision_log_valid_ = false;
+      last_logged_finished_ = false;
+    }
+    last_timer_time_ = now;
+    NODELET_WARN("[LocalPlanner] Time jump detected. Cleared pending and active trajectory state.");
+    return true;
+  }
+
+  last_timer_time_ = now;
+  last_timer_time_valid_ = true;
+  return false;
+}
 
 void LocalPlannerNodelet::processNewGlobalPath() {
   carmaker_msgs::TrajectoryPath::ConstPtr msg;
@@ -187,6 +237,8 @@ void LocalPlannerNodelet::processNewGlobalPath() {
   {
     std::lock_guard<std::mutex> lock(state_machine_mutex_);
     trajectory_state_machine_.setGlobalPath(gp);
+    last_decision_log_valid_ = false;
+    last_logged_finished_ = false;
   }
 
   size_t segment_count = 0;
@@ -194,14 +246,19 @@ void LocalPlannerNodelet::processNewGlobalPath() {
     std::lock_guard<std::mutex> lock(state_machine_mutex_);
     segment_count = trajectory_state_machine_.segmentCount();
   }
-  NODELET_INFO("Global path processed: %zu points, %zu segment(s).",
-               gp.size(), segment_count);
+  if (!gp.empty()) {
+    NODELET_INFO("[LocalPlanner] Global trajectory received: %zu points, %zu segment(s), length=%.2f m, "
+                 "start=(%.2f, %.2f, %.2f rad), end=(%.2f, %.2f, %.2f rad)",
+                 gp.size(), segment_count, gp.back().s,
+                 gp.front().x, gp.front().y, gp.front().theta,
+                 gp.back().x, gp.back().y, gp.back().theta);
+  }
 }
 
 bool LocalPlannerNodelet::getEgoState(State& ego) {
   if (use_test_pose_) {
     if (!test_pose_received_) {
-      NODELET_WARN_THROTTLE(2.0, "Offline test pose not yet received.");
+      NODELET_WARN_THROTTLE(2.0, "[LocalPlanner] Offline test pose not yet received.");
       return false;
     }
     std::lock_guard<std::mutex> lock(test_pose_mutex_);
@@ -211,12 +268,12 @@ bool LocalPlannerNodelet::getEgoState(State& ego) {
     ego.v     = 0.0;
   } else if (use_gt_pose_) {
     if (!dynamics_received_) {
-      NODELET_WARN_THROTTLE(2.0, "GT dynamics not yet received.");
+      NODELET_WARN_THROTTLE(2.0, "[LocalPlanner] GT dynamics not yet received.");
       return false;
     }
     std::lock_guard<std::mutex> lock(dynamics_mutex_);
     if (pose_timeout_ > 0.0 && (ros::Time::now() - last_dynamics_time_).toSec() > pose_timeout_) {
-      NODELET_WARN_THROTTLE(1.0, "GT dynamics timeout.");
+      NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] GT dynamics timeout.");
       return false;
     }
     ego.x     = latest_dynamics_.RearAxle_x;
@@ -225,12 +282,12 @@ bool LocalPlannerNodelet::getEgoState(State& ego) {
     ego.v     = latest_dynamics_.Car_vx;
   } else {
     if (!odom_received_) {
-      NODELET_WARN_THROTTLE(2.0, "EKF odom not yet received.");
+      NODELET_WARN_THROTTLE(2.0, "[LocalPlanner] EKF odom not yet received.");
       return false;
     }
     std::lock_guard<std::mutex> lock(odom_mutex_);
     if (pose_timeout_ > 0.0 && (ros::Time::now() - last_odom_time_).toSec() > pose_timeout_) {
-      NODELET_WARN_THROTTLE(1.0, "EKF odom timeout.");
+      NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] EKF odom timeout.");
       return false;
     }
     ego.x     = latest_odom_.pose.pose.position.x;
@@ -248,17 +305,93 @@ void LocalPlannerNodelet::publishActiveTrajectory(const State& ego) {
     decision = trajectory_state_machine_.update(ego, ros::Time::now().toSec());
   }
 
-  if (!decision.publish) return;
+  logDecisionTransition(decision, ego);
+
+  if (!decision.publish) {
+    NODELET_DEBUG_THROTTLE(1.0,
+                           "[LocalPlanner] No publish decision: state=%s intent=%s source=%s",
+                           trajectoryStateString(decision.state),
+                           trajectoryIntentString(decision.intent),
+                           trajectorySourceString(decision.path_source));
+    return;
+  }
 
   Path path = buildPublishPath(decision, ego);
-  if (path.empty()) return;
+  if (path.empty()) {
+    NODELET_WARN_THROTTLE(1.0,
+                          "[LocalPlanner] Built an empty trajectory: state=%s intent=%s source=%s",
+                          trajectoryStateString(decision.state),
+                          trajectoryIntentString(decision.intent),
+                          trajectorySourceString(decision.path_source));
+    return;
+  }
 
   trajectory_pub_.publish(toTrajectoryMsg(path, global_frame_));
   publishDebug(path);
 
-  if (decision.finished) {
-    NODELET_INFO_ONCE("LocalPlanner: final goal reached.");
+  const double endpoint_dist = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
+  NODELET_DEBUG_THROTTLE(1.0,
+                         "[LocalPlanner] Publish: state=%s intent=%s source=%s seg=%zu "
+                         "dir=%d pts=%zu len=%.2f m duration=%.2f s "
+                         "ego=(%.2f, %.2f, %.2f, v=%.2f) endpoint_dist=%.2f m final_cap=%s",
+                         trajectoryStateString(decision.state),
+                         trajectoryIntentString(decision.intent),
+                         trajectorySourceString(decision.path_source),
+                         decision.active_segment_index,
+                         decision.active_direction,
+                         path.size(),
+                         path.back().s,
+                         path.back().t,
+                         ego.x,
+                         ego.y,
+                         ego.theta,
+                         ego.v,
+                         endpoint_dist,
+                         decision.use_final_approach_speed_cap ? "true" : "false");
+
+}
+
+void LocalPlannerNodelet::logDecisionTransition(
+    const TrajectoryStateMachine::TrajectoryDecision& decision,
+    const State& ego) {
+  const bool first_log = !last_decision_log_valid_;
+  const bool segment_changed =
+      last_decision_log_valid_ &&
+      decision.active_segment_index != last_logged_segment_index_;
+  const bool state_changed =
+      first_log || decision.state != last_logged_state_ ||
+      decision.intent != last_logged_intent_;
+
+  if (segment_changed) {
+    NODELET_INFO("[LocalPlanner] Segment transition: %zu -> %zu, state=%s, intent=%s, "
+                 "dir=%d, ego=(%.2f, %.2f, %.2f), endpoint=(%.2f, %.2f, %.2f)",
+                 last_logged_segment_index_,
+                 decision.active_segment_index,
+                 trajectoryStateString(decision.state),
+                 trajectoryIntentString(decision.intent),
+                 decision.active_direction,
+                 ego.x,
+                 ego.y,
+                 ego.theta,
+                 decision.endpoint.x,
+                 decision.endpoint.y,
+                 decision.endpoint.theta);
+  } else if (state_changed) {
+    NODELET_DEBUG("[LocalPlanner] State transition: state=%s, intent=%s, segment=%zu",
+                  trajectoryStateString(decision.state),
+                  trajectoryIntentString(decision.intent),
+                  decision.active_segment_index);
   }
+
+  if (decision.finished && !last_logged_finished_) {
+    NODELET_INFO("[LocalPlanner] Final goal reached.");
+  }
+
+  last_decision_log_valid_ = true;
+  last_logged_finished_ = decision.finished;
+  last_logged_segment_index_ = decision.active_segment_index;
+  last_logged_state_ = decision.state;
+  last_logged_intent_ = decision.intent;
 }
 
 void LocalPlannerNodelet::publishTimeoutStop() {
@@ -271,9 +404,17 @@ void LocalPlannerNodelet::publishTimeoutStop() {
   State ego;
   ego.v = 0.0;
   Path path = buildPublishPath(decision, ego);
-  if (path.empty()) return;
+  if (path.empty()) {
+    NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Timeout stop produced an empty trajectory.");
+    return;
+  }
   trajectory_pub_.publish(toTrajectoryMsg(path, global_frame_));
   publishDebug(path);
+  NODELET_WARN_THROTTLE(1.0,
+                        "[LocalPlanner] Timeout stop publish: state=%s source=%s pts=%zu",
+                        trajectoryStateString(decision.state),
+                        trajectorySourceString(decision.path_source),
+                        path.size());
 }
 
 // ── Debug Visualization ───────────────────────────────────────────────────────

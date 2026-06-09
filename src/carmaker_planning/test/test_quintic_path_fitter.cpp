@@ -43,6 +43,33 @@ TEST(QuinticPathFitterTest, ShortDistanceReturnsStraightFallback) {
   }
 }
 
+TEST(QuinticPathFitterTest, ReverseFitUsesBackwardTravelTangent) {
+  State ego;
+  ego.x = 0.0;
+  ego.y = 0.0;
+  ego.theta = 0.0;
+
+  PathPoint target;
+  target.x = -5.0;
+  target.y = 0.0;
+  target.theta = 0.0;
+  target.direction = -1;
+  target.kappa = 0.0;
+
+  QuinticPathFitter fitter;
+  const Path path = fitter.fit(ego, 0.0, target, 0.1);
+
+  ASSERT_GT(path.size(), 2U);
+  EXPECT_EQ(path.front().direction, -1);
+  EXPECT_EQ(path.back().direction, -1);
+  EXPECT_NEAR(path.front().theta, ego.theta, 1e-9);
+  EXPECT_NEAR(path.back().theta, target.theta, 1e-9);
+  EXPECT_LT(path[1].x, path.front().x);
+  EXPECT_NEAR(path[1].y, path.front().y, 1e-6);
+  EXPECT_NEAR(path.back().x, target.x, 1e-9);
+  EXPECT_NEAR(path.back().y, target.y, 1e-9);
+}
+
 }  // namespace
 }  // namespace carmaker_planning
 

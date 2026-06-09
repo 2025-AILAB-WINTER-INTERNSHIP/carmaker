@@ -53,9 +53,12 @@ private:
 
   // ── Processing methods ──────────────────────────────────────────────────────
   void   processNewGlobalPath();           ///< Consumes pending_trajectory_ outside lock
+  bool   resetOnTimeJump();
   bool   getEgoState(State& ego);
   void   publishActiveTrajectory(const State& ego);
   void   publishTimeoutStop();
+  void   logDecisionTransition(const TrajectoryStateMachine::TrajectoryDecision& decision,
+                               const State& ego);
   Path   buildPublishPath(const TrajectoryStateMachine::TrajectoryDecision& decision,
                           const State& ego) const;
   double getEgoKappa(const State& ego, const Path& global_path) const;
@@ -77,6 +80,8 @@ private:
   ros::Subscriber trajectory_sub_, dynamics_sub_, odom_sub_, test_pose_sub_;
   ros::Publisher  trajectory_pub_;
   ros::Timer      publish_timer_;
+  ros::Time       last_timer_time_;
+  bool            last_timer_time_valid_ = false;
 
   // ── Configuration ───────────────────────────────────────────────────────────
   LocalPlannerConfig cfg_;
@@ -103,6 +108,13 @@ private:
   // Active trajectory planner
   std::mutex state_machine_mutex_;
   TrajectoryStateMachine trajectory_state_machine_;
+  bool last_decision_log_valid_ = false;
+  bool last_logged_finished_ = false;
+  size_t last_logged_segment_index_ = 0;
+  TrajectoryStateMachine::PlannerState last_logged_state_ =
+      TrajectoryStateMachine::PlannerState::kIdle;
+  TrajectoryStateMachine::TrajectoryIntent last_logged_intent_ =
+      TrajectoryStateMachine::TrajectoryIntent::kNone;
 
   // GT dynamics pose
   std::mutex                  dynamics_mutex_;

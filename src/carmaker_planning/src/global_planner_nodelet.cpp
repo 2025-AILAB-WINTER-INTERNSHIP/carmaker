@@ -48,7 +48,7 @@ void GlobalPlannerNodelet::onInit() {
 
   // Retrieve static grid map (OccupancyGrid) via ROS service
   if (!loadMapFromService()) {
-    NODELET_FATAL("Failed to load map from service!");
+    NODELET_FATAL("[GlobalPlanner] Failed to load map from service!");
     return;
   }
 
@@ -57,13 +57,14 @@ void GlobalPlannerNodelet::onInit() {
 
   if (use_gt_pose_) {
     dynamics_sub_ = nh_.subscribe(dynamics_topic, 10, &GlobalPlannerNodelet::dynamicsCallback, this);
-    NODELET_INFO("Ego Pose Source: Ground Truth (%s) active", dynamics_topic.c_str());
+    NODELET_INFO("[GlobalPlanner] Pose source: Ground Truth (%s)", dynamics_topic.c_str());
   } else if (use_manual_pose_) {
     std::string manual_topic = pnh_.param("setting/use_manual_pose/topic", std::string("/planning/start"));
     manual_pose_sub_ = nh_.subscribe(manual_topic, 1, &GlobalPlannerNodelet::manualPoseCallback, this);
-    NODELET_INFO("Ego Pose Source: Manual Pose Topic (%s) active - simulation-free test mode", manual_topic.c_str());
+    NODELET_INFO("[GlobalPlanner] Pose source: manual pose (%s)", manual_topic.c_str());
   } else {
-    NODELET_INFO("Ego Pose Source: TF Lookup (global: %s -> ego: %s -> rear_axle: %s) active", global_frame_.c_str(), ego_frame_.c_str(), rear_axle_frame_.c_str());
+    NODELET_INFO("[GlobalPlanner] Pose source: TF lookup (global: %s -> ego: %s -> rear_axle: %s)",
+                 global_frame_.c_str(), ego_frame_.c_str(), rear_axle_frame_.c_str());
   }
   goal_sub_ = nh_.subscribe(goal_topic, 1, &GlobalPlannerNodelet::goalCallback, this);
 
@@ -75,7 +76,7 @@ void GlobalPlannerNodelet::onInit() {
   pnh_.param<double>("diagnostic_period", diag_period_, 1.0);
   diag_timer_ = nh_.createWallTimer(ros::WallDuration(diag_period_), &GlobalPlannerNodelet::diagTimerCallback, this);
 
-  NODELET_INFO("GlobalPlannerNodelet initialized.");
+  NODELET_INFO("[GlobalPlanner] Initialized.");
 }
 
 
@@ -83,7 +84,7 @@ void GlobalPlannerNodelet::onInit() {
 bool GlobalPlannerNodelet::getStartState(State& start_state) {
   if (use_gt_pose_) {
     if (!dynamics_received_) {
-      NODELET_WARN("GT DynamicsInfo not received yet. Cannot plan path.");
+      NODELET_WARN("[GlobalPlanner] GT DynamicsInfo not received yet. Cannot plan path.");
       return false;
     }
     carmaker_msgs::DynamicsInfo dyn;
@@ -98,7 +99,7 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
   }
   else if (use_manual_pose_) {
     if (!manual_pose_received_) {
-      NODELET_WARN("Manual start pose not received yet. Cannot plan path.");
+      NODELET_WARN("[GlobalPlanner] Manual start pose not received yet. Cannot plan path.");
       return false;
     }
     geometry_msgs::PoseStamped pose;
@@ -136,7 +137,7 @@ bool GlobalPlannerNodelet::getStartState(State& start_state) {
       start_state.theta = yaw;
     }
     catch (tf2::TransformException &ex) {
-      NODELET_WARN("Could not look up ego pose from TF: %s. Using origin (0, 0, 0) as start.", ex.what());
+      NODELET_WARN("[GlobalPlanner] Could not look up ego pose from TF: %s. Using origin (0, 0, 0) as start.", ex.what());
       start_state.x = 0.0;
       start_state.y = 0.0;
       start_state.theta = 0.0;
@@ -199,29 +200,29 @@ void GlobalPlannerNodelet::publishTrajectory(const Path& path) {
 void GlobalPlannerNodelet::goalCallback(const geometry_msgs::PoseStamped::ConstPtr& msg) {
   // 1. Check incoming goal message pointer validity
   if (!msg) {
-    NODELET_WARN_THROTTLE(1.0, "Received null goal message pointer.");
+    NODELET_WARN_THROTTLE(1.0, "[GlobalPlanner] Received null goal message pointer.");
     return;
   }
 
-  NODELET_INFO("Goal pose received: (%.2f, %.2f, %.2f deg)",
+  NODELET_INFO("[GlobalPlanner] Goal pose received: (%.2f, %.2f, %.2f deg)",
                msg->pose.position.x, msg->pose.position.y,
                quaternionToYaw(msg->pose.orientation) * 180.0 / M_PI);
 
   // 2. Verify that map data is loaded and ready
   if (!has_map_) {
-    NODELET_WARN_THROTTLE(1.0, "Map not received yet, dropping goal request.");
+    NODELET_WARN_THROTTLE(1.0, "[GlobalPlanner] Map not received yet, dropping goal request.");
     return;
   }
 
   // 3. Verify dynamics readiness if Ground Truth pose source is active
   if (use_gt_pose_ && !dynamics_received_) {
-    NODELET_WARN_THROTTLE(1.0, "Ego pose (GT dynamics) not received yet, dropping goal request.");
+    NODELET_WARN_THROTTLE(1.0, "[GlobalPlanner] Ego pose (GT dynamics) not received yet, dropping goal request.");
     return;
   }
 
   // 4. Verify manual pose readiness if manual pose mode is active
   if (use_manual_pose_ && !manual_pose_received_) {
-    NODELET_WARN_THROTTLE(1.0, "Manual start pose (/planning/start) not received yet, dropping goal request.");
+    NODELET_WARN_THROTTLE(1.0, "[GlobalPlanner] Manual start pose (/planning/start) not received yet, dropping goal request.");
     return;
   }
 
@@ -230,7 +231,7 @@ void GlobalPlannerNodelet::goalCallback(const geometry_msgs::PoseStamped::ConstP
 
 void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_msg) {
   if (!has_map_) {
-    NODELET_WARN("Map not received yet, cannot plan path.");
+    NODELET_WARN("[GlobalPlanner] Map not received yet, cannot plan path.");
     return;
   }
 
@@ -241,7 +242,7 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
 
   State goal_state = getGoalState(goal_msg);
 
-  NODELET_INFO("Plan requested from (%.2f, %.2f, %.2f rad) to (%.2f, %.2f, %.2f rad)",
+  NODELET_INFO("[GlobalPlanner] Plan requested from (%.2f, %.2f, %.2f rad) to (%.2f, %.2f, %.2f rad)",
                start_state.x, start_state.y, start_state.theta,
                goal_state.x, goal_state.y, goal_state.theta);
 
@@ -260,13 +261,13 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
   // Log bubbled diagnostic messages from core planner & post-processor via Nodelet logger
   for (const auto& log : result.logs) {
     if (log.first == "WARN") {
-      NODELET_WARN("%s", log.second.c_str());
+      NODELET_WARN("[GlobalPlanner] %s", log.second.c_str());
     } else if (log.first == "INFO") {
-      NODELET_INFO("%s", log.second.c_str());
+      NODELET_INFO("[GlobalPlanner] %s", log.second.c_str());
     } else if (log.first == "ERROR") {
-      NODELET_ERROR("%s", log.second.c_str());
+      NODELET_ERROR("[GlobalPlanner] %s", log.second.c_str());
     } else if (log.first == "DEBUG") {
-      NODELET_DEBUG("%s", log.second.c_str());
+      NODELET_DEBUG("[GlobalPlanner] %s", log.second.c_str());
     }
   }
 
@@ -280,7 +281,7 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
     if (result.smoothing_time > 0.0) post_time += result.smoothing_time;
     if (result.profiling_time > 0.0) post_time += result.profiling_time;
 
-    NODELET_INFO("Plan success! Planning (A*): %.2f ms, Post-Process: %.2f ms (Resample: %.2f ms, Smooth: %.2f ms, Profile: %.2f ms), Total: %.2f ms, Path Length: %.2f m",
+    NODELET_INFO("[GlobalPlanner] Plan success! Planning (A*): %.2f ms, Post-Process: %.2f ms (Resample: %.2f ms, Smooth: %.2f ms, Profile: %.2f ms), Total: %.2f ms, Path Length: %.2f m",
                  result.planning_time * 1000.0, post_time * 1000.0,
                  (result.resampling_time > 0.0 ? result.resampling_time : 0.0) * 1000.0,
                  (result.smoothing_time > 0.0 ? result.smoothing_time : 0.0) * 1000.0,
@@ -295,7 +296,7 @@ void GlobalPlannerNodelet::processGoal(const geometry_msgs::PoseStamped& goal_ms
   }
   else {
     failed_plans_++;
-    NODELET_ERROR("Planning failed: %s", result.statusString());
+    NODELET_ERROR("[GlobalPlanner] Planning failed: %s", result.statusString());
   }
 }
 
@@ -368,7 +369,7 @@ void GlobalPlannerNodelet::processDiagnostics() {
 
     // Reset statistics and clear TF buffer if a time jump is detected
     if (sim_diff < -1.0 || (wall_diff > 0.0 && sim_diff > 20.0 * wall_diff)) {
-      NODELET_WARN("[Time Jump Detected in Timer] Sim Diff: %.2f sec, Wall Diff: %.2f sec. Resetting planner statistics and clearing TF buffer...", sim_diff, wall_diff);
+      NODELET_WARN("[GlobalPlanner] Time jump detected in timer: sim_diff=%.2f sec, wall_diff=%.2f sec. Resetting planner statistics and clearing TF buffer...", sim_diff, wall_diff);
       total_plans_ = 0;
       successful_plans_ = 0;
       failed_plans_ = 0;
@@ -393,7 +394,7 @@ void GlobalPlannerNodelet::processDiagnostics() {
 void GlobalPlannerNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg) {
   // 1. Check incoming dynamics message pointer validity
   if (!msg) {
-    NODELET_WARN_THROTTLE(1.0, "Received null dynamics message pointer.");
+    NODELET_WARN_THROTTLE(1.0, "[GlobalPlanner] Received null dynamics message pointer.");
     return;
   }
   // 2. Safely copy data and update initialization flag under mutex lock
@@ -404,14 +405,14 @@ void GlobalPlannerNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoCon
 
 void GlobalPlannerNodelet::manualPoseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) {
   if (!msg) {
-    NODELET_WARN_THROTTLE(1.0, "Received null manual pose message pointer.");
+    NODELET_WARN_THROTTLE(1.0, "[GlobalPlanner] Received null manual pose message pointer.");
     return;
   }
   std::lock_guard<std::mutex> lock(manual_pose_mutex_);
   latest_manual_pose_.header = msg->header;
   latest_manual_pose_.pose = msg->pose.pose;
   manual_pose_received_ = true;
-  NODELET_INFO("Manual start pose received: (%.2f, %.2f, %.2f deg)",
+  NODELET_INFO("[GlobalPlanner] Manual start pose received: (%.2f, %.2f, %.2f deg)",
                msg->pose.pose.position.x, msg->pose.pose.position.y,
                quaternionToYaw(msg->pose.pose.orientation) * 180.0 / M_PI);
 }
@@ -424,21 +425,21 @@ bool GlobalPlannerNodelet::loadMapFromService() {
 
   ros::ServiceClient client = nh_.serviceClient<nav_msgs::GetMap>(service_name);
 
-  NODELET_INFO("[GlobalPlannerNodelet] Waiting for map service: %s ...", service_name.c_str());
+  NODELET_INFO("[GlobalPlanner] Waiting for map service: %s ...", service_name.c_str());
   if (!client.waitForExistence(ros::Duration(10.0))) {
-    NODELET_ERROR("[GlobalPlannerNodelet] Map service '%s' is not available after 10 seconds.", service_name.c_str());
+    NODELET_ERROR("[GlobalPlanner] Map service '%s' is not available after 10 seconds.", service_name.c_str());
     return false;
   }
 
   nav_msgs::GetMap srv;
   if (!client.call(srv)) {
-    NODELET_ERROR("[GlobalPlannerNodelet] Failed to call map service: %s", service_name.c_str());
+    NODELET_ERROR("[GlobalPlanner] Failed to call map service: %s", service_name.c_str());
     return false;
   }
 
   nav_msgs::OccupancyGrid grid = srv.response.map;
   if (grid.data.empty()) {
-    NODELET_ERROR("[GlobalPlannerNodelet] Received empty map data from service.");
+    NODELET_ERROR("[GlobalPlanner] Received empty map data from service.");
     return false;
   }
 
@@ -460,7 +461,7 @@ bool GlobalPlannerNodelet::loadMapFromService() {
   grid.header.stamp = ros::Time::now();
   debug_map_pub_.publish(grid);
 
-  NODELET_INFO("[GlobalPlannerNodelet] OccupancyGrid received and configured via ROS service: %dx%d cells, resolution=%.3fm, origin=(%.2f, %.2f)",
+  NODELET_INFO("[GlobalPlanner] OccupancyGrid received and configured via ROS service: %dx%d cells, resolution=%.3fm, origin=(%.2f, %.2f)",
                w, h, res, origin_x, origin_y);
   return true;
 }

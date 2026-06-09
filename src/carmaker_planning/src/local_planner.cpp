@@ -133,8 +133,11 @@ Path QuinticPathFitter::fit(const State& ego, double ego_kappa,
     return makeShortDistanceFallback(ego, target, L);
   }
 
-  const double cos0 = std::cos(ego.theta), sin0 = std::sin(ego.theta);
-  const double cosF = std::cos(target.theta), sinF = std::sin(target.theta);
+  const int direction = target.direction < 0 ? -1 : 1;
+  const double start_tangent = (direction == 1) ? ego.theta : wrap_to_pi(ego.theta + PI);
+  const double target_tangent = (direction == 1) ? target.theta : wrap_to_pi(target.theta + PI);
+  const double cos0 = std::cos(start_tangent), sin0 = std::sin(start_tangent);
+  const double cosF = std::cos(target_tangent), sinF = std::sin(target_tangent);
 
   // Second derivatives from curvature (unit-speed parametrization):
   //   x'' = -κ sinθ,   y'' = κ cosθ
@@ -148,7 +151,6 @@ Path QuinticPathFitter::fit(const State& ego, double ego_kappa,
   //   The last sample (i == n_steps) always equals s = L (endpoint).
   const int    n_steps  = std::max(1, static_cast<int>(std::ceil(L / resolution)));
   const double ds       = L / n_steps;
-  const int    direction = target.direction;
 
   Path local_path;
   local_path.reserve(static_cast<size_t>(n_steps) + 1);
