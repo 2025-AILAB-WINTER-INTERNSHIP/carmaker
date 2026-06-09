@@ -66,7 +66,8 @@ public:
     PathPoint endpoint;
   };
 
-  explicit TrajectoryStateMachine(const Config& config = Config());
+  TrajectoryStateMachine();
+  explicit TrajectoryStateMachine(const Config& config);
 
   void configure(const Config& config);
   void setGlobalPath(const Path& path);

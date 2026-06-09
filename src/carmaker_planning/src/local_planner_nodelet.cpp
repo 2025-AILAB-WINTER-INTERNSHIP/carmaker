@@ -36,9 +36,10 @@ void LocalPlannerNodelet::onInit() {
     NODELET_WARN("Unknown local_planner/mode='%s'. Falling back to 'local'.", mode_.c_str());
     mode_ = "local";
   }
+
   pose_timeout_ = std::max(0.0, pnh_.param<double>("local_planner/pose_timeout", 0.5));
-  final_approach_max_vel_ =
-      std::max(0.0, pnh_.param<double>("local_planner/final_approach/max_vel", 0.15));
+
+  final_approach_max_vel_ = std::max(0.0, pnh_.param<double>("local_planner/final_approach/max_vel", 0.15));
   state_machine_config_.mode = TrajectoryStateMachine::parseMode(mode_);
   state_machine_config_.endpoint_xy_tol = cfg_.endpoint_xy_tol;
   state_machine_config_.endpoint_yaw_tol = cfg_.endpoint_yaw_tol;
@@ -50,9 +51,12 @@ void LocalPlannerNodelet::onInit() {
       pnh_.param<double>("local_planner/transition/presteer_duration", 0.6);
   state_machine_config_.idle_after_finish_duration =
       pnh_.param<double>("local_planner/transition/idle_after_finish_duration", 0.5);
-  wheelbase_ = pnh_.param<double>("vehicle/wheelbase", 2.97);
+  trajectory_state_machine_.configure(state_machine_config_);
 
   // KinematicLimits assembled from local_planner config
+  wheelbase_ = pnh_.param<double>("vehicle/wheelbase", 2.97);
+  min_turning_radius_ = pnh_.param<double>("vehicle/min_turning_radius", 5.2);
+
   kinematic_limits_.max_vel       = cfg_.max_vel;
   kinematic_limits_.max_accel     = cfg_.max_accel;
   kinematic_limits_.max_decel     = cfg_.max_decel;
@@ -60,10 +64,7 @@ void LocalPlannerNodelet::onInit() {
   kinematic_limits_.max_steer_vel = pnh_.param<double>("vehicle/limits/max_steer_vel", 0.6108);
   kinematic_limits_.max_lat_acc   = cfg_.max_lat_acc;
   kinematic_limits_.min_vel_denom = pnh_.param<double>(
-      "local_planner/profiler/min_velocity_denominator", 0.02);
-  trajectory_state_machine_.configure(state_machine_config_);
-
-  min_turning_radius_ = pnh_.param<double>("vehicle/min_turning_radius", 5.2);
+    "local_planner/profiler/min_velocity_denominator", 0.02);
 
   // Topics (RULE §4 — no hardcoding)
   const std::string traj_in  = pnh_.param<std::string>(

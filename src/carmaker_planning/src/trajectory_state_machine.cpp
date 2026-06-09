@@ -11,6 +11,8 @@
 
 namespace carmaker_planning {
 
+TrajectoryStateMachine::TrajectoryStateMachine() : TrajectoryStateMachine(Config()) {}
+
 TrajectoryStateMachine::TrajectoryStateMachine(const Config& config) {
   configure(config);
 }
