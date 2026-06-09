@@ -18,7 +18,9 @@ namespace carmaker_planning {
 
 class Visualizer {
 public:
-  explicit Visualizer(const ros::NodeHandle& nh);
+  explicit Visualizer(const ros::NodeHandle& advertise_nh,
+                      const ros::NodeHandle& param_nh = ros::NodeHandle("~"),
+                      bool publish_tree = true);
   ~Visualizer() = default;
   Visualizer(const Visualizer&) = delete;
   Visualizer& operator=(const Visualizer&) = delete;
@@ -41,7 +43,8 @@ private:
                                                     const ros::Time& stamp);
   std_msgs::ColorRGBA makeCurvatureColor(double kappa, double max_kappa);
 
-  ros::NodeHandle nh_;
+  ros::NodeHandle advertise_nh_;
+  ros::NodeHandle param_nh_;
   ros::Publisher path_pub_;
   ros::Publisher tree_pub_;
   ros::Publisher velocity_pub_;
@@ -54,6 +57,7 @@ private:
   std::string pose_array_topic_;
   std::string curvature_topic_;
 
+  bool publish_tree_ = true;
   double arrow_spacing_meters_ = 0.2;
 };
 

@@ -5,7 +5,7 @@
  * Architecture (RULE §1 — Pure C++ Core):
  *  - No ROS headers. Results returned via structs, not exceptions.
  *  - SegmentManager  : splits a global Path at direction-change (cusp) boundaries,
- *                      tracks the active segment, and detects arrival at each endpoint.
+ *                      stores the active segment index, and advances on request.
  *  - QuinticPathFitter: fits 5th-order polynomials x(s), y(s) from current ego state
  *                      to the active segment endpoint, satisfying 6 boundary conditions
  *                      per axis (position, heading, curvature) at both ends.
@@ -28,7 +28,7 @@ namespace carmaker_planning {
 
 /**
  * @brief Decomposes a global path into cusp-delimited segments and tracks
- *        which segment the ego vehicle should currently follow.
+ *        the active segment index. Arrival decisions live in TrajectoryStateMachine.
  *
  * Thread-safety: NOT thread-safe. Callers must protect with a mutex.
  */
@@ -61,11 +61,8 @@ public:
 
   const Path& globalPath() const { return global_path_; }
 
-  /**
-   * @brief Check arrival at the active segment endpoint and advance if arrived.
-   * @return true if all segments completed (final goal reached).
-   */
-  bool updateArrival(const State& ego, double xy_tol, double yaw_tol, double vel_tol);
+  /// Advance to the next segment. Returns true if all segments are completed.
+  bool advanceToNextSegment();
 
 private:
   static std::vector<Segment> split(const Path& path);
@@ -109,6 +106,7 @@ private:
 
   static double curvature(const Eigen::Matrix<double,6,1>& cx,
                           const Eigen::Matrix<double,6,1>& cy, double s);
+  static Path makeShortDistanceFallback(const State& ego, const PathPoint& target, double length);
 };
 
 } // namespace carmaker_planning

@@ -39,11 +39,11 @@ void GlobalPlannerNodelet::onInit() {
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
   // Debug occupancy grid publisher
-  std::string debug_map_topic = pnh_.param("topics/publish/debug/map", std::string("/planning/debug/occupancy_grid"));
+  std::string debug_map_topic = pnh_.param("topics/publish/debug/map", std::string("/planning/debug/global/map"));
   debug_map_pub_ = nh_.advertise<nav_msgs::OccupancyGrid>(debug_map_topic, 1, true);
 
   // Trajectory publisher
-  std::string trajectory_topic = pnh_.param("topics/publish/trajectory", std::string("/planning/trajectory"));
+  std::string trajectory_topic = pnh_.param("topics/publish/trajectory", std::string("/planning/global/trajectory"));
   trajectory_pub_ = nh_.advertise<carmaker_msgs::TrajectoryPath>(trajectory_topic, 1, true);
 
   // Retrieve static grid map (OccupancyGrid) via ROS service
@@ -188,6 +188,7 @@ void GlobalPlannerNodelet::publishTrajectory(const Path& path) {
     tp.longitudinal_velocity = pt.v * pt.direction;
     tp.longitudinal_acceleration = pt.a * pt.direction;
     tp.curvature = pt.kappa;
+    tp.direction = pt.direction < 0 ? -1 : 1;
     tp.time_from_start = ros::Duration(pt.t);
 
     traj_msg.points.push_back(tp);

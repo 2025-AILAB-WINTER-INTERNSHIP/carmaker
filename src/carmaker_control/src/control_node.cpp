@@ -3,8 +3,8 @@
 #include <cstddef>
 #include <limits>
 #include <mutex>
-#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/Quaternion.h>
@@ -107,11 +107,15 @@ private:
     int direction{1};
   };
 
-  // 같은 direction을 갖는 연속 trajectory 구간.
-  // 후진이 섞인 전체 경로도 이 단위로 나누어 하나씩 제어한다.
-  struct PathSegment {
+  struct ActiveTrajectory {
     std::vector<PathPoint> points;
-    int direction{1};
+
+    bool empty() const { return points.empty(); }
+    std::size_t size() const { return points.size(); }
+    int direction() const {
+      if (points.empty()) return 1;
+      return points.front().direction < 0 ? -1 : 1;
+    }
   };
 
   void loadParameters();
@@ -120,20 +124,17 @@ private:
   void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
   void controlTimerCallback(const ros::TimerEvent& event);
 
-  std::vector<PathSegment> splitTrajectory(const carmaker_msgs::TrajectoryPath& msg) const;
   PathPoint makePathPoint(const carmaker_msgs::TrajectoryPoint& msg, int direction) const;
+  int trajectoryDirection(const carmaker_msgs::TrajectoryPath& msg) const;
 
   bool getCurrentState(Pose2D& pose, double& signed_speed) const;
-  std::size_t findNearestIndex(const PathSegment& segment,
+  std::size_t findNearestIndex(const ActiveTrajectory& trajectory,
                                const Pose2D& pose,
                                std::size_t previous_index) const;
-  std::size_t findLookaheadIndex(const PathSegment& segment,
+  std::size_t findLookaheadIndex(const ActiveTrajectory& trajectory,
                                  std::size_t nearest_index,
                                  double lookahead_distance) const;
-  bool isSegmentComplete(const PathSegment& segment,
-                         const Pose2D& pose,
-                         std::size_t nearest_index) const;
-  double computePreviewCurvature(const PathSegment& segment,
+  double computePreviewCurvature(const ActiveTrajectory& trajectory,
                                  std::size_t nearest_index,
                                  std::size_t& preview_index) const;
   double computeCurvatureFeedforward(double preview_curvature, int direction) const;
@@ -142,18 +143,12 @@ private:
                                 double preview_curvature,
                                 double speed,
                                 int direction) const;
-  double selectTargetSpeed(const PathSegment& segment, std::size_t target_index) const;
+  double selectTargetSpeed(const ActiveTrajectory& trajectory, std::size_t target_index) const;
 
-  void advanceOrStop(const PathSegment& active_segment,
-                     std::size_t active_segment_index,
-                     const Pose2D& pose,
-                     double current_speed,
-                     const ros::Time& now);
   void advertiseDebugTopics();
   void publishDebugTelemetry(const Pose2D& pose,
                              double signed_speed,
-                             const PathSegment* segment,
-                             std::size_t segment_index,
+                             const ActiveTrajectory* trajectory,
                              std::size_t nearest_index,
                              std::size_t target_index,
                              double target_speed,
@@ -170,7 +165,7 @@ private:
                         double y,
                         double yaw,
                         const ros::Time& stamp) const;
-  void publishActiveSegmentPath(const PathSegment& segment, const ros::Time& stamp);
+  void publishActiveSegmentPath(const ActiveTrajectory& trajectory, const ros::Time& stamp);
   void publishControl(int direction, double steer_command, double accel_command);
   void publishStop(int direction, double steer_command = 0.0);
 
@@ -211,7 +206,6 @@ private:
   ros::Publisher debug_curvature_preview_index_pub_;
   ros::Publisher debug_distance_to_end_pub_;
   ros::Publisher debug_trajectory_age_pub_;
-  ros::Publisher debug_trajectory_completed_pub_;
   ros::Publisher debug_direction_pub_;
   ros::Publisher debug_tracking_state_pub_;
   ros::Publisher debug_stop_reason_pub_;
@@ -227,16 +221,10 @@ private:
   bool dynamics_received_{false};
 
   mutable std::mutex trajectory_mutex_;
-  std::vector<PathSegment> segments_;
+  ActiveTrajectory active_trajectory_;
   ros::Time last_trajectory_time_;
-  std::size_t active_segment_index_{0};
   std::size_t nearest_index_{0};
-  bool presteer_active_{false};
-  std::size_t presteer_segment_index_{0};
-  ros::Time presteer_until_;
-  double presteer_steer_command_{0.0};
   bool trajectory_received_{false};
-  bool trajectory_completed_{false};
 
   PID speed_pid_;
   Stanley stanley_;
@@ -254,9 +242,9 @@ private:
   double control_rate_{30.0};
   double odom_timeout_{0.5};
   double dynamics_timeout_{0.5};
-  double trajectory_timeout_{5.0};
+  double active_trajectory_timeout_{1.0};
+  double stop_trajectory_velocity_epsilon_{1e-6};
 
-  double direction_velocity_epsilon_{0.02};
   double min_tracking_speed_{0.2};
   double max_target_speed_{0.7};
   double lookahead_distance_{0.35};
@@ -267,12 +255,6 @@ private:
   double curvature_preview_window_{0.4};
   int nearest_search_back_{20};
   int nearest_search_ahead_{120};
-
-  double segment_finish_distance_{0.5};
-  int segment_finish_index_margin_{3};
-  double gear_switch_speed_{0.08};
-  bool presteer_enabled_{true};
-  double presteer_duration_{0.6};
 
   double max_accel_{0.8};
   double max_decel_{1.5};
@@ -346,16 +328,17 @@ void ControlNode::loadParameters()
     state_source_ = "odom";
   }
 
-  // trajectory_timeout은 새 경로가 너무 오래된 경우 차량을 정지시키기 위한 안전장치다.
-  // Ubuntu ROS PC에서 시뮬레이션 clock을 쓸 경우 ROS time 기준으로 동작한다.
+  // active_trajectory_timeout은 local planner가 active trajectory publish를 멈춘 뒤
+  // control이 neutral stop으로 돌아가기 위한 안전장치다.
   pnh_.param("control/rate", control_rate_, 30.0);
   pnh_.param("control/odom_timeout", odom_timeout_, 0.5);
   pnh_.param("control/dynamics_timeout", dynamics_timeout_, 0.5);
-  pnh_.param("control/trajectory_timeout", trajectory_timeout_, 5.0);
+  pnh_.param("control/active_trajectory_timeout", active_trajectory_timeout_, 1.0);
+  pnh_.param("control/stop_trajectory_velocity_epsilon",
+             stop_trajectory_velocity_epsilon_, 1e-6);
+  active_trajectory_timeout_ = std::max(0.0, active_trajectory_timeout_);
+  stop_trajectory_velocity_epsilon_ = std::max(0.0, stop_trajectory_velocity_epsilon_);
 
-  // direction_velocity_epsilon보다 작은 속도는 정지점으로 보고 이전 기어 구간에 붙인다.
-  // Reeds-Shepp cusp 근처에서 velocity가 0으로 떨어져도 불필요하게 segment가 쪼개지지 않는다.
-  pnh_.param("control/direction_velocity_epsilon", direction_velocity_epsilon_, 0.02);
   pnh_.param("control/min_tracking_speed", min_tracking_speed_, 0.2);
   pnh_.param("control/max_target_speed", max_target_speed_, 0.7);
 
@@ -373,15 +356,6 @@ void ControlNode::loadParameters()
   // nearest search는 이전 index 주변만 훑어 경로가 겹칠 때 뒤쪽 segment로 튀는 것을 줄인다.
   pnh_.param("control/nearest_search_back", nearest_search_back_, 20);
   pnh_.param("control/nearest_search_ahead", nearest_search_ahead_, 120);
-
-  // segment 종료는 index가 끝에 가깝고 실제 위치도 끝점 근처일 때만 인정한다.
-  // 후진 전환 지점에서 가까운 다른 경로점으로 잘못 넘어가는 상황을 피하기 위함이다.
-  pnh_.param("control/segment_finish_distance", segment_finish_distance_, 0.5);
-  pnh_.param("control/segment_finish_index_margin", segment_finish_index_margin_, 3);
-  pnh_.param("control/gear_switch_speed", gear_switch_speed_, 0.08);
-  pnh_.param("control/presteer_enabled", presteer_enabled_, true);
-  pnh_.param("control/presteer_duration", presteer_duration_, 0.6);
-  presteer_duration_ = std::max(0.0, presteer_duration_);
 
   pnh_.param("control/max_accel", max_accel_, 0.8);
   pnh_.param("control/max_decel", max_decel_, 1.5);
@@ -452,43 +426,43 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
     return;
   }
 
-  // planning은 전체 경로를 하나의 TrajectoryPath로 준다.
-  // 이 노드는 signed longitudinal_velocity를 보고 같은 기어 구간끼리 분리한다.
-  std::vector<PathSegment> new_segments = splitTrajectory(*msg);
-  if (new_segments.empty()) {
-    ROS_WARN("Received trajectory with no usable segments.");
+  if (msg->points.size() < 2) {
+    ROS_WARN("Received trajectory with fewer than 2 points.");
+    return;
   }
 
-  // 로그에 D:points, R:points 형태로 남겨 전진/후진 segment 분할 결과를 바로 확인한다.
-  std::ostringstream summary;
-  for (std::size_t i = 0; i < new_segments.size(); ++i) {
-    if (i > 0) {
-      summary << ", ";
+  const int direction = trajectoryDirection(*msg);
+  if (direction == 0) {
+    ROS_WARN_THROTTLE(1.0, "Active trajectory has no valid direction field; ignoring.");
+    return;
+  }
+
+  ActiveTrajectory new_trajectory;
+  new_trajectory.points.reserve(msg->points.size());
+  bool mixed_direction = false;
+  for (const auto& point : msg->points) {
+    if (point.direction == 0 || (point.direction < 0 ? -1 : 1) != direction) {
+      mixed_direction = true;
     }
-    summary << (new_segments[i].direction > 0 ? "D" : "R")
-            << ":" << new_segments[i].points.size();
+    new_trajectory.points.push_back(makePathPoint(point, direction));
   }
 
-  const std::size_t segment_count = new_segments.size();
+  if (mixed_direction) {
+    ROS_WARN_THROTTLE(1.0,
+                      "Active trajectory violates single-direction contract; ignoring.");
+    return;
+  }
+
   {
-    // 새 trajectory를 받으면 진행 index와 PID 기억을 모두 초기화한다.
-    // 이전 경로의 index가 새 경로에 남아 있으면 엉뚱한 점을 추종할 수 있다.
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
-    segments_ = std::move(new_segments);
-    active_segment_index_ = 0;
+    active_trajectory_ = std::move(new_trajectory);
     nearest_index_ = 0;
-    presteer_active_ = false;
-    presteer_segment_index_ = 0;
-    presteer_until_ = ros::Time();
-    presteer_steer_command_ = 0.0;
-    trajectory_received_ = !segments_.empty();
-    trajectory_completed_ = false;
+    trajectory_received_ = !active_trajectory_.empty();
     last_trajectory_time_ = ros::Time::now();
   }
 
-  speed_pid_.reset();
-  ROS_INFO("Trajectory received: %zu points -> %zu segment(s) [%s]",
-           msg->points.size(), segment_count, summary.str().c_str());
+  ROS_INFO_THROTTLE(1.0, "Active trajectory received: %zu points direction=%s",
+                    msg->points.size(), direction > 0 ? "D" : "R");
 }
 
 void ControlNode::odomCallback(const nav_msgs::OdometryConstPtr& msg)
@@ -517,81 +491,6 @@ void ControlNode::dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& ms
   dynamics_received_ = true;
 }
 
-std::vector<ControlNode::PathSegment>
-ControlNode::splitTrajectory(const carmaker_msgs::TrajectoryPath& msg) const
-{
-  std::vector<PathSegment> result;
-  const std::size_t count = msg.points.size();
-  if (count < 2) {
-    return result;
-  }
-
-  // 1단계: velocity 부호만 먼저 읽는다.
-  // +: 전진, -: 후진, 0: 정지/전환점으로 둔다.
-  std::vector<int> raw_direction(count, 0);
-  for (std::size_t i = 0; i < count; ++i) {
-    const double velocity = msg.points[i].longitudinal_velocity;
-    if (velocity > direction_velocity_epsilon_) {
-      raw_direction[i] = 1;
-    } else if (velocity < -direction_velocity_epsilon_) {
-      raw_direction[i] = -1;
-    }
-  }
-
-  // 2단계: 경로가 정지 속도만 갖는 앞부분이라도 첫 non-zero direction을 알 수 있게
-  // 뒤에서부터 다음 유효 direction을 미리 계산한다.
-  std::vector<int> next_non_zero(count, 0);
-  int upcoming = 0;
-  for (std::size_t reverse_i = count; reverse_i-- > 0;) {
-    if (raw_direction[reverse_i] != 0) {
-      upcoming = raw_direction[reverse_i];
-    }
-    next_non_zero[reverse_i] = upcoming;
-  }
-
-  // 3단계: 0 속도 점은 현재 진행 중인 direction에 붙인다.
-  // cusp에서 멈추는 점들은 이전 segment의 끝점이 되고, 새 segment는 그 점을 복사해 시작한다.
-  std::vector<int> direction(count, 1);
-  int active_direction = next_non_zero.front() == 0 ? 1 : next_non_zero.front();
-  for (std::size_t i = 0; i < count; ++i) {
-    if (raw_direction[i] != 0) {
-      active_direction = raw_direction[i];
-    }
-    direction[i] = active_direction;
-  }
-
-  PathSegment current;
-  current.direction = direction.front();
-
-  // 4단계: direction이 바뀌는 순간 segment를 닫는다.
-  // 새 segment에는 이전 끝점을 속도 0인 boundary로 복사해 기어 전환 기준점을 공유한다.
-  for (std::size_t i = 0; i < count; ++i) {
-    if (i > 0 && direction[i] != current.direction) {
-      if (current.points.size() >= 2) {
-        result.push_back(current);
-      }
-
-      PathSegment next_segment;
-      next_segment.direction = direction[i];
-      if (!current.points.empty()) {
-        PathPoint boundary = current.points.back();
-        boundary.direction = next_segment.direction;
-        boundary.target_speed = 0.0;
-        next_segment.points.push_back(boundary);
-      }
-      current = next_segment;
-    }
-
-    current.points.push_back(makePathPoint(msg.points[i], current.direction));
-  }
-
-  if (current.points.size() >= 2) {
-    result.push_back(current);
-  }
-
-  return result;
-}
-
 ControlNode::PathPoint
 ControlNode::makePathPoint(const carmaker_msgs::TrajectoryPoint& msg, int direction) const
 {
@@ -606,6 +505,16 @@ ControlNode::makePathPoint(const carmaker_msgs::TrajectoryPoint& msg, int direct
   point.curvature = std::isfinite(msg.curvature) ? msg.curvature : 0.0;
   point.direction = direction;
   return point;
+}
+
+int ControlNode::trajectoryDirection(const carmaker_msgs::TrajectoryPath& msg) const
+{
+  for (const auto& point : msg.points) {
+    if (point.direction != 0) {
+      return point.direction < 0 ? -1 : 1;
+    }
+  }
+  return 0;
 }
 
 bool ControlNode::getCurrentState(Pose2D& pose, double& signed_speed) const
@@ -694,41 +603,26 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   // callback에서 갱신될 수 있는 trajectory 상태를 짧게 lock해서 복사한다.
   // 실제 제어 계산은 lock 밖에서 수행해 callback 지연을 줄인다.
-  PathSegment active_segment;
-  std::size_t active_segment_index = 0;
+  ActiveTrajectory active_trajectory;
   std::size_t previous_nearest_index = 0;
-  bool presteer_active = false;
-  ros::Time presteer_until;
-  double presteer_steer_command = 0.0;
   bool should_track = false;
-  bool trajectory_completed = false;
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
-    trajectory_completed = trajectory_completed_;
     const bool trajectory_fresh =
         trajectory_received_ &&
-        !trajectory_completed_ &&
-        (now - last_trajectory_time_).toSec() <= trajectory_timeout_ &&
-        active_segment_index_ < segments_.size();
+        (now - last_trajectory_time_).toSec() <= active_trajectory_timeout_ &&
+        !active_trajectory_.empty();
 
     if (trajectory_fresh) {
-      active_segment = segments_[active_segment_index_];
-      active_segment_index = active_segment_index_;
+      active_trajectory = active_trajectory_;
       previous_nearest_index = nearest_index_;
-      presteer_active =
-          presteer_active_ && presteer_segment_index_ == active_segment_index_;
-      presteer_until = presteer_until_;
-      presteer_steer_command = presteer_steer_command_;
       should_track = true;
-    } else {
-      presteer_active_ = false;
     }
   }
 
   if (!should_track) {
     // 경로가 없거나 timeout이면 neutral + brake로 대기한다.
-    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0, 0.0, 0.0, 0, 0.0,
-                          trajectory_completed ? 5 : 2);
+    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0.0, 0.0, 0, 0.0, 2);
     if (publish_stop_without_path_) {
       publishStop(0);
     }
@@ -737,48 +631,13 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   }
 
   const double current_speed = std::abs(signed_speed);
-  // 현재 segment 안에서만 nearest point를 찾는다.
-  // 이것이 "전체 경로를 한 번에 추종하지 않고 같은 기어 단위로 제어"하는 핵심이다.
-  const std::size_t nearest_index = findNearestIndex(active_segment, pose, previous_nearest_index);
+  const std::size_t nearest_index =
+      findNearestIndex(active_trajectory, pose, previous_nearest_index);
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
-    if (active_segment_index == active_segment_index_) {
+    if (active_trajectory.direction() == active_trajectory_.direction()) {
       nearest_index_ = nearest_index;
     }
-  }
-
-  if (presteer_active) {
-    const double presteer_lookahead =
-        clamp(lookahead_distance_, min_lookahead_distance_, max_lookahead_distance_);
-    const std::size_t presteer_target_index =
-        findLookaheadIndex(active_segment, nearest_index, presteer_lookahead);
-    std::size_t presteer_preview_index = presteer_target_index;
-    const double presteer_preview_curvature =
-        computePreviewCurvature(active_segment, nearest_index, presteer_preview_index);
-    if (now < presteer_until || current_speed > gear_switch_speed_) {
-      publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
-                            nearest_index, presteer_target_index, 0.0,
-                            presteer_lookahead, 3, presteer_steer_command, 4,
-                            presteer_preview_index, curvature_preview_distance_,
-                            presteer_preview_curvature);
-      publishStop(active_segment.direction, presteer_steer_command);
-      speed_pid_.reset();
-      return;
-    }
-
-    std::lock_guard<std::mutex> lock(trajectory_mutex_);
-    if (presteer_segment_index_ == active_segment_index) {
-      presteer_active_ = false;
-    }
-  }
-
-  if (isSegmentComplete(active_segment, pose, nearest_index)) {
-    // segment 끝에 도착하면 바로 다음 segment로 넘어가지 않고 먼저 충분히 감속한다.
-    // 전진/후진 기어 전환을 움직이는 중에 하지 않기 위한 처리다.
-    publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
-                          nearest_index, nearest_index, 0.0, 0.0, 2, 0.0, 3);
-    advanceOrStop(active_segment, active_segment_index, pose, current_speed, now);
-    return;
   }
 
   // 속도 목표와 curvature feedforward는 lookahead point에서 읽고,
@@ -787,46 +646,62 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   const double lookahead =
       clamp(lookahead_distance_ + lookahead_time_ * current_speed,
             min_lookahead_distance_, max_lookahead_distance_);
-  const std::size_t target_index = findLookaheadIndex(active_segment, nearest_index, lookahead);
+  const std::size_t target_index = findLookaheadIndex(active_trajectory, nearest_index, lookahead);
   std::size_t preview_index = target_index;
   const double preview_curvature =
-      computePreviewCurvature(active_segment, nearest_index, preview_index);
+      computePreviewCurvature(active_trajectory, nearest_index, preview_index);
 
-  const double target_speed = selectTargetSpeed(active_segment, target_index);
-  const double accel_command = speed_pid_.calculate(target_speed, current_speed, dt);
+  const double target_speed = selectTargetSpeed(active_trajectory, target_index);
   const double steer_command =
-      computeSteeringCommand(pose, active_segment.points[nearest_index],
+      computeSteeringCommand(pose, active_trajectory.points[nearest_index],
                              preview_curvature,
-                             std::max(current_speed, target_speed), active_segment.direction);
+                             std::max(current_speed, target_speed), active_trajectory.direction());
 
-  publishDebugTelemetry(pose, signed_speed, &active_segment, active_segment_index,
+  const bool stop_trajectory =
+      std::all_of(active_trajectory.points.begin(), active_trajectory.points.end(),
+                  [this](const PathPoint& point) {
+                    return point.target_speed <= stop_trajectory_velocity_epsilon_;
+                  });
+  if (stop_trajectory) {
+    publishDebugTelemetry(pose, signed_speed, &active_trajectory,
+                          nearest_index, target_index, 0.0, lookahead, 2, steer_command,
+                          3, preview_index, curvature_preview_distance_, preview_curvature);
+    speed_pid_.reset();
+    publishStop(active_trajectory.direction(), steer_command);
+    return;
+  }
+
+  const double accel_command = speed_pid_.calculate(target_speed, current_speed, dt);
+
+  publishDebugTelemetry(pose, signed_speed, &active_trajectory,
                         nearest_index, target_index, target_speed, lookahead, 1, steer_command,
                         0, preview_index, curvature_preview_distance_, preview_curvature);
-  publishControl(active_segment.direction, steer_command, accel_command);
+  publishControl(active_trajectory.direction(), steer_command, accel_command);
 }
 
-std::size_t ControlNode::findNearestIndex(const PathSegment& segment,
+std::size_t ControlNode::findNearestIndex(const ActiveTrajectory& trajectory,
                                           const Pose2D& pose,
                                           std::size_t previous_index) const
 {
-  if (segment.points.empty()) {
+  const auto& path = trajectory.points;
+  if (path.empty()) {
     return 0;
   }
 
   std::size_t start = 0;
-  std::size_t end = segment.points.size() - 1;
-  if (previous_index < segment.points.size()) {
+  std::size_t end = path.size() - 1;
+  if (previous_index < path.size()) {
     // 이전 nearest 주변만 검색해 경로가 가까이 겹치는 상황에서 index가 뒤로 크게 튀는 것을 줄인다.
     const std::size_t back = static_cast<std::size_t>(std::max(0, nearest_search_back_));
     const std::size_t ahead = static_cast<std::size_t>(std::max(0, nearest_search_ahead_));
     start = previous_index > back ? previous_index - back : 0;
-    end = std::min(segment.points.size() - 1, previous_index + ahead);
+    end = std::min(path.size() - 1, previous_index + ahead);
   }
 
   std::size_t best_index = start;
   double best_distance = std::numeric_limits<double>::max();
   for (std::size_t i = start; i <= end; ++i) {
-    const double distance = distance2D(pose, segment.points[i]);
+    const double distance = distance2D(pose, path[i]);
     if (distance < best_distance) {
       best_distance = distance;
       best_index = i;
@@ -835,67 +710,52 @@ std::size_t ControlNode::findNearestIndex(const PathSegment& segment,
   return best_index;
 }
 
-std::size_t ControlNode::findLookaheadIndex(const PathSegment& segment,
+std::size_t ControlNode::findLookaheadIndex(const ActiveTrajectory& trajectory,
                                             std::size_t nearest_index,
                                             double lookahead_distance) const
 {
-  if (segment.points.empty()) {
+  const auto& path = trajectory.points;
+  if (path.empty()) {
     return 0;
   }
 
-  std::size_t index = std::min(nearest_index, segment.points.size() - 1);
+  std::size_t index = std::min(nearest_index, path.size() - 1);
   double accumulated = 0.0;
   // trajectory point 간 실제 거리 누적으로 lookahead index를 찾는다.
   // planning resampling 간격이 바뀌어도 m 단위 lookahead가 유지된다.
-  while (index + 1 < segment.points.size() && accumulated < lookahead_distance) {
-    accumulated += distance2D(segment.points[index], segment.points[index + 1]);
+  while (index + 1 < path.size() && accumulated < lookahead_distance) {
+    accumulated += distance2D(path[index], path[index + 1]);
     ++index;
   }
   return index;
 }
 
-bool ControlNode::isSegmentComplete(const PathSegment& segment,
-                                    const Pose2D& pose,
-                                    std::size_t nearest_index) const
-{
-  if (segment.points.empty()) {
-    return true;
-  }
-
-  const std::size_t last_index = segment.points.size() - 1;
-  const bool near_end_index =
-      nearest_index + static_cast<std::size_t>(std::max(0, segment_finish_index_margin_)) >= last_index;
-  const bool near_end_position = distance2D(pose, segment.points.back()) <= segment_finish_distance_;
-  // index 조건과 위치 조건을 모두 만족해야 segment 완료로 본다.
-  // 단순 거리만 쓰면 U-turn/후진 경로에서 끝점 근처를 지나갈 때 조기 전환될 수 있다.
-  return near_end_index && near_end_position;
-}
-
-double ControlNode::computePreviewCurvature(const PathSegment& segment,
+double ControlNode::computePreviewCurvature(const ActiveTrajectory& trajectory,
                                             std::size_t nearest_index,
                                             std::size_t& preview_index) const
 {
-  if (segment.points.empty()) {
+  const auto& path = trajectory.points;
+  if (path.empty()) {
     preview_index = 0;
     return 0.0;
   }
 
   const double preview_distance = std::max(0.0, curvature_preview_distance_);
-  preview_index = findLookaheadIndex(segment, nearest_index, preview_distance);
+  preview_index = findLookaheadIndex(trajectory, nearest_index, preview_distance);
 
   const double half_window = 0.5 * std::max(0.0, curvature_preview_window_);
   const std::size_t start_index =
-      findLookaheadIndex(segment, nearest_index, std::max(0.0, preview_distance - half_window));
+      findLookaheadIndex(trajectory, nearest_index, std::max(0.0, preview_distance - half_window));
   const std::size_t end_index =
-      findLookaheadIndex(segment, nearest_index, preview_distance + half_window);
+      findLookaheadIndex(trajectory, nearest_index, preview_distance + half_window);
 
   const std::size_t first = std::min(start_index, end_index);
   const std::size_t last = std::max(start_index, end_index);
 
   double curvature_sum = 0.0;
   std::size_t curvature_count = 0;
-  for (std::size_t i = first; i <= last && i < segment.points.size(); ++i) {
-    const double curvature = segment.points[i].curvature;
+  for (std::size_t i = first; i <= last && i < path.size(); ++i) {
+    const double curvature = path[i].curvature;
     if (!std::isfinite(curvature)) {
       continue;
     }
@@ -908,7 +768,7 @@ double ControlNode::computePreviewCurvature(const PathSegment& segment,
   }
 
   const double fallback_curvature =
-      segment.points[std::min(preview_index, segment.points.size() - 1)].curvature;
+      path[std::min(preview_index, path.size() - 1)].curvature;
   return std::isfinite(fallback_curvature) ? fallback_curvature : 0.0;
 }
 
@@ -949,98 +809,42 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
   return clamp(steer_command, -max_steer_command_, max_steer_command_);
 }
 
-double ControlNode::selectTargetSpeed(const PathSegment& segment, std::size_t target_index) const
+double ControlNode::selectTargetSpeed(const ActiveTrajectory& trajectory,
+                                      std::size_t target_index) const
 {
-  if (segment.points.empty()) {
+  const auto& path = trajectory.points;
+  if (path.empty()) {
     return 0.0;
   }
 
-  target_index = std::min(target_index, segment.points.size() - 1);
-  double target_speed = segment.points[target_index].target_speed;
+  target_index = std::min(target_index, path.size() - 1);
+  const bool stopped_segment =
+      std::all_of(path.begin(), path.end(),
+                  [this](const PathPoint& point) {
+                    return point.target_speed <= stop_trajectory_velocity_epsilon_;
+                  });
+  if (stopped_segment) {
+    return 0.0;
+  }
+
+  double target_speed = path[target_index].target_speed;
   if (!std::isfinite(target_speed)) {
     target_speed = 0.0;
   }
 
-  // segment 완료 판정은 controlTimerCallback()에서 이미 먼저 수행된다.
-  // 아직 완료가 아니라면 lookahead가 끝점의 0 속도를 읽더라도 최소 속도를 유지해야
-  // 끝점 근처에서 멈춘 채 다음 segment로 넘어가지 못하는 상황을 피할 수 있다.
-  target_speed = std::max(target_speed, min_tracking_speed_);
+  double path_max_speed = 0.0;
+  for (const auto& point : path) {
+    if (std::isfinite(point.target_speed)) {
+      path_max_speed = std::max(path_max_speed, point.target_speed);
+    }
+  }
+
+  // Planner owns segment completion. If this is not an all-zero stop trajectory,
+  // keep a small tracking speed, but respect intentionally slow creep trajectories.
+  const double floor_speed = std::min(min_tracking_speed_, path_max_speed);
+  target_speed = std::max(target_speed, floor_speed);
 
   return clamp(target_speed, 0.0, max_target_speed_);
-}
-
-void ControlNode::advanceOrStop(const PathSegment& active_segment,
-                                std::size_t active_segment_index,
-                                const Pose2D& pose,
-                                double current_speed,
-                                const ros::Time& now)
-{
-  const double distance_to_end =
-      active_segment.points.empty() ? -1.0 : distance2D(pose, active_segment.points.back());
-
-  if (current_speed > gear_switch_speed_) {
-    // 아직 움직이는 중이면 현재 gear를 유지한 채 brake를 걸어 segment 끝에서 정지시킨다.
-    ROS_INFO_THROTTLE(1.0,
-                      "Segment %zu reached. Braking before switch: speed=%.3f m/s, "
-                      "distance_to_end=%.3f m",
-                      active_segment_index + 1,
-                      current_speed,
-                      distance_to_end);
-    publishStop(active_segment.direction);
-    return;
-  }
-
-  std::lock_guard<std::mutex> lock(trajectory_mutex_);
-  if (active_segment_index != active_segment_index_) {
-    return;
-  }
-
-  speed_pid_.reset();
-  nearest_index_ = 0;
-  presteer_active_ = false;
-  if (active_segment_index_ + 1 < segments_.size()) {
-    // 충분히 느려진 뒤 다음 segment로 넘어간다.
-    // 다음 segment 조향을 정지 상태에서 먼저 보낸 뒤 PID/Stanley 추종을 재개한다.
-    const std::size_t completed_segment_index = active_segment_index_;
-    ++active_segment_index_;
-    PathSegment& next_segment = segments_[active_segment_index_];
-    double next_steer_command = 0.0;
-    if (presteer_enabled_ && presteer_duration_ > 0.0 && !next_segment.points.empty()) {
-      const std::size_t next_nearest_index = findNearestIndex(next_segment, pose, 0);
-      const double presteer_lookahead =
-          clamp(lookahead_distance_, min_lookahead_distance_, max_lookahead_distance_);
-      const std::size_t next_target_index =
-          findLookaheadIndex(next_segment, next_nearest_index, presteer_lookahead);
-      std::size_t next_preview_index = next_target_index;
-      const double next_preview_curvature =
-          computePreviewCurvature(next_segment, next_nearest_index, next_preview_index);
-      next_steer_command =
-          computeSteeringCommand(pose, next_segment.points[next_nearest_index],
-                                 next_preview_curvature,
-                                 min_tracking_speed_, next_segment.direction);
-      presteer_active_ = true;
-      presteer_segment_index_ = active_segment_index_;
-      presteer_until_ = now + ros::Duration(presteer_duration_);
-      presteer_steer_command_ = next_steer_command;
-    }
-
-    ROS_INFO("Segment %zu/%zu arrived: speed=%.3f m/s, distance_to_end=%.3f m. "
-             "Switching to segment %zu/%zu, direction=%s",
-             completed_segment_index + 1, segments_.size(),
-             current_speed, distance_to_end,
-             active_segment_index_ + 1, segments_.size(),
-             next_segment.direction > 0 ? "forward" : "reverse");
-    publishStop(next_segment.direction, next_steer_command);
-  } else {
-    trajectory_completed_ = true;
-    presteer_active_ = false;
-    ROS_INFO("Trajectory complete: final segment %zu/%zu arrived, speed=%.3f m/s, "
-             "distance_to_end=%.3f m",
-             active_segment_index_ + 1, segments_.size(),
-             current_speed, distance_to_end);
-    publishStopReason(5);
-    publishStop(0);
-  }
 }
 
 void ControlNode::advertiseDebugTopics()
@@ -1066,7 +870,7 @@ void ControlNode::advertiseDebugTopics()
   debug_curvature_preview_pose_pub_ =
       nh_.advertise<geometry_msgs::PoseStamped>(debug_topic_prefix_ + "/curvature_preview_pose", 10);
   debug_active_path_pub_ =
-      nh_.advertise<nav_msgs::Path>(debug_topic_prefix_ + "/active_segment_path", 1, true);
+      nh_.advertise<nav_msgs::Path>(debug_topic_prefix_ + "/active_path", 1, true);
 
   debug_current_speed_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/current_speed", 10);
@@ -1104,8 +908,6 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/distance_to_segment_end", 10);
   debug_trajectory_age_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/trajectory_age", 10);
-  debug_trajectory_completed_pub_ =
-      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/trajectory_completed", 10);
   debug_direction_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/direction", 10);
   debug_tracking_state_pub_ =
@@ -1119,8 +921,7 @@ void ControlNode::advertiseDebugTopics()
 
 void ControlNode::publishDebugTelemetry(const Pose2D& pose,
                                         double signed_speed,
-                                        const PathSegment* segment,
-                                        std::size_t segment_index,
+                                        const ActiveTrajectory* trajectory,
                                         std::size_t nearest_index,
                                         std::size_t target_index,
                                         double target_speed,
@@ -1147,18 +948,16 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   double distance_to_end = -1.0;
   double trajectory_age = -1.0;
   int direction = 0;
-  int segment_index_value = segment ? static_cast<int>(segment_index) : -1;
+  int segment_index_value = trajectory ? 0 : -1;
   int nearest_index_value = -1;
   int target_index_value = -1;
   int preview_index_value = -1;
   int segment_count = 0;
-  int trajectory_completed = 0;
   int steer_saturated = 0;
 
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
-    segment_count = static_cast<int>(segments_.size());
-    trajectory_completed = trajectory_completed_ ? 1 : 0;
+    segment_count = trajectory_received_ && !active_trajectory_.empty() ? 1 : 0;
     if (trajectory_received_) {
       trajectory_age = (stamp - last_trajectory_time_).toSec();
     }
@@ -1168,21 +967,22 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   publishPoseDebug(debug_current_control_pose_pub_,
                    pose.x, pose.y, pose.yaw, stamp);
 
-  if (segment && !segment->points.empty()) {
-    direction = segment->direction;
-    const std::size_t nearest = std::min(nearest_index, segment->points.size() - 1);
-    const std::size_t target = std::min(target_index, segment->points.size() - 1);
+  if (trajectory && !trajectory->empty()) {
+    const auto& path = trajectory->points;
+    direction = trajectory->direction();
+    const std::size_t nearest = std::min(nearest_index, path.size() - 1);
+    const std::size_t target = std::min(target_index, path.size() - 1);
     const bool has_preview =
         preview_index != std::numeric_limits<std::size_t>::max();
     const std::size_t preview =
-        has_preview ? std::min(preview_index, segment->points.size() - 1) : target;
+        has_preview ? std::min(preview_index, path.size() - 1) : target;
     nearest_index_value = static_cast<int>(nearest);
     target_index_value = static_cast<int>(target);
     preview_index_value = has_preview ? static_cast<int>(preview) : -1;
-    const PathPoint& nearest_point = segment->points[nearest];
-    const PathPoint& target_point = segment->points[target];
-    const PathPoint& preview_point = segment->points[preview];
-    distance_to_end = distance2D(pose, segment->points.back());
+    const PathPoint& nearest_point = path[nearest];
+    const PathPoint& target_point = path[target];
+    const PathPoint& preview_point = path[preview];
+    distance_to_end = distance2D(pose, path.back());
     if (has_preview) {
       preview_curvature_value = preview_curvature;
       preview_distance_value = preview_distance;
@@ -1215,7 +1015,7 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
         debug_path_period_ <= 0.0 ||
         (stamp - last_debug_path_time_).toSec() >= debug_path_period_;
     if (should_publish_path) {
-      publishActiveSegmentPath(*segment, stamp);
+      publishActiveSegmentPath(*trajectory, stamp);
     }
   } else {
     target_speed = 0.0;
@@ -1259,8 +1059,6 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_target_index_pub_.publish(int_msg);
   int_msg.data = preview_index_value;
   debug_curvature_preview_index_pub_.publish(int_msg);
-  int_msg.data = trajectory_completed;
-  debug_trajectory_completed_pub_.publish(int_msg);
   int_msg.data = steer_saturated;
   debug_steer_saturated_pub_.publish(int_msg);
   int_msg.data = direction;
@@ -1298,14 +1096,15 @@ void ControlNode::publishPoseDebug(const ros::Publisher& publisher,
   publisher.publish(msg);
 }
 
-void ControlNode::publishActiveSegmentPath(const PathSegment& segment, const ros::Time& stamp)
+void ControlNode::publishActiveSegmentPath(const ActiveTrajectory& trajectory,
+                                           const ros::Time& stamp)
 {
   nav_msgs::Path path;
   path.header.stamp = stamp;
   path.header.frame_id = debug_frame_id_;
-  path.poses.reserve(segment.points.size());
+  path.poses.reserve(trajectory.points.size());
 
-  for (const PathPoint& point : segment.points) {
+  for (const PathPoint& point : trajectory.points) {
     geometry_msgs::PoseStamped pose;
     pose.header = path.header;
     pose.pose.position.x = point.x;

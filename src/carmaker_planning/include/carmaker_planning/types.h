@@ -293,9 +293,10 @@ struct GlobalMainConfig {
 
 struct LocalPlannerConfig {
   // Arrival detection
-  double arrival_xy_tol  = 0.3;   ///< [m]   segment endpoint XY tolerance
-  double arrival_yaw_tol = 0.2;   ///< [rad]  segment endpoint yaw tolerance
-  double arrival_vel_tol = 0.05;  ///< [m/s]  velocity threshold at cusp stop
+  double endpoint_xy_tol  = 0.3;  ///< [m] endpoint XY tolerance
+  double endpoint_yaw_tol = 0.2;  ///< [rad] endpoint yaw tolerance
+  double stop_vel_tol = 0.05;     ///< [m/s] velocity threshold before segment transition
+  double precision_zone_distance = 0.3; ///< [m] final approach speed-cap zone
 
   // Replanning
   double replanning_rate_hz        = 10.0; ///< [Hz]  local path refresh rate
@@ -314,9 +315,12 @@ struct LocalPlannerConfig {
 
 inline void loadLocalPlannerConfig(const ros::NodeHandle& nh, LocalPlannerConfig& cfg,
                                    const std::string& ns = "local_planner") {
-  nh.param(ns + "/arrival/xy_tol",  cfg.arrival_xy_tol,  0.3);
-  nh.param(ns + "/arrival/yaw_tol", cfg.arrival_yaw_tol, 0.2);
-  nh.param(ns + "/arrival/vel_tol", cfg.arrival_vel_tol, 0.05);
+  nh.param(ns + "/arrival/endpoint_xy_tol",  cfg.endpoint_xy_tol,  0.3);
+  nh.param(ns + "/arrival/endpoint_yaw_tol", cfg.endpoint_yaw_tol, 0.2);
+  nh.param(ns + "/arrival/stop_vel_tol", cfg.stop_vel_tol, 0.05);
+  nh.param(ns + "/arrival/precision_zone_distance",
+           cfg.precision_zone_distance,
+           cfg.endpoint_xy_tol);
 
   nh.param(ns + "/replanning/rate_hz",         cfg.replanning_rate_hz,        10.0);
   nh.param(ns + "/replanning/dist_threshold",  cfg.replanning_dist_threshold,  0.5);

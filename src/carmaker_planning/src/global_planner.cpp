@@ -1,6 +1,6 @@
 /**
  * @file global_planner.cpp
- * @brief Implementation of the Global Planner orchestrator.
+ * @brief Implementation of the global path planner.
  */
 
 #include "carmaker_planning/global_planner.h"

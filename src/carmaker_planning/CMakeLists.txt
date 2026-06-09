@@ -58,6 +58,7 @@ target_link_libraries(carmaker_planning_nodelet
 # ── Local Planning Library ───────────────────────────────────────────
 add_library(${PROJECT_NAME}_local
   src/local_planner.cpp
+  src/trajectory_state_machine.cpp
 )
 target_link_libraries(${PROJECT_NAME}_local
   ${PROJECT_NAME}_global   # provides post_processing, types, math
@@ -70,12 +71,30 @@ add_library(carmaker_planning_local_nodelet
 )
 target_link_libraries(carmaker_planning_local_nodelet
   ${PROJECT_NAME}_local
+  ${PROJECT_NAME}_global
   ${catkin_LIBRARIES}
 )
 
 if(catkin_EXPORTED_TARGETS)
   add_dependencies(carmaker_planning_nodelet       ${catkin_EXPORTED_TARGETS})
   add_dependencies(carmaker_planning_local_nodelet ${catkin_EXPORTED_TARGETS})
+endif()
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_trajectory_state_machine test/test_trajectory_state_machine.cpp)
+  if(TARGET test_trajectory_state_machine)
+    target_link_libraries(test_trajectory_state_machine
+      ${PROJECT_NAME}_local
+      ${catkin_LIBRARIES}
+    )
+  endif()
+  catkin_add_gtest(test_quintic_path_fitter test/test_quintic_path_fitter.cpp)
+  if(TARGET test_quintic_path_fitter)
+    target_link_libraries(test_quintic_path_fitter
+      ${PROJECT_NAME}_local
+      ${catkin_LIBRARIES}
+    )
+  endif()
 endif()
 
 install(TARGETS ${PROJECT_NAME}_global carmaker_planning_nodelet
@@ -87,4 +106,3 @@ install(TARGETS ${PROJECT_NAME}_global carmaker_planning_nodelet
 install(DIRECTORY include/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
 install(FILES nodelet_plugins.xml DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 install(DIRECTORY launch config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
-

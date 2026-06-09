@@ -1,6 +1,6 @@
 /**
  * @file global_planner.h
- * @brief Orchestrator class for Global Path Planning (Hybrid A*, smoothing, profiling).
+ * @brief Global path planner for Hybrid A*, smoothing, and profiling.
  */
 #ifndef CARMAKER_PLANNING_GLOBAL_PLANNER_H
 #define CARMAKER_PLANNING_GLOBAL_PLANNER_H

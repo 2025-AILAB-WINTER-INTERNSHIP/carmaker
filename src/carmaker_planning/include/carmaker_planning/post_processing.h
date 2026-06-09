@@ -11,13 +11,13 @@
 namespace carmaker_planning {
 
 struct KinematicLimits {
-  double max_vel;
-  double max_accel;
-  double max_decel;
-  double max_jerk;
-  double max_steer_vel;
-  double max_lat_acc;
-  double min_vel_denom;
+  double max_vel = 2.0;
+  double max_accel = 0.8;
+  double max_decel = 0.8;
+  double max_jerk = 1.5;
+  double max_steer_vel = 0.6108;
+  double max_lat_acc = 0.8;
+  double min_vel_denom = 0.02;
 };
 
 class PostProcessor {

@@ -54,26 +54,10 @@ Path SegmentManager::activeSegmentPath() const {
               global_path_.begin() + static_cast<std::ptrdiff_t>(seg->end_idx + 1));
 }
 
-bool SegmentManager::updateArrival(const State& ego,
-                                   double xy_tol, double yaw_tol, double vel_tol) {
+bool SegmentManager::advanceToNextSegment() {
   if (finished_) return true;
-
-  const PathPoint* ep = activeEndpoint();
-  if (!ep) { finished_ = true; return true; }
-
-  const double d_xy  = dist(ego.x, ego.y, ep->x, ep->y);
-  const double d_yaw = std::abs(wrap_to_pi(ego.theta - ep->theta));
-  const bool   vel_ok = std::abs(ego.v) <= vel_tol;
-
-  // Cusp (intermediate): require near-zero velocity to confirm safe stop before reversing.
-  // Final goal: XY + yaw only (vehicle may still be moving toward stop).
-  const bool is_final = (active_idx_ == segments_.size() - 1);
-  const bool arrived  = (d_xy < xy_tol) && (d_yaw < yaw_tol) && (is_final || vel_ok);
-
-  if (arrived) {
-    ++active_idx_;
-    finished_ = (active_idx_ >= segments_.size());
-  }
+  ++active_idx_;
+  finished_ = (active_idx_ >= segments_.size());
   return finished_;
 }
 
@@ -145,7 +129,9 @@ double QuinticPathFitter::curvature(const Eigen::Matrix<double,6,1>& cx,
 Path QuinticPathFitter::fit(const State& ego, double ego_kappa,
                              const PathPoint& target, double resolution) const {
   const double L = dist(ego.x, ego.y, target.x, target.y);
-  if (L < 1e-3) return {};  // Already at endpoint
+  if (L < 1e-3) {
+    return makeShortDistanceFallback(ego, target, L);
+  }
 
   const double cos0 = std::cos(ego.theta), sin0 = std::sin(ego.theta);
   const double cosF = std::cos(target.theta), sinF = std::sin(target.theta);
@@ -183,6 +169,36 @@ Path QuinticPathFitter::fit(const State& ego, double ego_kappa,
     local_path.push_back(pt);
   }
   return local_path;
+}
+
+Path QuinticPathFitter::makeShortDistanceFallback(
+    const State& ego,
+    const PathPoint& target,
+    double length) {
+  const int direction = target.direction < 0 ? -1 : 1;
+
+  Path path;
+  path.reserve(2);
+
+  PathPoint start;
+  start.x = ego.x;
+  start.y = ego.y;
+  start.theta = ego.theta;
+  start.kappa = 0.0;
+  start.s = 0.0;
+  start.direction = direction;
+  path.push_back(start);
+
+  PathPoint end;
+  end.x = target.x;
+  end.y = target.y;
+  end.theta = ego.theta;
+  end.kappa = 0.0;
+  end.s = std::max(0.0, length);
+  end.direction = direction;
+  path.push_back(end);
+
+  return path;
 }
 
 } // namespace carmaker_planning

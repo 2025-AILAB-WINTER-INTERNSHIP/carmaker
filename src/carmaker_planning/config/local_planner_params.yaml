@@ -8,7 +8,7 @@ topics:
     dynamics: "/carmaker/dynamic_info" # GT
     odom: "/localization/odom" # EKF
   publish:
-    local_trajectory: "/planning/local/trajectory"
+    trajectory: "/planning/trajectory"
     debug:
       path: "/planning/debug/local/path"
       pose: "/planning/debug/local/pose"
@@ -22,23 +22,39 @@ frames:
 
 setting:
   use_gt_pose: true # true → /carmaker/dynamic_info (GT), false → /localization/odom (EKF)
+  test_pose:
+    enabled: false # true → /planning/start for offline quintic path fitting test
+    topic: "/planning/start"
 
 # Vehicle geometry (copied from global_planner_params.yaml for self-containment)
 vehicle:
   wheelbase: 2.97
+  min_turning_radius: 8.5
   limits:
     max_steer_vel: 0.6108 # [rad/s]
 
 # Local planner parameters
 local_planner:
-  arrival:
-    xy_tol: 0.05 # [m]     XY distance threshold to declare segment endpoint reached
-    yaw_tol: 0.2 # [rad]   heading error threshold at arrival
-    vel_tol: 0.05 # [m/s]   velocity threshold at cusp stop (intermediate segments only)
+  mode: "local" # "local" -> quintic fitting, "global" -> active global segment
+  pose_timeout: 0.5 # [s] stop updating trajectory when GT/EKF pose is stale
 
   replanning:
     rate_hz: 10.0 # [Hz]  local path refresh rate
     dist_threshold: 0.5 # [m]   lateral deviation triggering immediate replan (reserved)
+
+  arrival:
+    endpoint_xy_tol: 0.05 # [m] XY distance threshold to declare endpoint reached
+    endpoint_yaw_tol: 0.2 # [rad] heading error threshold to declare endpoint reached
+    stop_vel_tol: 0.05 # [m/s] velocity threshold before segment transition/final hold
+    precision_zone_distance: 0.3 # [m] final endpoint zone where creep speed cap applies
+
+  final_approach:
+    max_vel: 0.15 # [m/s] creep speed cap inside final precision zone
+
+  transition:
+    stop_duration: 0.5 # [s] hold zero-speed current segment after cusp/final arrival
+    presteer_duration: 0.5 # [s] publish zero-speed next segment before tracking
+    idle_after_finish_duration: 0.5 # [s] publish final zero-speed trajectory before idle
 
   sample_resolution: 0.1 # [m]  uniform arc-length step between output path points
 
@@ -49,3 +65,6 @@ local_planner:
     max_jerk: 1.5 # [m/s^3]
     max_lat_acc: 0.8 # [m/s^2]
     min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
+
+  visualization:
+    arrow_spacing_meters: 0.2
