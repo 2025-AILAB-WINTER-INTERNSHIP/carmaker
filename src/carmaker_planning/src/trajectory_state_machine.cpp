@@ -62,21 +62,26 @@ TrajectoryStateMachine::update(const carmaker_planning::State& ego, double now_s
     const bool precise_reached = endpointReachedWithTolerances(ego,
                                                                endpoint,
                                                                tolerance);
-    if (hold_done && precise_reached) {
+    if (hold_done) {
+      const bool failed = !precise_reached;
       if (final_segment) {
         segment_manager_.advanceToNextSegment();
         state_ = PlannerState::kIdle;
         return makeDecision(TrajectorySource::kNone,
                             TrajectoryIntent::kNone,
-                            true);
+                            true,
+                            failed);
       }
 
       segment_manager_.advanceToNextSegment();
       state_ = PlannerState::kPresteering;
       transition_until_sec_ = now_sec + config_.presteer_duration;
       return makeDecision(TrajectorySource::kActiveSegment,
-                          TrajectoryIntent::kPresteerNext);
+                          TrajectoryIntent::kPresteerNext,
+                          false,
+                          failed);
     }
+
     return makeDecision(TrajectorySource::kActiveSegment,
                         TrajectoryIntent::kStopCurrent);
   }
@@ -126,8 +131,8 @@ bool TrajectoryStateMachine::shouldStartStopping(const carmaker_planning::State&
     return true;
   }
 
-  // Overshoot check: force stopping immediately if we cross the finish line regardless of velocity
-  return isOvershot(ego, endpoint, tolerance);
+  // Arrival failed check: force stopping immediately if we cross the finish line regardless of velocity
+  return isArrivalFailed(ego, endpoint, tolerance);
 }
 
 TrajectoryStateMachine::ArrivalTolerance
@@ -164,23 +169,25 @@ bool TrajectoryStateMachine::endpointReachedWithTolerances(
     return true;
   }
 
-  // Accept overshoot as reached if the vehicle is stopped
-  return isOvershot(ego, endpoint, tolerance);
+  return false;
 }
 
-bool TrajectoryStateMachine::isOvershot(
+bool TrajectoryStateMachine::isArrivalFailed(
     const carmaker_planning::State& ego,
     const PathPoint& endpoint,
     ArrivalTolerance tolerance) {
   double dx = ego.x - endpoint.x;
   double dy = ego.y - endpoint.y;
-  double proj = dx * std::cos(endpoint.theta) + dy * std::sin(endpoint.theta);
-  bool overshot = (endpoint.direction * proj > 0.0);
+
+  // Projection along endpoint heading direction
+  double proj_endpoint = dx * std::cos(endpoint.theta) + dy * std::sin(endpoint.theta);
+  bool overshot_endpoint = (endpoint.direction * proj_endpoint > 0.0);
+
   double lateral_err = std::abs(-dx * std::sin(endpoint.theta) + dy * std::cos(endpoint.theta));
   double d_yaw = std::abs(wrap_to_pi(ego.theta - endpoint.theta));
   double dist_to_endpoint = std::hypot(dx, dy);
 
-  return overshot && (dist_to_endpoint < tolerance.xy * 3.0 || (lateral_err < tolerance.xy * 2.0 && d_yaw <= tolerance.yaw * 1.5));
+  return overshot_endpoint && (dist_to_endpoint > tolerance.xy * 2.0 || (lateral_err > tolerance.xy * 1.5 && d_yaw <= tolerance.yaw));
 }
 
 bool TrajectoryStateMachine::activeSegmentIsFinal() const {
@@ -191,7 +198,8 @@ bool TrajectoryStateMachine::activeSegmentIsFinal() const {
 TrajectoryStateMachine::TrajectoryDecision
 TrajectoryStateMachine::makeDecision(TrajectorySource path_source,
                            TrajectoryIntent intent,
-                           bool finished) const {
+                           bool finished,
+                           bool failed) const {
   Path active_segment;
   Path global_path;
   PathPoint endpoint;
@@ -207,6 +215,7 @@ TrajectoryStateMachine::makeDecision(TrajectorySource path_source,
   TrajectoryDecision result;
   result.publish = path_source != TrajectorySource::kNone && !active_segment.empty();
   result.finished = finished;
+  result.failed = failed;
   result.active_direction = pathDirection(active_segment, has_endpoint ? endpoint.direction : 1);
   result.active_segment_index = segment_manager_.activeSegmentIndex();
   result.state = state_;

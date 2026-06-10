@@ -169,7 +169,8 @@ private:
                                 const PathPoint& feedback_reference,
                                 double preview_curvature,
                                 double speed,
-                                int direction) const;
+                                int direction,
+                                double distance_to_end) const;
   TargetSpeedDecision selectTargetSpeed(const ActiveTrajectory& trajectory,
                                         std::size_t nearest_index,
                                         std::size_t target_index,
@@ -748,13 +749,20 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   std::size_t preview_index = target_index;
   const double preview_curvature = computePreviewCurvature(active_trajectory, nearest_index, preview_index);
 
-  const double distance_to_end = distance2D(pose, active_trajectory.points.back());
+  // Use arc-length along path from nearest index to the end instead of
+  // Euclidean distance. On curved paths, Euclidean distance underestimates the
+  // actual remaining travel distance, causing late deceleration and overshoot.
+  double distance_to_end = distance2D(pose, active_trajectory.points[nearest_index]);
+  for (std::size_t i = nearest_index; i + 1 < active_trajectory.size(); ++i) {
+    distance_to_end += distance2D(active_trajectory.points[i], active_trajectory.points[i + 1]);
+  }
   const TargetSpeedDecision speed_decision = selectTargetSpeed(active_trajectory, nearest_index, target_index, distance_to_end);
   const double target_speed = speed_decision.target_speed;
   const double steer_command = computeSteeringCommand(pose, active_trajectory.points[nearest_index],
                                 preview_curvature,
                                 std::max(current_speed, target_speed),
-                                active_trajectory.direction());
+                                active_trajectory.direction(),
+                                distance_to_end);
 
   const bool stop_trajectory = std::all_of(active_trajectory.points.begin(), active_trajectory.points.end(),
                                 [this](const PathPoint& point) {
@@ -886,7 +894,8 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            const PathPoint& feedback_reference,
                                            double preview_curvature,
                                            double speed,
-                                           int direction) const
+                                           int direction,
+                                           double distance_to_end) const
 {
   // cte 부호 규약:
   // 경로 yaw 기준 차량이 왼쪽에 있으면 cte가 음수가 된다.
@@ -898,7 +907,18 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                      std::cos(feedback_reference.yaw) * dy;
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
 
-  const double tire_steer = stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
+  // If moving forward, project the tracking point to the front axle.
+  // Smoothly transition the tracking point from front axle to rear axle as the vehicle
+  // approaches the final destination (within arrival_slow_distance_).
+  // This combines front-axle stability during normal tracking with rear-axle precision
+  // at the final destination, preventing overshoot.
+  double cte_feedback = cte;
+  if (direction > 0) {
+    const double scale = (arrival_slow_distance_ > 0.0) ? std::clamp(distance_to_end / arrival_slow_distance_, 0.0, 1.0) : 1.0;
+    cte_feedback += scale * wheelbase_ * std::sin(heading_error);
+  }
+
+  const double tire_steer = stanley_.calculate(cte_feedback, heading_error, speed, direction, reverse_steering_scale_);
   const double curvature_ff = computeCurvatureFeedforward(preview_curvature, direction);
   const double steer_command = steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 

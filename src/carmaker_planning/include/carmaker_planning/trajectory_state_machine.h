@@ -53,6 +53,7 @@ public:
   struct TrajectoryDecision {
     bool publish = false;
     bool finished = false;
+    bool failed = false;
     int active_direction = 1;
     size_t active_segment_index = 0;
     PlannerState state = PlannerState::kIdle;
@@ -97,13 +98,14 @@ private:
   static bool endpointReachedWithTolerances(const carmaker_planning::State& ego,
                                             const PathPoint& endpoint,
                                             ArrivalTolerance tolerance);
-  static bool isOvershot(const carmaker_planning::State& ego,
-                         const PathPoint& endpoint,
-                         ArrivalTolerance tolerance);
+  static bool isArrivalFailed(const carmaker_planning::State& ego,
+                            const PathPoint& endpoint,
+                            ArrivalTolerance tolerance);
   bool activeSegmentIsFinal() const;
   TrajectoryDecision makeDecision(TrajectorySource path_source,
                                   TrajectoryIntent intent,
-                                  bool finished = false) const;
+                                  bool finished = false,
+                                  bool failed = false) const;
   static int pathDirection(const Path& path, int fallback = 1);
 
   Config config_;

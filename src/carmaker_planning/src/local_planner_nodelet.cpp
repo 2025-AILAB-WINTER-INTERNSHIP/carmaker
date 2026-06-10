@@ -493,6 +493,10 @@ void LocalPlannerNodelet::logDecisionTransition(
       decision.path_source != TrajectoryStateMachine::TrajectorySource::kNone;
 
   if (segment_changed && has_active_endpoint) {
+    if (decision.failed) {
+      NODELET_WARN("[LocalPlanner] ARRIVAL FAILED on segment transition %zu -> %zu (precise tolerances not met)!",
+                   last_logged_segment_index_, decision.active_segment_index);
+    }
     NODELET_INFO("[LocalPlanner] Segment transition: %zu -> %zu, state=%s, intent=%s, "
                  "dir=%d, ego=(%.2f, %.2f, %.2f), endpoint=(%.2f, %.2f, %.2f)",
                  last_logged_segment_index_,
@@ -507,6 +511,9 @@ void LocalPlannerNodelet::logDecisionTransition(
                  decision.endpoint.y,
                  decision.endpoint.theta);
   } else if (segment_changed && decision.finished) {
+    if (decision.failed) {
+      NODELET_WARN("[LocalPlanner] ARRIVAL FAILED at final destination (precise tolerances not met)!");
+    }
     NODELET_INFO("[LocalPlanner] Active path finished: last_segment=%zu, state=%s, intent=%s",
                  last_logged_segment_index_,
                  trajectoryStateString(decision.state),
@@ -519,7 +526,11 @@ void LocalPlannerNodelet::logDecisionTransition(
   }
 
   if (decision.finished && !last_logged_finished_) {
-    NODELET_INFO("[LocalPlanner] Final goal reached.");
+    if (decision.failed) {
+      NODELET_WARN("[LocalPlanner] Final goal reached, but ARRIVAL FAILED (precise tolerances not met)!");
+    } else {
+      NODELET_INFO("[LocalPlanner] Final goal reached.");
+    }
   }
 
   last_decision_log_valid_ = true;
