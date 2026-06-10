@@ -68,7 +68,7 @@ private:
                                       const State& ego,
                                       Path& path);
   bool   estimateStartKappa(const State& ego,
-                            const Path& global_path,
+                            const Path& active_segment,
                             double& start_kappa) const;
   void   applyStopIntentIfNeeded(Path& path,
                                  TrajectoryStateMachine::TrajectoryIntent intent) const;

@@ -187,7 +187,7 @@ bool TrajectoryStateMachine::isArrivalFailed(
   double d_yaw = std::abs(wrap_to_pi(ego.theta - endpoint.theta));
   double dist_to_endpoint = std::hypot(dx, dy);
 
-  return overshot_endpoint && (dist_to_endpoint > tolerance.xy * 2.0 || (lateral_err > tolerance.xy * 1.5 && d_yaw <= tolerance.yaw));
+  return overshot_endpoint && (dist_to_endpoint > tolerance.xy * 1.5 || lateral_err > tolerance.xy * 1.25 || d_yaw > tolerance.yaw * 1.25);
 }
 
 bool TrajectoryStateMachine::activeSegmentIsFinal() const {

@@ -615,10 +615,10 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
       successful_trajectories_++;
     } else {
       double start_kappa = 0.0;
-      if (!estimateStartKappa(ego, decision.global_path, start_kappa)) {
-        NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Cannot estimate ego curvature: global path is empty.");
+      if (!estimateStartKappa(ego, decision.active_segment, start_kappa)) {
+        NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Cannot estimate ego curvature: active segment is empty.");
         LocalPlanningResult result;
-        result.error("LocalPlannerNodelet: cannot estimate start curvature because global path is empty.");
+        result.error("LocalPlannerNodelet: cannot estimate start curvature because active segment is empty.");
         updateLocalDiagnostics(result);
         return false;
       }
@@ -656,21 +656,21 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
 
 bool LocalPlannerNodelet::estimateStartKappa(
     const State& ego,
-    const Path& global_path,
+    const Path& active_segment,
     double& start_kappa) const {
   start_kappa = 0.0;
-  if (global_path.empty()) return false;
+  if (active_segment.empty()) return false;
 
   size_t best_idx = 0;
   double best_d = std::numeric_limits<double>::max();
-  for (size_t i = 0; i < global_path.size(); ++i) {
-    const double d = dist(ego.x, ego.y, global_path[i].x, global_path[i].y);
+  for (size_t i = 0; i < active_segment.size(); ++i) {
+    const double d = dist(ego.x, ego.y, active_segment[i].x, active_segment[i].y);
     if (d < best_d) {
       best_d = d;
       best_idx = i;
     }
   }
-  start_kappa = global_path[best_idx].kappa;
+  start_kappa = active_segment[best_idx].kappa;
   return true;
 }
 
