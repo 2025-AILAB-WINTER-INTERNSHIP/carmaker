@@ -33,6 +33,12 @@ State makeEgo(double x, double v = 0.0) {
   return ego;
 }
 
+State makeEgo(double x, double yaw, double v) {
+  State ego = makeEgo(x, v);
+  ego.theta = yaw;
+  return ego;
+}
+
 TrajectoryStateMachine::Config makeConfig(
     TrajectoryStateMachine::Mode mode = TrajectoryStateMachine::Mode::kLocal) {
   TrajectoryStateMachine::Config cfg;
@@ -71,6 +77,22 @@ TEST(TrajectoryStateMachineTest, FinalToleranceRequiresStopVelocityBeforeStoppin
   const auto slow = state_machine.update(makeEgo(1.0, 0.04), 0.1);
   EXPECT_EQ(slow.state, TrajectoryStateMachine::PlannerState::kStopping);
   EXPECT_EQ(slow.intent, TrajectoryStateMachine::TrajectoryIntent::kStopCurrent);
+}
+
+TEST(TrajectoryStateMachineTest, FinalArrivalUsesGlobalEndpointYaw) {
+  Path path = makeSingleSegmentPath();
+  path.back().theta = 1.0;
+
+  TrajectoryStateMachine state_machine(makeConfig());
+  state_machine.setGlobalPath(path);
+
+  const auto wrong_yaw = state_machine.update(makeEgo(1.0, 0.0, 0.0), 0.0);
+  EXPECT_EQ(wrong_yaw.state, TrajectoryStateMachine::PlannerState::kTracking);
+  EXPECT_EQ(wrong_yaw.intent, TrajectoryStateMachine::TrajectoryIntent::kTrack);
+
+  const auto planned_yaw = state_machine.update(makeEgo(1.0, 1.0, 0.0), 0.1);
+  EXPECT_EQ(planned_yaw.state, TrajectoryStateMachine::PlannerState::kStopping);
+  EXPECT_EQ(planned_yaw.intent, TrajectoryStateMachine::TrajectoryIntent::kStopCurrent);
 }
 
 TEST(TrajectoryStateMachineTest, FinalPrecisionStopThenIdle) {

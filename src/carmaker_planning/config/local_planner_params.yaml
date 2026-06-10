@@ -58,7 +58,7 @@ local_planner:
 
 local_post_processing:
   smoother:
-    enabled: true
+    enabled: false
     collision_check_enabled: false
     weight_data: 0.2
     weight_smooth: 0.35
@@ -78,7 +78,9 @@ local_post_processing:
     goal_vel: 0.0
     gear_shift_duration: 1.5
     min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
+    jerk_filter_passes: 5
   validator:
     enabled: false
+    cusp_exclusion_margin: 0.2
   visualization:
     arrow_spacing_meters: 0.2

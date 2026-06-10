@@ -15,6 +15,8 @@
 namespace carmaker_planning {
 
 namespace {
+constexpr double DEFAULT_WHEELBASE = 2.97;
+
 /**
  * @brief Template helper to validate if path points exceed a specific dynamic limit,
  * updating diagnostic flags and violation counts.
@@ -38,8 +40,9 @@ void checkLimit(const Path& path, bool& ok_flag, int& violations, double& max_vi
 void applyMovingAverage(std::vector<double>& data, int half_window, int passes) {
   const int n = static_cast<int>(data.size());
   if (n <= 2 * half_window) return;
+  std::vector<double> temp(n);
   for (int iter = 0; iter < passes; ++iter) {
-    std::vector<double> temp = data;
+    std::copy(data.begin(), data.end(), temp.begin());
     for (int i = 0; i < n; ++i) {
       double sum = 0.0;
       int count = 0;
@@ -60,14 +63,14 @@ void applyMovingAverage(std::vector<double>& data, int half_window, int passes) 
 PostProcessor::PostProcessor(const GlobalMainConfig& config)
   : config_(config.post_process),
     max_kappa_((config.vehicle.min_turning_radius > 0.1) ? (1.0 / config.vehicle.min_turning_radius) : 0.2),
-    wheelbase_((config.vehicle.wheelbase > 0.1) ? config.vehicle.wheelbase : 2.97) {}
+    wheelbase_((config.vehicle.wheelbase > 0.1) ? config.vehicle.wheelbase : DEFAULT_WHEELBASE) {}
 
 PostProcessor::PostProcessor(const PostProcessConfig& config,
                              double wheelbase,
                              double min_turning_radius)
   : config_(config),
     max_kappa_((min_turning_radius > 0.1) ? (1.0 / min_turning_radius) : 0.2),
-    wheelbase_((wheelbase > 0.1) ? wheelbase : 2.97) {}
+    wheelbase_((wheelbase > 0.1) ? wheelbase : DEFAULT_WHEELBASE) {}
 
 bool PostProcessor::process(GlobalPlanningResult& result,
                             const GlobalMap& map,
@@ -255,48 +258,21 @@ bool PostProcessor::smooth(Path& path, const GlobalMap* map, std::vector<std::pa
         }
       }
 
-      // Calculate ONLY Yaw (theta) for this segment to check collision and loop/twist constraint
-      for (int i = 0; i < seg_len; ++i) {
-        size_t global_idx = seg_start + i;
-        double dx = 0.0, dy = 0.0;
-        if (i == 0) {
-          dx = path[global_idx + 1].x - path[global_idx].x;
-          dy = path[global_idx + 1].y - path[global_idx].y;
-        } else if (i == seg_len - 1) {
-          dx = path[global_idx].x - path[global_idx - 1].x;
-          dy = path[global_idx].y - path[global_idx - 1].y;
-        } else {
-          dx = path[global_idx + 1].x - path[global_idx - 1].x;
-          dy = path[global_idx + 1].y - path[global_idx - 1].y;
-        }
-
-        if (dist(dx, dy) > 1e-3) {
-          double angle = std::atan2(dy, dx);
-          if (path[global_idx].direction == -1) {
-            angle = wrap_to_pi(angle + PI);
-          }
-          path[global_idx].theta = angle;
-        }
-      }
-
       // Check collision ONLY for internal points (excluding fixed endpoints)
       bool trial_ok = true;
       if (map) {
         for (int i = 1; i < seg_len - 1; ++i) {
           size_t global_idx = seg_start + i;
-          if (map->checkCollision(path[global_idx].x, path[global_idx].y, path[global_idx].theta)) {
-            trial_ok = false;
-            break;
+          const double dx = path[global_idx + 1].x - path[global_idx - 1].x;
+          const double dy = path[global_idx + 1].y - path[global_idx - 1].y;
+          double theta = path[global_idx].theta;
+          if (dist(dx, dy) > 1e-3) {
+            theta = std::atan2(dy, dx);
+            if (path[global_idx].direction == -1) {
+              theta = wrap_to_pi(theta + PI);
+            }
           }
-        }
-      }
-
-      // Check loops/twists for the entire segment
-      if (trial_ok) {
-        for (int i = 1; i < seg_len; ++i) {
-          size_t global_idx = seg_start + i;
-          double angle_diff = std::abs(wrap_to_pi(path[global_idx].theta - path[global_idx - 1].theta));
-          if (angle_diff > 1.22) { // 1.22 rad (approx. 70 deg)
+          if (map->checkCollision(path[global_idx].x, path[global_idx].y, theta)) {
             trial_ok = false;
             break;
           }
@@ -385,18 +361,31 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
     s_vals.push_back(segment_len);
   }
 
+  const int direction = input_segment.front().direction < 0 ? -1 : 1;
+
   if (segment_len < 1e-6) {
-    output_path.push_back(input_segment.back());
-    output_path.back().s = 0.0;
+    output_path = input_segment;
+    for (auto& point : output_path) {
+      point.s = 0.0;
+      point.direction = point.direction < 0 ? -1 : 1;
+    }
     return true;
   }
 
   const int num_steps = static_cast<int>(std::floor(segment_len / step_size));
-  const int direction = input_segment.front().direction < 0 ? -1 : 1;
+  output_path.clear();
+  output_path.reserve(static_cast<size_t>(num_steps) + 2);
+
+  output_path.push_back(input_segment.front());
+  output_path.back().s = 0.0;
+  output_path.back().direction = direction;
 
   size_t current_idx = 0;
-  for (int i = 0; i <= num_steps; ++i) {
+  for (int i = 1; i <= num_steps; ++i) {
     const double s_req = i * step_size;
+    if (s_req >= segment_len) {
+      break;
+    }
     while (current_idx + 1 < s_vals.size() && s_vals[current_idx + 1] < s_req) {
       ++current_idx;
     }
@@ -413,18 +402,15 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
     const auto& p1 = input_segment[current_idx + 1];
 
     PathPoint p;
-    p.direction = direction;
-    p.s = s_req;
     p.x = p0.x + ratio * (p1.x - p0.x);
     p.y = p0.y + ratio * (p1.y - p0.y);
+    p.s = s_req;
+    p.direction = direction;
     output_path.push_back(p);
   }
 
   const auto& last_pt = input_segment.back();
-  if (output_path.empty()) {
-    logs.push_back({"WARN", "resampleSegment: output path is empty after interpolation. Using last point."});
-    output_path.push_back(last_pt);
-  } else if (dist(output_path.back(), last_pt) > 1e-3) {
+  if (dist(output_path.back(), last_pt) > 1e-3) {
     PathPoint p_last = last_pt;
     p_last.s = segment_len;
     p_last.direction = direction;
@@ -539,8 +525,9 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
   // Smooth v_static to eliminate any high-frequency speed limit oscillations
   if (n > 2) {
     int half_w = std::min(2, static_cast<int>(n - 1) / 2); // 5-point window
+    std::vector<double> temp_v_static(n);
     for (int iter = 0; iter < 2; ++iter) { // 2 passes
-      std::vector<double> smoothed_v_static = v_static;
+      std::copy(v_static.begin(), v_static.end(), temp_v_static.begin());
       for (int i = 1; i < n - 1; ++i) {
         if (v_static[i] < 0.1 || v_static[i-1] < 0.1 || v_static[i+1] < 0.1) {
           continue;
@@ -554,9 +541,9 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
             count++;
           }
         }
-        smoothed_v_static[i] = sum / count;
+        temp_v_static[i] = sum / count;
       }
-      v_static = std::move(smoothed_v_static);
+      v_static.swap(temp_v_static);
     }
   }
 
@@ -600,9 +587,10 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
   // 1. Smooth the velocity profile to suppress high-frequency speed variations (which cause Jerk spikes)
   if (n > 2) {
     std::vector<double> smoothed_v = v_final;
-    // 5 passes of 3-point moving average to stronger filter Jerk high frequency noise
-    for (int iter = 0; iter < 5; ++iter) {
-      std::vector<double> temp = smoothed_v;
+    std::vector<double> temp(n);
+    const int passes = config_.profiler.jerk_filter_passes;
+    for (int iter = 0; iter < passes; ++iter) {
+      std::copy(smoothed_v.begin(), smoothed_v.end(), temp.begin());
       for (int i = 1; i < n - 1; ++i) {
         // Keep Cusp/Goal/Start velocity 0.0 constraint preserved (anchor points)
         if (temp[i] < 0.1) {
@@ -727,7 +715,7 @@ void TrajectoryValidator::validateYawAlignment(const Path& path, TrajectoryDiagn
 
   for (size_t i = 0; i < path.size(); ++i) {
     // Exclude points near direction changes (cusp zones)
-    if (isNearCusp(path, i, 0.2)) continue;
+    if (isNearCusp(path, i, config_.validator.cusp_exclusion_margin)) continue;
 
     double dx = 0.0, dy = 0.0;
     if (i == 0) {
@@ -897,7 +885,7 @@ void TrajectoryValidator::validateSteeringVelocity(const Path& path, TrajectoryD
 
 bool TrajectoryValidator::isNearCusp(const Path& path, size_t index, double radius_threshold) const {
   const double resolution = config_.resampler.resolution > 1e-4 ? config_.resampler.resolution : 0.1;
-  const int search_window = std::max(3, static_cast<int>(std::round(0.3 / resolution)));
+  const int search_window = std::max(3, static_cast<int>(std::round((radius_threshold * 1.5) / resolution)));
 
   for (int w = -search_window; w <= search_window; ++w) {
     int idx = static_cast<int>(index) + w;
@@ -926,6 +914,15 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
 
   // 2. Split path into segments of uniform direction
   const auto segments = splitIntoSegments(path);
+
+  // 백업할 경계 상태 저장 (각 세그먼트의 시작과 끝점)
+  std::vector<std::pair<size_t, PathPoint>> preserved_points;
+  preserved_points.reserve(segments.size() * 2);
+  for (const auto& seg : segments) {
+    preserved_points.push_back({seg.first, path[seg.first]});
+    preserved_points.push_back({seg.second, path[seg.second]});
+  }
+
   for (const auto& seg : segments) {
     const size_t seg_start = seg.first;
     const size_t seg_end = seg.second;
@@ -937,22 +934,14 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
     // 2-1) Calculate heading (yaw) for this segment
     for (size_t i = 0; i < seg_len; ++i) {
       const size_t global_idx = seg_start + i;
-      double dx = 0.0;
-      double dy = 0.0;
-      if (i == 0) {
-        if (seg_len > 1) {
-          dx = path[global_idx + 1].x - path[global_idx].x;
-          dy = path[global_idx + 1].y - path[global_idx].y;
-        }
-      } else if (i == seg_len - 1) {
-        if (seg_len > 1) {
-          dx = path[global_idx].x - path[global_idx - 1].x;
-          dy = path[global_idx].y - path[global_idx - 1].y;
-        }
-      } else {
-        dx = path[global_idx + 1].x - path[global_idx - 1].x;
-        dy = path[global_idx + 1].y - path[global_idx - 1].y;
+      path[global_idx].direction = direction;
+      // 세그먼트 경계(시작/끝점)는 방향 설정만 업데이트하고 yaw 계산은 건너뜀
+      if (i == 0 || i == seg_len - 1) {
+        continue;
       }
+
+      double dx = path[global_idx + 1].x - path[global_idx - 1].x;
+      double dy = path[global_idx + 1].y - path[global_idx - 1].y;
 
       if (std::hypot(dx, dy) > 1e-3) {
         double angle = std::atan2(dy, dx);
@@ -963,29 +952,19 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       } else {
         path[global_idx].theta = (i > 0) ? path[global_idx - 1].theta : path[seg_start].theta;
       }
-      path[global_idx].direction = direction;
     }
 
     // 2-2) Calculate curvature (kappa) for this segment
     for (size_t i = 0; i < seg_len; ++i) {
       const size_t global_idx = seg_start + i;
       if (i == 0 || i == seg_len - 1) {
-        path[global_idx].kappa = 0.0;
-      } else {
-        const double ds1 = dist(path[global_idx - 1], path[global_idx]);
-        const double ds2 = dist(path[global_idx], path[global_idx + 1]);
-        path[global_idx].kappa = symmetricDiffCurvature(
-            path[global_idx - 1].theta,
-            path[global_idx].theta,
-            path[global_idx + 1].theta,
-            ds1,
-            ds2);
+        continue;
       }
-    }
 
-    if (seg_len >= 2) {
-      path[seg_start].kappa = path[seg_start + 1].kappa;
-      path[seg_end].kappa = path[seg_end - 1].kappa;
+      path[global_idx].kappa = mengerCurvature(
+          path[global_idx - 1].x, path[global_idx - 1].y,
+          path[global_idx].x,     path[global_idx].y,
+          path[global_idx + 1].x, path[global_idx + 1].y);
     }
 
     // 2-3) Apply wide-window adaptive Moving Average Filter on Curvature (kappa) multiple times
@@ -996,18 +975,25 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       }
       const int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
       applyMovingAverage(kappas, half_w, 2);
-      for (size_t i = 0; i < seg_len; ++i) {
+      for (size_t i = 1; i < seg_len - 1; ++i) {
         path[seg_start + i].kappa = kappas[i];
       }
     }
   }
 
-  // 3. Cusp points (where direction changes) must have zero curvature for safety
+  // 3. Keep legacy zero-curvature handling for non-preserved direction changes,
+  // then restore planned segment-boundary yaw/kappa below.
   for (size_t i = 1; i < path.size(); ++i) {
     if (path[i - 1].direction != path[i].direction) {
       path[i - 1].kappa = 0.0;
       path[i].kappa = 0.0;
     }
+  }
+
+  // 백업해 둔 경계 상태 복원 (theta, kappa)
+  for (const auto& item : preserved_points) {
+    path[item.first].theta = item.second.theta;
+    path[item.first].kappa = item.second.kappa;
   }
 }
 

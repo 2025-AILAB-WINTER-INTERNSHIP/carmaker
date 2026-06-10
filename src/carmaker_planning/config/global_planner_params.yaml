@@ -105,6 +105,7 @@ global_post_processing:
     enabled: true
     time_tolerance_ms: 1.0 # ms
     yaw_tolerance_deg: 5.0 # deg
+    cusp_exclusion_margin: 0.2 # meters (exclusion zone around cusp for validation)
   profiler:
     enabled: true
     max_vel: 2.0 # m/s 7.2 km/h
@@ -116,5 +117,6 @@ global_post_processing:
     goal_vel: 0.0
     gear_shift_duration: 1.5 # seconds (delay at forward/reverse transitions)
     min_velocity_denominator: 0.02 # Lower limit of velocity denominator for dt calculations to prevent division by zero
+    jerk_filter_passes: 5 # iterations of velocity moving average
   visualization:
     arrow_spacing_meters: 0.2 # Spacing in meters for PoseArray Yaw Arrows

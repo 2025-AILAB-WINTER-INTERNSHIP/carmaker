@@ -196,8 +196,8 @@ Path QuinticPathFitter::makeShortDistanceFallback(
   PathPoint end;
   end.x = target.x;
   end.y = target.y;
-  end.theta = ego.theta;
-  end.kappa = 0.0;
+  end.theta = target.theta;
+  end.kappa = target.kappa;
   end.s = std::max(0.0, length);
   end.direction = direction;
   path.push_back(end);
@@ -258,6 +258,7 @@ LocalPlanningResult LocalTrajectoryPlanner::planToEndpoint(
   if (!ok) {
     return local_result;
   }
+
   local_result.success = true;
   return local_result;
 }

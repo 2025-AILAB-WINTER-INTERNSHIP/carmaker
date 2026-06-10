@@ -322,12 +322,14 @@ struct PostProcessConfig {
     bool enabled = true;
     double time_tolerance_ms;
     double yaw_tolerance_rad;
+    double cusp_exclusion_margin = 0.3;
   } validator;
   struct Profiler {
     bool enabled = true;
     double max_vel, max_accel, max_decel, max_jerk, max_steer_vel, max_lat_acc, goal_vel;
     double gear_shift_duration;
     double min_velocity_denominator;
+    int jerk_filter_passes = 5;
   } profiler;
   struct Visualization {
     double arrow_spacing_meters;
@@ -484,6 +486,7 @@ inline void loadPostProcessConfig(const ros::NodeHandle& nh,
   nh.param(ns + "/validator/enabled", cfg.validator.enabled, true);
   nh.param(ns + "/validator/time_tolerance_ms", cfg.validator.time_tolerance_ms, 1.0);
   cfg.validator.yaw_tolerance_rad = deg2rad(nh.param<double>(ns + "/validator/yaw_tolerance_deg", 5.0));
+  nh.param(ns + "/validator/cusp_exclusion_margin", cfg.validator.cusp_exclusion_margin, 0.2);
 
   nh.param(ns + "/profiler/enabled", cfg.profiler.enabled, true);
   nh.param(ns + "/profiler/max_vel",        cfg.profiler.max_vel,       1.5);
@@ -495,6 +498,7 @@ inline void loadPostProcessConfig(const ros::NodeHandle& nh,
   nh.param(ns + "/profiler/goal_vel",       cfg.profiler.goal_vel,      0.0);
   nh.param(ns + "/profiler/gear_shift_duration", cfg.profiler.gear_shift_duration, 1.2);
   nh.param(ns + "/profiler/min_velocity_denominator", cfg.profiler.min_velocity_denominator, 0.02);
+  nh.param(ns + "/profiler/jerk_filter_passes", cfg.profiler.jerk_filter_passes, 5);
 
   nh.param(ns + "/visualization/arrow_spacing_meters", cfg.visualization.arrow_spacing_meters, 0.2);
 }
