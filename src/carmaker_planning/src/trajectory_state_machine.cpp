@@ -121,9 +121,13 @@ bool TrajectoryStateMachine::activeEndpoint(const carmaker_planning::State&,
 
 bool TrajectoryStateMachine::shouldStartStopping(const carmaker_planning::State& ego,
                                                   const PathPoint& endpoint) const {
-  return endpointReachedWithTolerances(ego,
-                                       endpoint,
-                                       activeArrivalTolerance());
+  const ArrivalTolerance tolerance = activeArrivalTolerance();
+  if (endpointReachedWithTolerances(ego, endpoint, tolerance)) {
+    return true;
+  }
+
+  // Overshoot check: force stopping immediately if we cross the finish line regardless of velocity
+  return isOvershot(ego, endpoint, tolerance);
 }
 
 TrajectoryStateMachine::ArrivalTolerance
@@ -152,7 +156,31 @@ bool TrajectoryStateMachine::endpointReachedWithTolerances(
     const PathPoint& endpoint,
     ArrivalTolerance tolerance) {
   const double v = std::abs(ego.v);
-  return endpointPoseReached(ego, endpoint, tolerance) && v <= tolerance.velocity;
+  if (v > tolerance.velocity) {
+    return false;
+  }
+
+  if (endpointPoseReached(ego, endpoint, tolerance)) {
+    return true;
+  }
+
+  // Accept overshoot as reached if the vehicle is stopped
+  return isOvershot(ego, endpoint, tolerance);
+}
+
+bool TrajectoryStateMachine::isOvershot(
+    const carmaker_planning::State& ego,
+    const PathPoint& endpoint,
+    ArrivalTolerance tolerance) {
+  double dx = ego.x - endpoint.x;
+  double dy = ego.y - endpoint.y;
+  double proj = dx * std::cos(endpoint.theta) + dy * std::sin(endpoint.theta);
+  bool overshot = (endpoint.direction * proj > 0.0);
+  double lateral_err = std::abs(-dx * std::sin(endpoint.theta) + dy * std::cos(endpoint.theta));
+  double d_yaw = std::abs(wrap_to_pi(ego.theta - endpoint.theta));
+  double dist_to_endpoint = std::hypot(dx, dy);
+
+  return overshot && (dist_to_endpoint < tolerance.xy * 3.0 || (lateral_err < tolerance.xy * 2.0 && d_yaw <= tolerance.yaw * 1.5));
 }
 
 bool TrajectoryStateMachine::activeSegmentIsFinal() const {

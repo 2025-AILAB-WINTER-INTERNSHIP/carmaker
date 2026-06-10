@@ -97,6 +97,9 @@ private:
   static bool endpointReachedWithTolerances(const carmaker_planning::State& ego,
                                             const PathPoint& endpoint,
                                             ArrivalTolerance tolerance);
+  static bool isOvershot(const carmaker_planning::State& ego,
+                         const PathPoint& endpoint,
+                         ArrivalTolerance tolerance);
   bool activeSegmentIsFinal() const;
   TrajectoryDecision makeDecision(TrajectorySource path_source,
                                   TrajectoryIntent intent,
