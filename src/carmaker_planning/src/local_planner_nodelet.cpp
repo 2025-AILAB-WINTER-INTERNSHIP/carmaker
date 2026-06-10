@@ -26,6 +26,14 @@ void LocalPlannerNodelet::onInit() {
 
   loadLocalPlannerConfig(pnh_, cfg_);
 
+  if (cfg_.min_creep_speed > cfg_.stop_vel_tol) {
+    NODELET_WARN("[LocalPlanner] local_planner/velocity/min_creep_speed=%.3f is greater than "
+                 "arrival/stop_vel_tol=%.3f. Endpoint creep may prevent the state machine "
+                 "from entering stop/finish states until vehicle speed falls below stop_vel_tol.",
+                 cfg_.min_creep_speed,
+                 cfg_.stop_vel_tol);
+  }
+
   pnh_.param<std::string>("frames/global",    global_frame_,    "Fr0");
   pnh_.param<std::string>("frames/rear_axle", rear_axle_frame_, "Fr1A_Rear_Axle_Pred");
   pnh_.param<bool>("setting/use_gt_pose", use_gt_pose_, true);
@@ -41,13 +49,13 @@ void LocalPlannerNodelet::onInit() {
   state_machine_config_.mode = TrajectoryStateMachine::parseMode(mode_);
   state_machine_config_.endpoint_xy_tol = cfg_.endpoint_xy_tol;
   state_machine_config_.endpoint_yaw_tol = cfg_.endpoint_yaw_tol;
+  state_machine_config_.segment_transition_xy_tol = cfg_.segment_transition_xy_tol;
+  state_machine_config_.segment_transition_yaw_tol = cfg_.segment_transition_yaw_tol;
   state_machine_config_.stop_vel_tol = cfg_.stop_vel_tol;
   state_machine_config_.stop_duration =
       pnh_.param<double>("local_planner/transition/stop_duration", 0.6);
   state_machine_config_.presteer_duration =
       pnh_.param<double>("local_planner/transition/presteer_duration", 0.6);
-  state_machine_config_.idle_after_finish_duration =
-      pnh_.param<double>("local_planner/transition/idle_after_finish_duration", 0.5);
   trajectory_state_machine_.configure(state_machine_config_);
 
   wheelbase_ = pnh_.param<double>("vehicle/wheelbase", 2.97);
@@ -314,9 +322,26 @@ void LocalPlannerNodelet::processDiagnostics() {
 
 void LocalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
   LocalPlanningDiagnostic diag_snapshot;
+  double observed_publish_rate_hz = 0.0;
+  double last_publish_period_sec = -1.0;
+  double last_endpoint_distance = -1.0;
+  bool last_publish_zero_speed = false;
+  TrajectoryStateMachine::PlannerState last_diag_state =
+      TrajectoryStateMachine::PlannerState::kIdle;
+  TrajectoryStateMachine::TrajectoryIntent last_diag_intent =
+      TrajectoryStateMachine::TrajectoryIntent::kNone;
+  TrajectoryStateMachine::TrajectorySource last_diag_source =
+      TrajectoryStateMachine::TrajectorySource::kNone;
   {
     std::lock_guard<std::mutex> lock(diag_mutex_);
     diag_snapshot = last_diag_;
+    observed_publish_rate_hz = observed_publish_rate_hz_;
+    last_publish_period_sec = last_publish_period_sec_;
+    last_endpoint_distance = last_endpoint_distance_;
+    last_publish_zero_speed = last_publish_zero_speed_;
+    last_diag_state = last_diag_state_;
+    last_diag_intent = last_diag_intent_;
+    last_diag_source = last_diag_source_;
   }
 
   bool has_path = false;
@@ -346,11 +371,19 @@ void LocalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
   stat.add("Has Global Path", has_path ? "True" : "False");
   stat.add("Mode", mode_);
   stat.add("State", trajectoryStateString(state));
+  stat.add("Last Snapshot State", trajectoryStateString(last_diag_state));
+  stat.add("Last Snapshot Intent", trajectoryIntentString(last_diag_intent));
+  stat.add("Last Snapshot Source", trajectorySourceString(last_diag_source));
   stat.add("Active Segment Index", active_segment);
   stat.add("Segment Count", segment_count);
   stat.add("Total Trajectories", total_trajectories_.load());
   stat.add("Successful Trajectories", successful_trajectories_.load());
   stat.add("Failed Trajectories", failed_trajectories_.load());
+  stat.add("Configured Replanning Rate (Hz)", cfg_.replanning_rate_hz);
+  stat.add("Observed Planning Publish Rate (Hz)", observed_publish_rate_hz);
+  stat.add("Last Planning Publish Period (s)", last_publish_period_sec);
+  stat.add("Last Endpoint Distance (m)", last_endpoint_distance);
+  stat.add("Last Snapshot Zero Speed", last_publish_zero_speed ? "True" : "False");
   stat.add("Snapshot Success", diag_snapshot.success ? "True" : "False");
   stat.add("Snapshot Path Points", static_cast<int>(diag_snapshot.path_size));
   stat.add("Snapshot Path Length (m)", diag_snapshot.path_length);
@@ -382,6 +415,7 @@ void LocalPlannerNodelet::publishTrackingTrajectory(const State& ego) {
   logDecisionTransition(decision, ego);
 
   if (!decision.publish) {
+    clearDebugTrajectory();
     NODELET_DEBUG_THROTTLE(1.0,
                            "[LocalPlanner] No publish decision: state=%s intent=%s source=%s",
                            trajectoryStateString(decision.state),
@@ -392,6 +426,7 @@ void LocalPlannerNodelet::publishTrackingTrajectory(const State& ego) {
 
   Path path;
   if (!composeTrajectoryForDecision(decision, ego, path)) {
+    clearDebugTrajectory();
     NODELET_WARN_THROTTLE(1.0,
                           "[LocalPlanner] Failed to build trajectory: state=%s intent=%s source=%s",
                           trajectoryStateString(decision.state),
@@ -404,6 +439,22 @@ void LocalPlannerNodelet::publishTrackingTrajectory(const State& ego) {
   publishDebugTrajectory(path);
 
   const double endpoint_dist = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
+  {
+    std::lock_guard<std::mutex> lock(diag_mutex_);
+    const ros::WallTime now_wall = ros::WallTime::now();
+    if (!last_publish_wall_time_.isZero()) {
+      last_publish_period_sec_ = (now_wall - last_publish_wall_time_).toSec();
+      observed_publish_rate_hz_ = last_publish_period_sec_ > 1e-6
+                                      ? 1.0 / last_publish_period_sec_
+                                      : 0.0;
+    }
+    last_publish_wall_time_ = now_wall;
+    last_endpoint_distance_ = endpoint_dist;
+    last_publish_zero_speed_ = isZeroSpeedTrajectory(path);
+    last_diag_state_ = decision.state;
+    last_diag_intent_ = decision.intent;
+    last_diag_source_ = decision.path_source;
+  }
   NODELET_DEBUG_THROTTLE(1.0,
                          "[LocalPlanner] Publish: state=%s intent=%s source=%s seg=%zu "
                          "dir=%d pts=%zu len=%.2f m duration=%.2f s "
@@ -434,8 +485,10 @@ void LocalPlannerNodelet::logDecisionTransition(
   const bool state_changed =
       first_log || decision.state != last_logged_state_ ||
       decision.intent != last_logged_intent_;
+  const bool has_active_endpoint =
+      decision.path_source != TrajectoryStateMachine::TrajectorySource::kNone;
 
-  if (segment_changed) {
+  if (segment_changed && has_active_endpoint) {
     NODELET_INFO("[LocalPlanner] Segment transition: %zu -> %zu, state=%s, intent=%s, "
                  "dir=%d, ego=(%.2f, %.2f, %.2f), endpoint=(%.2f, %.2f, %.2f)",
                  last_logged_segment_index_,
@@ -449,6 +502,11 @@ void LocalPlannerNodelet::logDecisionTransition(
                  decision.endpoint.x,
                  decision.endpoint.y,
                  decision.endpoint.theta);
+  } else if (segment_changed && decision.finished) {
+    NODELET_INFO("[LocalPlanner] Active path finished: last_segment=%zu, state=%s, intent=%s",
+                 last_logged_segment_index_,
+                 trajectoryStateString(decision.state),
+                 trajectoryIntentString(decision.intent));
   } else if (state_changed) {
     NODELET_DEBUG("[LocalPlanner] State transition: state=%s, intent=%s, segment=%zu",
                   trajectoryStateString(decision.state),
@@ -478,6 +536,7 @@ void LocalPlannerNodelet::publishTimeoutStopTrajectory() {
   ego.v = 0.0;
   Path path;
   if (!composeTrajectoryForDecision(decision, ego, path)) {
+    clearDebugTrajectory();
     NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Timeout stop failed to build a trajectory.");
     return;
   }
@@ -495,6 +554,25 @@ void LocalPlannerNodelet::publishTimeoutStopTrajectory() {
 void LocalPlannerNodelet::publishDebugTrajectory(const Path& path) {
   if (!visualizer_) return;
   visualizer_->visualize(path, {}, {}, global_frame_, min_turning_radius_);
+  {
+    std::lock_guard<std::mutex> lock(diag_mutex_);
+    debug_visualization_cleared_ = false;
+  }
+}
+
+void LocalPlannerNodelet::clearDebugTrajectory() {
+  if (!visualizer_) return;
+
+  bool should_clear = false;
+  {
+    std::lock_guard<std::mutex> lock(diag_mutex_);
+    should_clear = !debug_visualization_cleared_;
+    debug_visualization_cleared_ = true;
+  }
+
+  if (should_clear) {
+    visualizer_->clear(global_frame_);
+  }
 }
 
 bool LocalPlannerNodelet::composeTrajectoryForDecision(
@@ -534,6 +612,9 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
   }
 
   applyStopIntentIfNeeded(path, decision.intent);
+  if (applyTrackingCreepIfNeeded(path, decision.intent)) {
+    recomputeTimingAndAcceleration(path);
+  }
   return !path.empty();
 }
 
@@ -557,13 +638,75 @@ bool LocalPlannerNodelet::estimateStartKappa(
   return true;
 }
 
+bool LocalPlannerNodelet::isZeroSpeedTrajectory(const Path& path) const {
+  return !path.empty() &&
+         std::all_of(path.begin(), path.end(), [](const PathPoint& pt) {
+           return std::abs(pt.v) <= 1e-6;
+         });
+}
+
+bool LocalPlannerNodelet::applyTrackingCreepIfNeeded(
+    Path& path,
+    TrajectoryStateMachine::TrajectoryIntent intent) const {
+  if (intent != TrajectoryStateMachine::TrajectoryIntent::kTrack || path.size() < 2) {
+    return false;
+  }
+
+  const double min_creep_speed = std::max(0.0, cfg_.min_creep_speed);
+  const double creep_distance = std::max(0.0, cfg_.creep_distance);
+  if (min_creep_speed <= 1e-6 || creep_distance <= 1e-6) {
+    return false;
+  }
+
+  bool changed = false;
+  for (size_t i = 0; i + 1 < path.size(); ++i) {
+    const double distance_to_end = std::max(0.0, path.back().s - path[i].s);
+    if (distance_to_end <= creep_distance && path[i].v <= 1e-6) {
+      path[i].v = min_creep_speed;
+      changed = true;
+    }
+  }
+
+  if (std::abs(path.back().v) > 1e-6 || std::abs(path.back().a) > 1e-6) {
+    changed = true;
+  }
+  path.back().v = 0.0;
+  path.back().a = 0.0;
+  return changed;
+}
+
+void LocalPlannerNodelet::recomputeTimingAndAcceleration(Path& path) const {
+  if (path.empty()) {
+    return;
+  }
+
+  const double min_velocity_denominator =
+      std::max(1e-6, cfg_.post_process.profiler.min_velocity_denominator);
+  path.front().t = 0.0;
+  path.front().a = 0.0;
+
+  for (size_t i = 1; i < path.size(); ++i) {
+    double ds = path[i].s - path[i - 1].s;
+    if (!std::isfinite(ds) || ds < 0.0) {
+      ds = dist(path[i - 1], path[i]);
+    }
+
+    const double v_prev = std::max(0.0, std::abs(path[i - 1].v));
+    const double v_curr = std::max(0.0, std::abs(path[i].v));
+    const double denom = std::max(v_prev + v_curr, min_velocity_denominator);
+    const double dt = 2.0 * std::max(0.0, ds) / denom;
+
+    path[i].t = path[i - 1].t + dt;
+    path[i].a = dt > 1e-6 ? (path[i].v - path[i - 1].v) / dt : 0.0;
+  }
+}
+
 void LocalPlannerNodelet::applyStopIntentIfNeeded(
     Path& path,
     TrajectoryStateMachine::TrajectoryIntent intent) const {
   if (intent != TrajectoryStateMachine::TrajectoryIntent::kStopCurrent &&
       intent != TrajectoryStateMachine::TrajectoryIntent::kPresteerNext &&
-      intent != TrajectoryStateMachine::TrajectoryIntent::kEmergencyStop &&
-      intent != TrajectoryStateMachine::TrajectoryIntent::kFinishedHold) {
+      intent != TrajectoryStateMachine::TrajectoryIntent::kEmergencyStop) {
     return;
   }
 

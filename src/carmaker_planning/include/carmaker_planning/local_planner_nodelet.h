@@ -72,9 +72,14 @@ private:
                             double& start_kappa) const;
   void   applyStopIntentIfNeeded(Path& path,
                                  TrajectoryStateMachine::TrajectoryIntent intent) const;
+  bool   applyTrackingCreepIfNeeded(Path& path,
+                                    TrajectoryStateMachine::TrajectoryIntent intent) const;
+  void   recomputeTimingAndAcceleration(Path& path) const;
+  bool   isZeroSpeedTrajectory(const Path& path) const;
 
   // ── Visualization ───────────────────────────────────────────────────────────
   void publishDebugTrajectory(const Path& path);
+  void clearDebugTrajectory();
 
   // ── ROS infrastructure ──────────────────────────────────────────────────────
   ros::NodeHandle nh_, pnh_;
@@ -142,6 +147,18 @@ private:
   std::atomic<uint64_t> failed_trajectories_{0};
   std::mutex diag_mutex_;
   LocalPlanningDiagnostic last_diag_;
+  double observed_publish_rate_hz_ = 0.0;
+  double last_publish_period_sec_ = -1.0;
+  ros::WallTime last_publish_wall_time_;
+  double last_endpoint_distance_ = -1.0;
+  bool last_publish_zero_speed_ = false;
+  bool debug_visualization_cleared_ = false;
+  TrajectoryStateMachine::PlannerState last_diag_state_ =
+      TrajectoryStateMachine::PlannerState::kIdle;
+  TrajectoryStateMachine::TrajectoryIntent last_diag_intent_ =
+      TrajectoryStateMachine::TrajectoryIntent::kNone;
+  TrajectoryStateMachine::TrajectorySource last_diag_source_ =
+      TrajectoryStateMachine::TrajectorySource::kNone;
 };
 
 } // namespace carmaker_planning

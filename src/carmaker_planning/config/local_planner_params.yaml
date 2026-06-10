@@ -42,14 +42,19 @@ local_planner:
     rate_hz: 10.0 # [Hz]  local path refresh rate
 
   arrival:
-    endpoint_xy_tol: 0.05 # [m] XY distance threshold to declare endpoint reached
-    endpoint_yaw_tol: 0.2 # [rad] heading error threshold to declare endpoint reached
-    stop_vel_tol: 0.05 # [m/s] velocity threshold before segment transition/final hold
+    endpoint_xy_tol: 0.025 # [m] final parking XY threshold
+    endpoint_yaw_tol: 0.1 # [rad] final parking heading threshold
+    segment_transition_xy_tol: 0.05 # [m] relaxed non-final cusp transition threshold
+    segment_transition_yaw_tol: 0.2 # [rad] relaxed non-final cusp heading threshold
+    stop_vel_tol: 0.15 # [m/s] velocity threshold before segment transition/final hold
+
+  velocity:
+    min_creep_speed: 0.1 # [m/s] keep moving before planner declares arrival
+    creep_distance: 0.5 # [m] endpoint window where zero profile is lifted to creep speed
 
   transition:
     stop_duration: 0.5 # [s] hold zero-speed current segment after cusp/final arrival
-    presteer_duration: 0.5 # [s] publish zero-speed next segment before tracking
-    idle_after_finish_duration: 0.5 # [s] publish final zero-speed trajectory before idle
+    presteer_duration: 1.0 # [s] publish zero-speed next segment before tracking
 
 local_post_processing:
   smoother:
@@ -71,7 +76,7 @@ local_post_processing:
     max_steer_vel: 0.6108 # [rad/s]
     max_lat_acc: 0.8 # [m/s^2]
     goal_vel: 0.0
-    gear_shift_duration: 1.0
+    gear_shift_duration: 1.5
     min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
   validator:
     enabled: false

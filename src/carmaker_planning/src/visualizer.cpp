@@ -266,20 +266,33 @@ visualization_msgs::MarkerArray Visualizer::createTreeMarkers(const std::vector<
   return markers;
 }
 
-void Visualizer::clear() {
+void Visualizer::clear(const std::string& frame_id) {
+  const ros::Time now = ros::Time::now();
+
+  nav_msgs::Path clear_path;
+  clear_path.header.frame_id = frame_id;
+  clear_path.header.stamp = now;
+  path_pub_.publish(clear_path);
+
   visualization_msgs::MarkerArray clear_msg;
 
   visualization_msgs::Marker clear_nodes;
+  clear_nodes.header.frame_id = frame_id;
+  clear_nodes.header.stamp = now;
   clear_nodes.action = visualization_msgs::Marker::DELETEALL;
   clear_nodes.ns = "nodes";
   clear_msg.markers.push_back(clear_nodes);
 
   visualization_msgs::Marker clear_branches;
+  clear_branches.header.frame_id = frame_id;
+  clear_branches.header.stamp = now;
   clear_branches.action = visualization_msgs::Marker::DELETEALL;
   clear_branches.ns = "branches";
   clear_msg.markers.push_back(clear_branches);
 
   visualization_msgs::Marker clear_vel;
+  clear_vel.header.frame_id = frame_id;
+  clear_vel.header.stamp = now;
   clear_vel.action = visualization_msgs::Marker::DELETEALL;
   clear_vel.ns = "velocity";
   clear_msg.markers.push_back(clear_vel);
@@ -290,13 +303,13 @@ void Visualizer::clear() {
   velocity_pub_.publish(clear_msg);
 
   geometry_msgs::PoseArray clear_pose_array;
-  clear_pose_array.header.frame_id = "Fr0";
-  clear_pose_array.header.stamp = ros::Time::now();
+  clear_pose_array.header.frame_id = frame_id;
+  clear_pose_array.header.stamp = now;
   pose_array_pub_.publish(clear_pose_array);
 
   visualization_msgs::Marker clear_curv;
-  clear_curv.header.frame_id = "Fr0";
-  clear_curv.header.stamp = ros::Time::now();
+  clear_curv.header.frame_id = frame_id;
+  clear_curv.header.stamp = now;
   clear_curv.ns = "curvature";
   clear_curv.id = 0;
   clear_curv.action = visualization_msgs::Marker::DELETEALL;

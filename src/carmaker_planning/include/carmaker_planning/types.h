@@ -345,10 +345,14 @@ struct LocalPlannerConfig {
   // Arrival detection
   double endpoint_xy_tol  = 0.3;  ///< [m] endpoint XY tolerance
   double endpoint_yaw_tol = 0.2;  ///< [rad] endpoint yaw tolerance
+  double segment_transition_xy_tol = 0.3;  ///< [m] non-final cusp transition tolerance
+  double segment_transition_yaw_tol = 0.2; ///< [rad] non-final cusp transition tolerance
   double stop_vel_tol = 0.05;     ///< [m/s] velocity threshold before segment transition
 
   // Replanning
   double replanning_rate_hz        = 10.0; ///< [Hz]  local path refresh rate
+  double min_creep_speed = 0.1;            ///< [m/s] minimum tracking speed near endpoint
+  double creep_distance = 0.5;             ///< [m] distance window for endpoint creep
 
   PostProcessConfig post_process;
 };
@@ -363,9 +367,17 @@ inline void loadLocalPlannerConfig(const ros::NodeHandle& nh, LocalPlannerConfig
                                    const std::string& ns = "local_planner") {
   nh.param(ns + "/arrival/endpoint_xy_tol",  cfg.endpoint_xy_tol,  0.3);
   nh.param(ns + "/arrival/endpoint_yaw_tol", cfg.endpoint_yaw_tol, 0.2);
+  nh.param(ns + "/arrival/segment_transition_xy_tol",
+           cfg.segment_transition_xy_tol,
+           cfg.endpoint_xy_tol);
+  nh.param(ns + "/arrival/segment_transition_yaw_tol",
+           cfg.segment_transition_yaw_tol,
+           cfg.endpoint_yaw_tol);
   nh.param(ns + "/arrival/stop_vel_tol", cfg.stop_vel_tol, 0.05);
 
   nh.param(ns + "/replanning/rate_hz",         cfg.replanning_rate_hz,        10.0);
+  nh.param(ns + "/velocity/min_creep_speed", cfg.min_creep_speed, 0.1);
+  nh.param(ns + "/velocity/creep_distance", cfg.creep_distance, 0.5);
 
   loadLocalPostProcessConfig(nh, cfg.post_process);
 }

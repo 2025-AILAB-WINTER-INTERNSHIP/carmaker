@@ -22,8 +22,7 @@ public:
     kIdle,
     kTracking,
     kStopping,
-    kPresteering,
-    kFinishedHold
+    kPresteering
   };
 
   enum class TrajectoryIntent {
@@ -31,8 +30,7 @@ public:
     kTrack,
     kStopCurrent,
     kPresteerNext,
-    kEmergencyStop,
-    kFinishedHold
+    kEmergencyStop
   };
 
   enum class TrajectorySource {
@@ -45,10 +43,11 @@ public:
     Mode mode = Mode::kLocal;
     double endpoint_xy_tol = 0.3;
     double endpoint_yaw_tol = 0.2;
+    double segment_transition_xy_tol = 0.3;
+    double segment_transition_yaw_tol = 0.2;
     double stop_vel_tol = 0.05;
     double stop_duration = 0.5;
     double presteer_duration = 0.5;
-    double idle_after_finish_duration = 0.5;
   };
 
   struct TrajectoryDecision {
@@ -62,6 +61,12 @@ public:
     Path active_segment;
     Path global_path;
     PathPoint endpoint;
+  };
+
+  struct ArrivalTolerance {
+    double xy = 0.0;
+    double yaw = 0.0;
+    double velocity = 0.0;
   };
 
   TrajectoryStateMachine();
@@ -85,15 +90,13 @@ private:
   bool activeEndpoint(const carmaker_planning::State& ego, PathPoint& endpoint) const;
   bool shouldStartStopping(const carmaker_planning::State& ego,
                            const PathPoint& endpoint) const;
-  bool endpointPoseReached(const carmaker_planning::State& ego,
-                           const PathPoint& endpoint,
-                           double xy_tol,
-                           double yaw_tol) const;
-  bool endpointReachedWithTolerances(const carmaker_planning::State& ego,
-                                     const PathPoint& endpoint,
-                                     double xy_tol,
-                                     double yaw_tol,
-                                     double vel_tol) const;
+  ArrivalTolerance activeArrivalTolerance() const;
+  static bool endpointPoseReached(const carmaker_planning::State& ego,
+                                  const PathPoint& endpoint,
+                                  ArrivalTolerance tolerance);
+  static bool endpointReachedWithTolerances(const carmaker_planning::State& ego,
+                                            const PathPoint& endpoint,
+                                            ArrivalTolerance tolerance);
   bool activeSegmentIsFinal() const;
   TrajectoryDecision makeDecision(TrajectorySource path_source,
                                   TrajectoryIntent intent,
@@ -112,7 +115,6 @@ inline const char* trajectoryStateString(TrajectoryStateMachine::PlannerState st
     case TrajectoryStateMachine::PlannerState::kTracking: return "Tracking";
     case TrajectoryStateMachine::PlannerState::kStopping: return "Stopping";
     case TrajectoryStateMachine::PlannerState::kPresteering: return "Presteering";
-    case TrajectoryStateMachine::PlannerState::kFinishedHold: return "FinishedHold";
   }
   return "Unknown";
 }
@@ -124,7 +126,6 @@ inline const char* trajectoryIntentString(TrajectoryStateMachine::TrajectoryInte
     case TrajectoryStateMachine::TrajectoryIntent::kStopCurrent: return "StopCurrent";
     case TrajectoryStateMachine::TrajectoryIntent::kPresteerNext: return "PresteerNext";
     case TrajectoryStateMachine::TrajectoryIntent::kEmergencyStop: return "EmergencyStop";
-    case TrajectoryStateMachine::TrajectoryIntent::kFinishedHold: return "FinishedHold";
   }
   return "Unknown";
 }

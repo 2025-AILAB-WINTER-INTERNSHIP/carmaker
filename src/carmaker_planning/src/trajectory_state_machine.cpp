@@ -21,10 +21,11 @@ void TrajectoryStateMachine::configure(const Config& config) {
   config_ = config;
   config_.endpoint_xy_tol = std::max(0.0, config_.endpoint_xy_tol);
   config_.endpoint_yaw_tol = std::max(0.0, config_.endpoint_yaw_tol);
+  config_.segment_transition_xy_tol = std::max(0.0, config_.segment_transition_xy_tol);
+  config_.segment_transition_yaw_tol = std::max(0.0, config_.segment_transition_yaw_tol);
   config_.stop_vel_tol = std::max(0.0, config_.stop_vel_tol);
   config_.stop_duration = std::max(0.0, config_.stop_duration);
   config_.presteer_duration = std::max(0.0, config_.presteer_duration);
-  config_.idle_after_finish_duration = std::max(0.0, config_.idle_after_finish_duration);
 }
 
 void TrajectoryStateMachine::setGlobalPath(const Path& path) {
@@ -56,18 +57,17 @@ TrajectoryStateMachine::update(const carmaker_planning::State& ego, double now_s
 
   if (state_ == PlannerState::kStopping) {
     const bool hold_done = now_sec >= transition_until_sec_;
-    const bool precise_reached =
-        endpointReachedWithTolerances(ego,
-                                      endpoint,
-                                      config_.endpoint_xy_tol,
-                                      config_.endpoint_yaw_tol,
-                                      config_.stop_vel_tol);
+    const bool final_segment = activeSegmentIsFinal();
+    const ArrivalTolerance tolerance = activeArrivalTolerance();
+    const bool precise_reached = endpointReachedWithTolerances(ego,
+                                                               endpoint,
+                                                               tolerance);
     if (hold_done && precise_reached) {
-      if (activeSegmentIsFinal()) {
-        state_ = PlannerState::kFinishedHold;
-        transition_until_sec_ = now_sec + config_.idle_after_finish_duration;
-        return makeDecision(TrajectorySource::kActiveSegment,
-                            TrajectoryIntent::kFinishedHold,
+      if (final_segment) {
+        segment_manager_.advanceToNextSegment();
+        state_ = PlannerState::kIdle;
+        return makeDecision(TrajectorySource::kNone,
+                            TrajectoryIntent::kNone,
                             true);
       }
 
@@ -87,16 +87,6 @@ TrajectoryStateMachine::update(const carmaker_planning::State& ego, double now_s
                           TrajectoryIntent::kPresteerNext);
     }
     state_ = PlannerState::kTracking;
-  }
-
-  if (state_ == PlannerState::kFinishedHold) {
-    if (now_sec >= transition_until_sec_) {
-      segment_manager_.advanceToNextSegment();
-      state_ = PlannerState::kIdle;
-      return makeDecision(TrajectorySource::kNone, TrajectoryIntent::kNone, true);
-    }
-    return makeDecision(TrajectorySource::kActiveSegment,
-                        TrajectoryIntent::kFinishedHold, true);
   }
 
   if (config_.mode == Mode::kGlobal) {
@@ -131,27 +121,38 @@ bool TrajectoryStateMachine::activeEndpoint(const carmaker_planning::State&,
 
 bool TrajectoryStateMachine::shouldStartStopping(const carmaker_planning::State& ego,
                                                   const PathPoint& endpoint) const {
-  return endpointPoseReached(ego, endpoint, config_.endpoint_xy_tol, config_.endpoint_yaw_tol);
+  return endpointReachedWithTolerances(ego,
+                                       endpoint,
+                                       activeArrivalTolerance());
+}
+
+TrajectoryStateMachine::ArrivalTolerance
+TrajectoryStateMachine::activeArrivalTolerance() const {
+  if (activeSegmentIsFinal()) {
+    return {config_.endpoint_xy_tol,
+            config_.endpoint_yaw_tol,
+            config_.stop_vel_tol};
+  }
+  return {config_.segment_transition_xy_tol,
+          config_.segment_transition_yaw_tol,
+          config_.stop_vel_tol};
 }
 
 bool TrajectoryStateMachine::endpointPoseReached(
     const carmaker_planning::State& ego,
     const PathPoint& endpoint,
-    double xy_tol,
-    double yaw_tol) const {
+    ArrivalTolerance tolerance) {
   const double d_xy = dist(ego.x, ego.y, endpoint.x, endpoint.y);
   const double d_yaw = std::abs(wrap_to_pi(ego.theta - endpoint.theta));
-  return d_xy <= xy_tol && d_yaw <= yaw_tol;
+  return d_xy <= tolerance.xy && d_yaw <= tolerance.yaw;
 }
 
 bool TrajectoryStateMachine::endpointReachedWithTolerances(
     const carmaker_planning::State& ego,
     const PathPoint& endpoint,
-    double xy_tol,
-    double yaw_tol,
-    double vel_tol) const {
+    ArrivalTolerance tolerance) {
   const double v = std::abs(ego.v);
-  return endpointPoseReached(ego, endpoint, xy_tol, yaw_tol) && v <= vel_tol;
+  return endpointPoseReached(ego, endpoint, tolerance) && v <= tolerance.velocity;
 }
 
 bool TrajectoryStateMachine::activeSegmentIsFinal() const {

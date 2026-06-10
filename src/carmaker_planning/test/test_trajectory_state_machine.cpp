@@ -39,10 +39,11 @@ TrajectoryStateMachine::Config makeConfig(
   cfg.mode = mode;
   cfg.endpoint_xy_tol = 0.05;
   cfg.endpoint_yaw_tol = 0.2;
+  cfg.segment_transition_xy_tol = 0.3;
+  cfg.segment_transition_yaw_tol = 0.2;
   cfg.stop_vel_tol = 0.05;
   cfg.stop_duration = 0.5;
   cfg.presteer_duration = 0.5;
-  cfg.idle_after_finish_duration = 0.5;
   return cfg;
 }
 
@@ -59,7 +60,20 @@ TEST(TrajectoryStateMachineTest, OutsideEndpointToleranceKeepsTracking) {
   EXPECT_EQ(result.path_source, TrajectoryStateMachine::TrajectorySource::kLocalToEndpoint);
 }
 
-TEST(TrajectoryStateMachineTest, FinalPrecisionStopThenFinishedHold) {
+TEST(TrajectoryStateMachineTest, FinalToleranceRequiresStopVelocityBeforeStopping) {
+  TrajectoryStateMachine state_machine(makeConfig());
+  state_machine.setGlobalPath(makeSingleSegmentPath());
+
+  const auto fast = state_machine.update(makeEgo(1.0, 0.2), 0.0);
+  EXPECT_EQ(fast.state, TrajectoryStateMachine::PlannerState::kTracking);
+  EXPECT_EQ(fast.intent, TrajectoryStateMachine::TrajectoryIntent::kTrack);
+
+  const auto slow = state_machine.update(makeEgo(1.0, 0.04), 0.1);
+  EXPECT_EQ(slow.state, TrajectoryStateMachine::PlannerState::kStopping);
+  EXPECT_EQ(slow.intent, TrajectoryStateMachine::TrajectoryIntent::kStopCurrent);
+}
+
+TEST(TrajectoryStateMachineTest, FinalPrecisionStopThenIdle) {
   TrajectoryStateMachine state_machine(makeConfig());
   state_machine.setGlobalPath(makeSingleSegmentPath());
 
@@ -70,8 +84,10 @@ TEST(TrajectoryStateMachineTest, FinalPrecisionStopThenFinishedHold) {
 
   const auto finished = state_machine.update(makeEgo(1.0, 0.0), 0.6);
   EXPECT_TRUE(finished.finished);
-  EXPECT_EQ(finished.state, TrajectoryStateMachine::PlannerState::kFinishedHold);
-  EXPECT_EQ(finished.intent, TrajectoryStateMachine::TrajectoryIntent::kFinishedHold);
+  EXPECT_FALSE(finished.publish);
+  EXPECT_EQ(finished.state, TrajectoryStateMachine::PlannerState::kIdle);
+  EXPECT_EQ(finished.intent, TrajectoryStateMachine::TrajectoryIntent::kNone);
+  EXPECT_EQ(finished.path_source, TrajectoryStateMachine::TrajectorySource::kNone);
 }
 
 TEST(TrajectoryStateMachineTest, IntermediateCuspAdvancesToPresteer) {
@@ -86,6 +102,60 @@ TEST(TrajectoryStateMachineTest, IntermediateCuspAdvancesToPresteer) {
   EXPECT_EQ(presteer.intent, TrajectoryStateMachine::TrajectoryIntent::kPresteerNext);
   EXPECT_EQ(presteer.active_segment_index, 1U);
   EXPECT_EQ(presteer.active_direction, -1);
+}
+
+
+TEST(TrajectoryStateMachineTest, IntermediateCuspToleranceRequiresStopVelocityBeforeStopping) {
+  TrajectoryStateMachine state_machine(makeConfig());
+  state_machine.setGlobalPath(makeTwoSegmentPath());
+
+  const auto fast = state_machine.update(makeEgo(0.8, 0.2), 0.0);
+  EXPECT_EQ(fast.state, TrajectoryStateMachine::PlannerState::kTracking);
+  EXPECT_EQ(fast.intent, TrajectoryStateMachine::TrajectoryIntent::kTrack);
+
+  const auto slow = state_machine.update(makeEgo(0.8, 0.04), 0.1);
+  EXPECT_EQ(slow.state, TrajectoryStateMachine::PlannerState::kStopping);
+  EXPECT_EQ(slow.intent, TrajectoryStateMachine::TrajectoryIntent::kStopCurrent);
+  EXPECT_EQ(slow.active_segment_index, 0U);
+}
+
+TEST(TrajectoryStateMachineTest, IntermediateCuspUsesRelaxedTransitionTolerance) {
+  TrajectoryStateMachine state_machine(makeConfig());
+  state_machine.setGlobalPath(makeTwoSegmentPath());
+
+  const auto stop = state_machine.update(makeEgo(0.8, 0.0), 0.0);
+  EXPECT_EQ(stop.state, TrajectoryStateMachine::PlannerState::kStopping);
+  EXPECT_EQ(stop.intent, TrajectoryStateMachine::TrajectoryIntent::kStopCurrent);
+  EXPECT_EQ(stop.active_segment_index, 0U);
+
+  const auto presteer = state_machine.update(makeEgo(0.8, 0.0), 0.6);
+  EXPECT_EQ(presteer.intent, TrajectoryStateMachine::TrajectoryIntent::kPresteerNext);
+  EXPECT_EQ(presteer.active_segment_index, 1U);
+}
+
+TEST(TrajectoryStateMachineTest, IntermediateCuspCompletionRechecksTransitionTolerance) {
+  TrajectoryStateMachine state_machine(makeConfig());
+  state_machine.setGlobalPath(makeTwoSegmentPath());
+
+  const auto stop = state_machine.update(makeEgo(0.8, 0.0), 0.0);
+  EXPECT_EQ(stop.state, TrajectoryStateMachine::PlannerState::kStopping);
+  EXPECT_EQ(stop.active_segment_index, 0U);
+
+  const auto still_stopping = state_machine.update(makeEgo(0.6, 0.0), 0.6);
+  EXPECT_EQ(still_stopping.state, TrajectoryStateMachine::PlannerState::kStopping);
+  EXPECT_EQ(still_stopping.intent, TrajectoryStateMachine::TrajectoryIntent::kStopCurrent);
+  EXPECT_EQ(still_stopping.active_segment_index, 0U);
+}
+
+TEST(TrajectoryStateMachineTest, FinalGoalKeepsPreciseEndpointTolerance) {
+  TrajectoryStateMachine state_machine(makeConfig());
+  state_machine.setGlobalPath(makeSingleSegmentPath());
+
+  const auto result = state_machine.update(makeEgo(0.8, 0.0), 0.0);
+
+  EXPECT_FALSE(result.finished);
+  EXPECT_EQ(result.state, TrajectoryStateMachine::PlannerState::kTracking);
+  EXPECT_EQ(result.intent, TrajectoryStateMachine::TrajectoryIntent::kTrack);
 }
 
 TEST(TrajectoryStateMachineTest, TimeoutRequestsEmergencyStopOnActiveSegment) {

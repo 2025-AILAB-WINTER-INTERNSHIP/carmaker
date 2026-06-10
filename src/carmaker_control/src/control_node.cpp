@@ -14,6 +14,7 @@
 #include <ros/ros.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Int32.h>
+#include <std_msgs/String.h>
 
 #include <carmaker_msgs/Control_Signal.h>
 #include <carmaker_msgs/DynamicsInfo.h>
@@ -78,6 +79,26 @@ double clamp(double value, double min_value, double max_value)
 {
   return std::max(min_value, std::min(max_value, value));
 }
+
+enum SpeedSelectionReason {
+  kSpeedReasonAllZeroStop = 0,
+  kSpeedReasonLookaheadSpeed = 1,
+  kSpeedReasonMinTrackingSpeed = 2,
+  kSpeedReasonMinCreepSpeed = 3,
+  kSpeedReasonEndpointStop = 4
+};
+
+const char* speedSelectionReasonString(int reason)
+{
+  switch (reason) {
+    case kSpeedReasonAllZeroStop: return "all_zero_stop";
+    case kSpeedReasonLookaheadSpeed: return "lookahead_speed";
+    case kSpeedReasonMinTrackingSpeed: return "min_tracking_speed";
+    case kSpeedReasonMinCreepSpeed: return "min_creep_speed";
+    case kSpeedReasonEndpointStop: return "endpoint_stop";
+  }
+  return "unknown";
+}
 }  // namespace
 
 // /planning/trajectory와 현재 차량 상태를 받아 /carmaker/control_signal을 내보내는 제어 노드.
@@ -118,6 +139,12 @@ private:
     }
   };
 
+  struct TargetSpeedDecision {
+    double target_speed{0.0};
+    double raw_target_speed{0.0};
+    int reason{kSpeedReasonEndpointStop};
+  };
+
   void loadParameters();
   void trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr& msg);
   void odomCallback(const nav_msgs::OdometryConstPtr& msg);
@@ -143,7 +170,19 @@ private:
                                 double preview_curvature,
                                 double speed,
                                 int direction) const;
-  double selectTargetSpeed(const ActiveTrajectory& trajectory, std::size_t target_index) const;
+  TargetSpeedDecision selectTargetSpeed(const ActiveTrajectory& trajectory,
+                                        std::size_t nearest_index,
+                                        std::size_t target_index,
+                                        double distance_to_end) const;
+  static TargetSpeedDecision selectTargetSpeedForPath(const std::vector<PathPoint>& path,
+                                                      std::size_t nearest_index,
+                                                      std::size_t target_index,
+                                                      double distance_to_end,
+                                                      double min_tracking_speed,
+                                                      double min_creep_speed,
+                                                      double max_target_speed,
+                                                      double stop_velocity_epsilon,
+                                                      double arrival_slow_distance);
 
   void advertiseDebugTopics();
   void publishDebugTelemetry(const Pose2D& pose,
@@ -156,6 +195,8 @@ private:
                              int tracking_state,
                              double steer_command,
                              int stop_reason = 0,
+                             double raw_target_speed = 0.0,
+                             int speed_selection_reason = kSpeedReasonEndpointStop,
                              std::size_t preview_index = std::numeric_limits<std::size_t>::max(),
                              double preview_distance = 0.0,
                              double preview_curvature = 0.0);
@@ -168,6 +209,8 @@ private:
   void publishActiveSegmentPath(const ActiveTrajectory& trajectory, const ros::Time& stamp);
   void publishControl(int direction, double steer_command, double accel_command);
   void publishStop(int direction, double steer_command = 0.0);
+  void resetIdleRelease();
+  bool publishIdleStopUntilRelease(const ros::Time& now);
 
   static double distance2D(const Pose2D& pose, const PathPoint& point);
   static double distance2D(const PathPoint& a, const PathPoint& b);
@@ -190,6 +233,7 @@ private:
   ros::Publisher debug_active_path_pub_;
   ros::Publisher debug_current_speed_pub_;
   ros::Publisher debug_target_speed_pub_;
+  ros::Publisher debug_raw_target_speed_pub_;
   ros::Publisher debug_speed_error_pub_;
   ros::Publisher debug_steer_command_pub_;
   ros::Publisher debug_curvature_ff_pub_;
@@ -209,6 +253,8 @@ private:
   ros::Publisher debug_direction_pub_;
   ros::Publisher debug_tracking_state_pub_;
   ros::Publisher debug_stop_reason_pub_;
+  ros::Publisher debug_speed_selection_reason_pub_;
+  ros::Publisher debug_speed_selection_reason_text_pub_;
 
   mutable std::mutex odom_mutex_;
   nav_msgs::Odometry latest_odom_;
@@ -246,6 +292,8 @@ private:
   double stop_trajectory_velocity_epsilon_{1e-6};
 
   double min_tracking_speed_{0.2};
+  double min_creep_speed_{0.1};
+  double arrival_slow_distance_{0.5};
   double max_target_speed_{0.7};
   double lookahead_distance_{0.35};
   double lookahead_time_{0.2};
@@ -273,6 +321,13 @@ private:
   double reverse_steering_scale_{1.0};
   double curvature_ff_gain_{0.6};
   double reverse_curvature_ff_sign_{-1.0};
+  double last_steer_command_{0.0};
+  double idle_release_initial_steer_{0.0};
+  bool steer_release_after_idle_{false};
+  bool idle_release_active_{false};
+  bool idle_control_released_{false};
+  double release_duration_{1.0};
+  ros::Time idle_release_start_time_;
 
   ros::Time last_control_time_;
   ros::Time last_debug_path_time_;
@@ -340,7 +395,23 @@ void ControlNode::loadParameters()
   stop_trajectory_velocity_epsilon_ = std::max(0.0, stop_trajectory_velocity_epsilon_);
 
   pnh_.param("control/min_tracking_speed", min_tracking_speed_, 0.2);
+  pnh_.param("control/min_creep_speed", min_creep_speed_, 0.1);
+  pnh_.param("control/arrival_slow_distance", arrival_slow_distance_, 0.5);
   pnh_.param("control/max_target_speed", max_target_speed_, 0.7);
+  min_tracking_speed_ = std::max(0.0, min_tracking_speed_);
+  min_creep_speed_ = std::max(0.0, min_creep_speed_);
+  arrival_slow_distance_ = std::max(0.0, arrival_slow_distance_);
+  max_target_speed_ = std::max(0.0, max_target_speed_);
+  if (min_creep_speed_ > min_tracking_speed_) {
+    ROS_WARN("control/min_creep_speed=%.3f is greater than min_tracking_speed=%.3f; "
+             "near-endpoint creep may exceed the normal tracking floor.",
+             min_creep_speed_, min_tracking_speed_);
+  }
+  if (max_target_speed_ < min_tracking_speed_) {
+    ROS_WARN("control/max_target_speed=%.3f is lower than min_tracking_speed=%.3f; "
+             "target speed will be clamped below the configured tracking floor.",
+             max_target_speed_, min_tracking_speed_);
+  }
 
   // lookahead는 속도가 높을수록 조금 멀리 보도록 base + time * speed 형태로 계산한다.
   // 단, 너무 가까워 떨리거나 너무 멀어 코너를 뭉개지 않도록 min/max로 제한한다.
@@ -362,6 +433,9 @@ void ControlNode::loadParameters()
   pnh_.param("control/max_gas", max_gas_, 0.35);
   pnh_.param("control/max_brake", max_brake_, 1.0);
   pnh_.param("control/stop_brake", stop_brake_, 0.4);
+  pnh_.param("control/steer_release_after_idle", steer_release_after_idle_, false);
+  pnh_.param("control/release_duration", release_duration_, 1.0);
+  release_duration_ = std::max(0.0, release_duration_);
   pnh_.param("control/drive_gear", drive_gear_, 1);
   pnh_.param("control/neutral_gear", neutral_gear_, 0);
   pnh_.param("control/reverse_gear", reverse_gear_, -1);
@@ -476,6 +550,8 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
     trajectory_received_ = !active_trajectory_.empty();
     last_trajectory_time_ = ros::Time::now();
   }
+
+  resetIdleRelease();
 
   ROS_INFO_THROTTLE(1.0,
                     "Active trajectory received: %zu points direction=%s nearest_index=%zu (%s)",
@@ -612,6 +688,10 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   }
   last_control_time_ = now;
 
+  if (idle_control_released_) {
+    return;
+  }
+
   Pose2D pose;
   double signed_speed = 0.0;
   if (!getCurrentState(pose, signed_speed)) {
@@ -641,14 +721,14 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   }
 
   if (!should_track) {
-    // 경로가 없거나 timeout이면 neutral + brake로 대기한다.
+    // 경로가 없거나 timeout이면 release_duration 동안만 stop command를 유지한다.
     publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0.0, 0.0, 0, 0.0, 2);
-    if (publish_stop_without_path_) {
-      publishStop(0);
-    }
+    publishIdleStopUntilRelease(now);
     speed_pid_.reset();
     return;
   }
+
+  resetIdleRelease();
 
   const double current_speed = std::abs(signed_speed);
   const std::size_t nearest_index =
@@ -663,29 +743,28 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   // 속도 목표와 curvature feedforward는 lookahead point에서 읽고,
   // Stanley feedback 오차는 nearest point 기준으로 계산한다.
   // 코너에서 너무 앞 점만 보면 lateral error가 늦게 반영될 수 있어서 둘을 분리한다.
-  const double lookahead =
-      clamp(lookahead_distance_ + lookahead_time_ * current_speed,
-            min_lookahead_distance_, max_lookahead_distance_);
+  const double lookahead = clamp(lookahead_distance_ + lookahead_time_ * current_speed, min_lookahead_distance_, max_lookahead_distance_);
   const std::size_t target_index = findLookaheadIndex(active_trajectory, nearest_index, lookahead);
   std::size_t preview_index = target_index;
-  const double preview_curvature =
-      computePreviewCurvature(active_trajectory, nearest_index, preview_index);
+  const double preview_curvature = computePreviewCurvature(active_trajectory, nearest_index, preview_index);
 
-  const double target_speed = selectTargetSpeed(active_trajectory, target_index);
-  const double steer_command =
-      computeSteeringCommand(pose, active_trajectory.points[nearest_index],
-                             preview_curvature,
-                             std::max(current_speed, target_speed), active_trajectory.direction());
+  const double distance_to_end = distance2D(pose, active_trajectory.points.back());
+  const TargetSpeedDecision speed_decision = selectTargetSpeed(active_trajectory, nearest_index, target_index, distance_to_end);
+  const double target_speed = speed_decision.target_speed;
+  const double steer_command = computeSteeringCommand(pose, active_trajectory.points[nearest_index],
+                                preview_curvature,
+                                std::max(current_speed, target_speed),
+                                active_trajectory.direction());
 
-  const bool stop_trajectory =
-      std::all_of(active_trajectory.points.begin(), active_trajectory.points.end(),
-                  [this](const PathPoint& point) {
-                    return point.target_speed <= stop_trajectory_velocity_epsilon_;
-                  });
+  const bool stop_trajectory = std::all_of(active_trajectory.points.begin(), active_trajectory.points.end(),
+                                [this](const PathPoint& point) {
+                                    return point.target_speed <= stop_trajectory_velocity_epsilon_;
+                                });
   if (stop_trajectory) {
     publishDebugTelemetry(pose, signed_speed, &active_trajectory,
                           nearest_index, target_index, 0.0, lookahead, 2, steer_command,
-                          3, preview_index, curvature_preview_distance_, preview_curvature);
+                          3, 0.0, kSpeedReasonAllZeroStop,
+                          preview_index, curvature_preview_distance_, preview_curvature);
     speed_pid_.reset();
     publishStop(active_trajectory.direction(), steer_command);
     return;
@@ -695,7 +774,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   publishDebugTelemetry(pose, signed_speed, &active_trajectory,
                         nearest_index, target_index, target_speed, lookahead, 1, steer_command,
-                        0, preview_index, curvature_preview_distance_, preview_curvature);
+                        0, speed_decision.raw_target_speed, speed_decision.reason,
+                        preview_index, curvature_preview_distance_, preview_curvature);
   publishControl(active_trajectory.direction(), steer_command, accel_command);
 }
 
@@ -764,10 +844,8 @@ double ControlNode::computePreviewCurvature(const ActiveTrajectory& trajectory,
   preview_index = findLookaheadIndex(trajectory, nearest_index, preview_distance);
 
   const double half_window = 0.5 * std::max(0.0, curvature_preview_window_);
-  const std::size_t start_index =
-      findLookaheadIndex(trajectory, nearest_index, std::max(0.0, preview_distance - half_window));
-  const std::size_t end_index =
-      findLookaheadIndex(trajectory, nearest_index, preview_distance + half_window);
+  const std::size_t start_index = findLookaheadIndex(trajectory, nearest_index, std::max(0.0, preview_distance - half_window));
+  const std::size_t end_index = findLookaheadIndex(trajectory, nearest_index, preview_distance + half_window);
 
   const std::size_t first = std::min(start_index, end_index);
   const std::size_t last = std::max(start_index, end_index);
@@ -820,56 +898,88 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                      std::cos(feedback_reference.yaw) * dy;
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
 
-  const double tire_steer =
-      stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
+  const double tire_steer = stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
   const double curvature_ff = computeCurvatureFeedforward(preview_curvature, direction);
-  const double steer_command =
-      steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
+  const double steer_command = steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 
   return clamp(steer_command, -max_steer_command_, max_steer_command_);
 }
 
-double ControlNode::selectTargetSpeed(const ActiveTrajectory& trajectory,
-                                      std::size_t target_index) const
+ControlNode::TargetSpeedDecision ControlNode::selectTargetSpeed(
+    const ActiveTrajectory& trajectory,
+    std::size_t nearest_index,
+    std::size_t target_index,
+    double distance_to_end) const
 {
-  const auto& path = trajectory.points;
+  return selectTargetSpeedForPath(trajectory.points,
+                                  nearest_index,
+                                  target_index,
+                                  distance_to_end,
+                                  min_tracking_speed_,
+                                  min_creep_speed_,
+                                  max_target_speed_,
+                                  stop_trajectory_velocity_epsilon_,
+                                  arrival_slow_distance_);
+}
+
+ControlNode::TargetSpeedDecision ControlNode::selectTargetSpeedForPath(
+    const std::vector<PathPoint>& path,
+    std::size_t nearest_index,
+    std::size_t target_index,
+    double distance_to_end,
+    double min_tracking_speed,
+    double min_creep_speed,
+    double max_target_speed,
+    double stop_velocity_epsilon,
+    double arrival_slow_distance)
+{
+  TargetSpeedDecision decision;
   if (path.empty()) {
-    return 0.0;
+    return decision;
   }
 
+  const double eps = std::max(0.0, stop_velocity_epsilon);
+  nearest_index = std::min(nearest_index, path.size() - 1);
   target_index = std::min(target_index, path.size() - 1);
-  const bool stopped_segment =
-      std::all_of(path.begin(), path.end(),
-                  [this](const PathPoint& point) {
-                    return point.target_speed <= stop_trajectory_velocity_epsilon_;
-                  });
+
+  const bool stopped_segment = std::all_of(path.begin(), path.end(),
+                                [eps](const PathPoint& point) {
+                                    return !std::isfinite(point.target_speed) ||
+                                        point.target_speed <= eps;
+                                });
   if (stopped_segment) {
-    return 0.0;
+    decision.reason = kSpeedReasonAllZeroStop;
+    return decision;
   }
 
-  const double raw_target_speed = path[target_index].target_speed;
-  if (std::isfinite(raw_target_speed) &&
-      raw_target_speed <= stop_trajectory_velocity_epsilon_) {
-    return 0.0;
-  }
-  double target_speed = std::isfinite(raw_target_speed) ? raw_target_speed : 0.0;
+  decision.raw_target_speed = std::isfinite(path[target_index].target_speed)
+                                  ? path[target_index].target_speed
+                                  : 0.0;
+  double target_speed = decision.raw_target_speed;
 
-  bool has_future_tracking_speed = false;
-  for (std::size_t i = target_index; i < path.size(); ++i) {
-    if (std::isfinite(path[i].target_speed) &&
-        path[i].target_speed > min_tracking_speed_) {
-      has_future_tracking_speed = true;
-      break;
-    }
-  }
+  const bool has_future_tracking_speed = std::any_of(path.begin() + nearest_index, path.end(),
+                                            [min_tracking_speed](const PathPoint& point) {
+                                                return std::isfinite(point.target_speed) &&
+                                                    point.target_speed > min_tracking_speed;
+                                            });
 
-  // Planner owns segment completion. If this is not an all-zero stop trajectory,
-  // keep a small tracking speed only while there is still a cruising segment ahead.
-  if (has_future_tracking_speed) {
-    target_speed = std::max(target_speed, min_tracking_speed_);
+  if (distance_to_end <= eps) {
+    decision.reason = kSpeedReasonEndpointStop;
+    return decision;
   }
 
-  return clamp(target_speed, 0.0, max_target_speed_);
+  if (distance_to_end > arrival_slow_distance && has_future_tracking_speed) {
+    decision.reason = kSpeedReasonMinTrackingSpeed;
+    target_speed = std::max(target_speed, min_tracking_speed);
+  } else if (target_speed <= eps) {
+    decision.reason = kSpeedReasonMinCreepSpeed;
+    target_speed = min_creep_speed;
+  } else {
+    decision.reason = kSpeedReasonLookaheadSpeed;
+  }
+
+  decision.target_speed = clamp(target_speed, 0.0, std::max(0.0, max_target_speed));
+  return decision;
 }
 
 void ControlNode::advertiseDebugTopics()
@@ -901,6 +1011,8 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/current_speed", 10);
   debug_target_speed_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/target_speed", 10);
+  debug_raw_target_speed_pub_ =
+      nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/raw_lookahead_speed", 10);
   debug_speed_error_pub_ =
       nh_.advertise<std_msgs::Float64>(debug_topic_prefix_ + "/speed_error", 10);
   debug_steer_command_pub_ =
@@ -939,6 +1051,10 @@ void ControlNode::advertiseDebugTopics()
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/tracking_state", 10);
   debug_stop_reason_pub_ =
       nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/stop_reason", 10);
+  debug_speed_selection_reason_pub_ =
+      nh_.advertise<std_msgs::Int32>(debug_topic_prefix_ + "/speed_selection_reason", 10);
+  debug_speed_selection_reason_text_pub_ =
+      nh_.advertise<std_msgs::String>(debug_topic_prefix_ + "/speed_selection_reason_text", 10);
 
   ROS_INFO("Control debug topics enabled at %s (frame=%s)",
            debug_topic_prefix_.c_str(), debug_frame_id_.c_str());
@@ -954,6 +1070,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
                                         int tracking_state,
                                         double steer_command,
                                         int stop_reason,
+                                        double raw_target_speed,
+                                        int speed_selection_reason,
                                         std::size_t preview_index,
                                         double preview_distance,
                                         double preview_curvature)
@@ -989,8 +1107,7 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   }
 
   publishPoseDebug(debug_current_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
-  publishPoseDebug(debug_current_control_pose_pub_,
-                   pose.x, pose.y, pose.yaw, stamp);
+  publishPoseDebug(debug_current_control_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
 
   if (trajectory && !trajectory->empty()) {
     const auto& path = trajectory->points;
@@ -1013,15 +1130,11 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
       preview_distance_value = preview_distance;
     }
 
-    publishPoseDebug(debug_nearest_pose_pub_,
-                     nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
-    publishPoseDebug(debug_nearest_control_pose_pub_,
-                     nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
-    publishPoseDebug(debug_lookahead_pose_pub_,
-                     target_point.x, target_point.y, target_point.yaw, stamp);
+    publishPoseDebug(debug_nearest_pose_pub_, nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
+    publishPoseDebug(debug_nearest_control_pose_pub_, nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
+    publishPoseDebug(debug_lookahead_pose_pub_, target_point.x, target_point.y, target_point.yaw, stamp);
     if (has_preview) {
-      publishPoseDebug(debug_curvature_preview_pose_pub_,
-                       preview_point.x, preview_point.y, preview_point.yaw, stamp);
+      publishPoseDebug(debug_curvature_preview_pose_pub_, preview_point.x, preview_point.y, preview_point.yaw, stamp);
     }
 
     const double dx = pose.x - nearest_point.x;
@@ -1029,22 +1142,20 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     cte = std::sin(nearest_point.yaw) * dx -
           std::cos(nearest_point.yaw) * dy;
     heading_error = normalizeAngle(nearest_point.yaw - pose.yaw);
-    curvature_ff =
-        steering_command_sign_ * steering_ratio_ *
-        computeCurvatureFeedforward(preview_curvature, direction);
-    steer_saturated =
-        std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
+    curvature_ff = steering_command_sign_ * steering_ratio_ * computeCurvatureFeedforward(preview_curvature, direction);
+    steer_saturated = std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
-    const bool should_publish_path =
-        last_debug_path_time_.isZero() ||
-        debug_path_period_ <= 0.0 ||
-        (stamp - last_debug_path_time_).toSec() >= debug_path_period_;
+    const bool should_publish_path = last_debug_path_time_.isZero() ||
+                                        debug_path_period_ <= 0.0 ||
+                                        (stamp - last_debug_path_time_).toSec() >= debug_path_period_;
     if (should_publish_path) {
       publishActiveSegmentPath(*trajectory, stamp);
     }
   } else {
     target_speed = 0.0;
+    raw_target_speed = 0.0;
     lookahead = nan;
+    speed_selection_reason = kSpeedReasonEndpointStop;
   }
 
   std_msgs::Float64 float_msg;
@@ -1052,6 +1163,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_current_speed_pub_.publish(float_msg);
   float_msg.data = target_speed;
   debug_target_speed_pub_.publish(float_msg);
+  float_msg.data = raw_target_speed;
+  debug_raw_target_speed_pub_.publish(float_msg);
   float_msg.data = target_speed - current_speed;
   debug_speed_error_pub_.publish(float_msg);
   float_msg.data = steer_command;
@@ -1092,6 +1205,12 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_tracking_state_pub_.publish(int_msg);
   int_msg.data = stop_reason;
   debug_stop_reason_pub_.publish(int_msg);
+  int_msg.data = speed_selection_reason;
+  debug_speed_selection_reason_pub_.publish(int_msg);
+
+  std_msgs::String string_msg;
+  string_msg.data = speedSelectionReasonString(speed_selection_reason);
+  debug_speed_selection_reason_text_pub_.publish(string_msg);
 }
 
 void ControlNode::publishStopReason(int stop_reason)
@@ -1151,9 +1270,12 @@ void ControlNode::publishControl(int direction, double steer_command, double acc
   const double gas_norm = clamp(accel_command / std::max(1e-6, max_accel_), 0.0, 1.0);
   const double brake_norm = clamp(-accel_command / std::max(1e-6, max_decel_), 0.0, 1.0);
 
+  last_steer_command_ = clamp(steer_command, -max_steer_command_, max_steer_command_);
+  resetIdleRelease();
+
   carmaker_msgs::Control_Signal msg;
   msg.header.stamp = ros::Time::now();
-  msg.steerangle = static_cast<float>(steer_command);
+  msg.steerangle = static_cast<float>(last_steer_command_);
   msg.gas = static_cast<float>(gas_norm * max_gas_);
   msg.brake = static_cast<float>(brake_norm * max_brake_);
   msg.accel = static_cast<float>(direction * (gas_norm * max_accel_ - brake_norm * max_decel_));
@@ -1163,18 +1285,21 @@ void ControlNode::publishControl(int direction, double steer_command, double acc
 
 void ControlNode::publishStop(int direction, double steer_command)
 {
-  // direction=0이면 active trajectory가 없으므로 neutral-only로 대기한다.
+  // direction=0이면 active trajectory가 없으므로 neutral로 대기하되 마지막 조향각은 유지한다.
   // direction이 있으면 현재/다음 gear를 유지한 채 멈춤 명령을 내 기어 전환 타이밍을 안정화한다.
+  if (direction != 0) {
+    last_steer_command_ = clamp(steer_command, -max_steer_command_, max_steer_command_);
+  }
+
   carmaker_msgs::Control_Signal msg;
   msg.header.stamp = ros::Time::now();
   msg.gas = 0.0F;
+  msg.steerangle = static_cast<float>(last_steer_command_);
   if (direction == 0) {
-    msg.steerangle = 0.0F;
     msg.brake = 0.0F;
     msg.gear = neutral_gear_;
     msg.accel = 0.0F;
   } else {
-    msg.steerangle = static_cast<float>(steer_command);
     msg.brake = static_cast<float>(clamp(stop_brake_, 0.0, max_brake_));
     msg.gear = directionToGear(direction, drive_gear_, reverse_gear_);
     msg.accel = static_cast<float>(direction * -msg.brake * max_decel_);
@@ -1182,6 +1307,48 @@ void ControlNode::publishStop(int direction, double steer_command)
   control_pub_.publish(msg);
 }
 
+void ControlNode::resetIdleRelease()
+{
+  idle_release_active_ = false;
+  idle_control_released_ = false;
+  idle_release_start_time_ = ros::Time();
+}
+
+bool ControlNode::publishIdleStopUntilRelease(const ros::Time& now)
+{
+  if (idle_control_released_) {
+    return false;
+  }
+
+  if (!idle_release_active_) {
+    idle_release_active_ = true;
+    idle_release_start_time_ = now;
+    idle_release_initial_steer_ = last_steer_command_;
+  }
+
+  const double elapsed = (now - idle_release_start_time_).toSec();
+  if (elapsed >= release_duration_) {
+    if (steer_release_after_idle_) {
+      last_steer_command_ = 0.0;
+    }
+    idle_control_released_ = true;
+    ROS_INFO_THROTTLE(1.0, "No active trajectory: released control_signal publisher.");
+    return false;
+  }
+
+  if (steer_release_after_idle_) {
+    const double ratio = release_duration_ <= 1e-6
+                             ? 1.0
+                             : clamp(elapsed / release_duration_, 0.0, 1.0);
+    last_steer_command_ = idle_release_initial_steer_ * (1.0 - ratio);
+  }
+
+  if (publish_stop_without_path_) {
+    publishStop(0);
+    return true;
+  }
+  return false;
+}
 double ControlNode::distance2D(const Pose2D& pose, const PathPoint& point)
 {
   return std::hypot(pose.x - point.x, pose.y - point.y);

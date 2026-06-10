@@ -114,7 +114,7 @@ global_post_processing:
     max_steer_vel: 0.6108 # rad/s (approx 35 deg/s)
     max_lat_acc: 0.8 # m/s^2
     goal_vel: 0.0
-    gear_shift_duration: 1.0 # seconds (delay at forward/reverse transitions)
+    gear_shift_duration: 1.5 # seconds (delay at forward/reverse transitions)
     min_velocity_denominator: 0.02 # Lower limit of velocity denominator for dt calculations to prevent division by zero
   visualization:
     arrow_spacing_meters: 0.2 # Spacing in meters for PoseArray Yaw Arrows

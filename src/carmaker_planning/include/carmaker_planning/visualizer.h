@@ -30,7 +30,7 @@ public:
                  const std::vector<std::pair<State, State>>& branches,
                  const std::string& frame_id,
                  double min_turning_radius);
-  void clear();
+  void clear(const std::string& frame_id);
 
 private:
   nav_msgs::Path createPathMsg(const Path& path, const std::string& frame_id, const ros::Time& stamp);
