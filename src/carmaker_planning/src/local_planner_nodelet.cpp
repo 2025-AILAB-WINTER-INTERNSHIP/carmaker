@@ -220,6 +220,8 @@ bool LocalPlannerNodelet::handleTimeJump() {
       last_decision_log_valid_ = false;
       last_logged_finished_ = false;
     }
+    path_locked_ = false;
+    locked_path_.clear();
     last_timer_time_ = now;
     NODELET_WARN("[LocalPlanner] Time jump detected. Cleared pending and active trajectory state.");
     return true;
@@ -255,6 +257,8 @@ bool LocalPlannerNodelet::consumePendingTrajectory() {
     last_decision_log_valid_ = false;
     last_logged_finished_ = false;
   }
+  path_locked_ = false;
+  locked_path_.clear();
 
   size_t segment_count = 0;
   {
@@ -580,6 +584,13 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
     const State& ego,
     Path& path) {
   path.clear();
+
+  if (decision.state != TrajectoryStateMachine::PlannerState::kTracking ||
+      decision.intent != TrajectoryStateMachine::TrajectoryIntent::kTrack) {
+    path_locked_ = false;
+    locked_path_.clear();
+  }
+
   if (decision.path_source == TrajectoryStateMachine::TrajectorySource::kActiveSegment) {
     path = decision.active_segment;
     LocalPlanningResult result;
@@ -587,26 +598,40 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
     result.path = path;
     updateLocalDiagnostics(result);
   } else if (decision.path_source == TrajectoryStateMachine::TrajectorySource::kLocalToEndpoint) {
-    double start_kappa = 0.0;
-    if (!estimateStartKappa(ego, decision.global_path, start_kappa)) {
-      NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Cannot estimate ego curvature: global path is empty.");
-      LocalPlanningResult result;
-      result.error("LocalPlannerNodelet: cannot estimate start curvature because global path is empty.");
+    if (path_locked_ && !locked_path_.empty()) {
+      path = locked_path_;
+      total_trajectories_++;
+      successful_trajectories_++;
+    } else {
+      double start_kappa = 0.0;
+      if (!estimateStartKappa(ego, decision.global_path, start_kappa)) {
+        NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Cannot estimate ego curvature: global path is empty.");
+        LocalPlanningResult result;
+        result.error("LocalPlannerNodelet: cannot estimate start curvature because global path is empty.");
+        updateLocalDiagnostics(result);
+        return false;
+      }
+      LocalTrajectoryPlanner::PlanRequest request;
+      request.ego = ego;
+      request.start_kappa = start_kappa;
+      request.target = decision.endpoint;
+      request.start_vel = ego.v;
+      LocalPlanningResult result = local_trajectory_planner_.planToEndpoint(request);
+      logPlannerMessages("[LocalPlanner]", result.logs);
       updateLocalDiagnostics(result);
-      return false;
+      if (!result.success) {
+        return false;
+      }
+      path = std::move(result.path);
+
+      double dist_to_endpoint = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
+      if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
+        path_locked_ = true;
+        locked_path_ = path;
+        NODELET_INFO("[LocalPlanner] Distance to endpoint (%.3fm) <= lock threshold (%.3fm). Trajectory LOCKED.",
+                     dist_to_endpoint, cfg_.trajectory_lock_distance);
+      }
     }
-    LocalTrajectoryPlanner::PlanRequest request;
-    request.ego = ego;
-    request.start_kappa = start_kappa;
-    request.target = decision.endpoint;
-    request.start_vel = ego.v;
-    LocalPlanningResult result = local_trajectory_planner_.planToEndpoint(request);
-    logPlannerMessages("[LocalPlanner]", result.logs);
-    updateLocalDiagnostics(result);
-    if (!result.success) {
-      return false;
-    }
-    path = std::move(result.path);
   } else {
     return false;
   }

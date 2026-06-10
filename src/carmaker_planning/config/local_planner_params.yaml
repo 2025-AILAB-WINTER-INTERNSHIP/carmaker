@@ -37,6 +37,7 @@ vehicle:
 local_planner:
   mode: "local" # "local" -> quintic fitting, "global" -> active global segment
   pose_timeout: 0.5 # [s] stop updating trajectory when GT/EKF pose is stale
+  trajectory_lock_distance: 0.5 # [m] lock local trajectory when distance to endpoint is below this
 
   replanning:
     rate_hz: 10.0 # [Hz]  local path refresh rate

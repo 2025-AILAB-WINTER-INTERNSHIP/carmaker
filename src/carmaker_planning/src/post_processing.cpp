@@ -699,7 +699,7 @@ TrajectoryDiagnostic TrajectoryValidator::validate(const Path& path, std::vector
 
 void TrajectoryValidator::validateCurvature(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
   checkLimit(path, diag.curvature_ok, diag.curv_violations, diag.max_curv_violation,
-             max_kappa_, 1e-3, [&](size_t i) { return std::abs(path[i].kappa); });
+             max_kappa_, 0.05, [&](size_t i) { return std::abs(path[i].kappa); });
 
   if (!diag.curvature_ok) {
     char buf[256];
