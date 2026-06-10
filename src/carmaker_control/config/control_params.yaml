@@ -28,9 +28,9 @@ control:
   # Target speed selection ----------------------------------------------------
   # segment 완료 판정 전에는 target velocity가 0이어도 이 속도 이상으로 추종한다.
   # planner가 publish한 all-zero trajectory는 정지/선제 조향 단계로 보고 0속도를 유지한다.
-  min_tracking_speed: 0.20
-  min_creep_speed: 0.1
-  arrival_slow_distance: 0.5
+  min_tracking_speed: 0.28
+  min_creep_speed: 0.28
+  arrival_slow_distance: 1.0
   # Parking speed cap.
   max_target_speed: 10
 
@@ -41,7 +41,7 @@ control:
   min_lookahead_distance: 0.2
   max_lookahead_distance: 0.8
   # Stanley feedback은 nearest 기준으로 두고, 곡률 feedforward만 더 앞을 본다.
-  curvature_preview_distance: 0.8
+  curvature_preview_distance: 1.0
   curvature_preview_window: 0.4
 
   # Path index tracking -------------------------------------------------------
