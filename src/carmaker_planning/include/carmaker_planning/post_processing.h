@@ -35,22 +35,24 @@ public:
   bool process(GlobalPlanningResult& result,
                const GlobalMap& map,
                double start_vel,
-               bool enable_smoothing,
-               bool enable_resampling,
-               bool enable_profiling);
-  bool process(GlobalPlanningResult& result,
+               bool request_smoothing,
+               bool request_resampling,
+               bool request_profiling);
+  bool process(LocalPlanningResult& result,
                double start_vel,
-               bool enable_resampling,
-               bool enable_profiling);
+               bool request_smoothing,
+               bool request_resampling,
+               bool request_profiling);
 
 private:
-  bool runPipeline(GlobalPlanningResult& result,
+  template <typename ResultT>
+  bool runPipeline(ResultT& result,
                    const GlobalMap* map,
                    double start_vel,
-                   bool enable_smoothing,
-                   bool enable_resampling,
-                   bool enable_profiling);
-  bool smooth(Path& path, const GlobalMap& map, std::vector<std::pair<std::string, std::string>>& logs);
+                   bool request_smoothing,
+                   bool request_resampling,
+                   bool request_profiling);
+  bool smooth(Path& path, const GlobalMap* map, std::vector<std::pair<std::string, std::string>>& logs);
   bool resample(const Path& path, Path& resampled_path, std::vector<std::pair<std::string, std::string>>& logs);
   bool resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs);
   bool profile(Path& path, double start_vel, std::vector<std::pair<std::string, std::string>>& logs);
@@ -89,18 +91,6 @@ private:
   double max_kappa_;
   double wheelbase_;
 };
-
-/**
- * @brief Lightweight velocity profiling for an already-smoothed path.
- *        Wraps profileKinematicPass without requiring a GlobalMap or full PostProcessor.
- * @param path        Path to profile in-place (kappa must be pre-computed).
- * @param limits      Kinematic constraints.
- * @param wheelbase   Vehicle wheelbase [m].
- * @param start_vel   Initial velocity [m/s].
- * @param goal_vel    Target velocity at end [m/s] (usually 0).
- */
-void profilePath(Path& path, const KinematicLimits& limits,
-                 double wheelbase, double start_vel, double goal_vel = 0.0);
 
 } // namespace carmaker_planning
 

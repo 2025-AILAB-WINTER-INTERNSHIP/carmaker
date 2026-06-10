@@ -81,6 +81,8 @@ global_planner:
 # Post processing pipeline parameters
 global_post_processing:
   smoother:
+    enabled: true
+    collision_check_enabled: true
     # [수식적 배경]
     # Gradient Descent 기반의 경로 평활화(Smoothing) 업데이트 식은 다음과 같습니다:
     #   x_i <- x_i + w_data * (x_orig_i - x_i) + w_smooth * (x_{i+1} + x_{i-1} - 2*x_i)
@@ -97,11 +99,14 @@ global_post_processing:
     tolerance: 0.001
     max_iterations: 500
   resampler:
+    enabled: true
     resolution: 0.1
   validator:
+    enabled: true
     time_tolerance_ms: 1.0 # ms
     yaw_tolerance_deg: 5.0 # deg
   profiler:
+    enabled: true
     max_vel: 2.0 # m/s 7.2 km/h
     max_accel: 0.8 # m/s^2
     max_decel: 0.8 # m/s^2
@@ -113,4 +118,3 @@ global_post_processing:
     min_velocity_denominator: 0.02 # Lower limit of velocity denominator for dt calculations to prevent division by zero
   visualization:
     arrow_spacing_meters: 0.2 # Spacing in meters for PoseArray Yaw Arrows
-

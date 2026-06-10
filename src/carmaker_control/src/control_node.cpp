@@ -1163,17 +1163,22 @@ void ControlNode::publishControl(int direction, double steer_command, double acc
 
 void ControlNode::publishStop(int direction, double steer_command)
 {
-  // direction=0이면 경로가 없거나 완료된 상태이므로 neutral gear로 brake를 유지한다.
+  // direction=0이면 active trajectory가 없으므로 neutral-only로 대기한다.
   // direction이 있으면 현재/다음 gear를 유지한 채 멈춤 명령을 내 기어 전환 타이밍을 안정화한다.
   carmaker_msgs::Control_Signal msg;
   msg.header.stamp = ros::Time::now();
-  msg.steerangle = static_cast<float>(steer_command);
   msg.gas = 0.0F;
-  msg.brake = static_cast<float>(clamp(stop_brake_, 0.0, max_brake_));
-  msg.gear = direction == 0 ? neutral_gear_ : directionToGear(direction, drive_gear_, reverse_gear_);
-  msg.accel = direction == 0
-                  ? 0.0F
-                  : static_cast<float>(direction * -msg.brake * max_decel_);
+  if (direction == 0) {
+    msg.steerangle = 0.0F;
+    msg.brake = 0.0F;
+    msg.gear = neutral_gear_;
+    msg.accel = 0.0F;
+  } else {
+    msg.steerangle = static_cast<float>(steer_command);
+    msg.brake = static_cast<float>(clamp(stop_brake_, 0.0, max_brake_));
+    msg.gear = directionToGear(direction, drive_gear_, reverse_gear_);
+    msg.accel = static_cast<float>(direction * -msg.brake * max_decel_);
+  }
   control_pub_.publish(msg);
 }
 

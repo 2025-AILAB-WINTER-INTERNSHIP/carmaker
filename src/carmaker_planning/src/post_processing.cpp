@@ -72,39 +72,46 @@ PostProcessor::PostProcessor(const PostProcessConfig& config,
 bool PostProcessor::process(GlobalPlanningResult& result,
                             const GlobalMap& map,
                             double start_vel,
-                            bool enable_smoothing,
-                            bool enable_resampling,
-                            bool enable_profiling) {
+                            bool request_smoothing,
+                            bool request_resampling,
+                            bool request_profiling) {
   return runPipeline(result,
                      &map,
                      start_vel,
-                     enable_smoothing,
-                     enable_resampling,
-                     enable_profiling);
+                     request_smoothing,
+                     request_resampling,
+                     request_profiling);
 }
 
-bool PostProcessor::process(GlobalPlanningResult& result,
+bool PostProcessor::process(LocalPlanningResult& result,
                             double start_vel,
-                            bool enable_resampling,
-                            bool enable_profiling) {
+                            bool request_smoothing,
+                            bool request_resampling,
+                            bool request_profiling) {
   return runPipeline(result,
                      nullptr,
                      start_vel,
-                     /*enable_smoothing=*/false,
-                     enable_resampling,
-                     enable_profiling);
+                     request_smoothing,
+                     request_resampling,
+                     request_profiling);
 }
 
-bool PostProcessor::runPipeline(GlobalPlanningResult& result,
+template <typename ResultT>
+bool PostProcessor::runPipeline(ResultT& result,
                                 const GlobalMap* map,
                                 double start_vel,
-                                bool enable_smoothing,
-                                bool enable_resampling,
-                                bool enable_profiling) {
+                                bool request_smoothing,
+                                bool request_resampling,
+                                bool request_profiling) {
   using Clock = std::chrono::steady_clock;
 
-  // 1. Resampling
-  if (enable_resampling) {
+  const bool run_smoothing = request_smoothing && config_.smoother.enabled;
+  const bool run_resampling = request_resampling && config_.resampler.enabled;
+  const bool run_profiling = request_profiling && config_.profiler.enabled;
+  const bool run_final_resampling = run_resampling && run_smoothing;
+
+  // 1. Pre-resampling/densify before smoothing
+  if (run_resampling) {
     const auto start = Clock::now();
     Path resampled_path;
     if (resample(result.path, resampled_path, result.logs)) {
@@ -114,21 +121,31 @@ bool PostProcessor::runPipeline(GlobalPlanningResult& result,
   }
 
   // 2. Smoothing
-  if (enable_smoothing) {
-    if (!map) {
-      result.logs.push_back({"ERROR", "PostProcessor smoothing requested without a map."});
+  if (run_smoothing) {
+    if (config_.smoother.collision_check_enabled && !map) {
+      result.logs.push_back({"ERROR", "PostProcessor collision-aware smoothing requested without a map."});
       return false;
     }
     const auto start = Clock::now();
-    smooth(result.path, *map, result.logs);
+    smooth(result.path, config_.smoother.collision_check_enabled ? map : nullptr, result.logs);
     result.smoothing_time = std::chrono::duration<double>(Clock::now() - start).count();
+  }
+
+  // 3. Final resampling after smoothing so the published/profiled path has stable spacing.
+  if (run_final_resampling) {
+    const auto start = Clock::now();
+    Path resampled_path;
+    if (resample(result.path, resampled_path, result.logs)) {
+      result.path = std::move(resampled_path);
+    }
+    result.resampling_time += std::chrono::duration<double>(Clock::now() - start).count();
   }
 
   // Update geometry properties (theta, kappa, s) once on the finalized path
   updateGeometryProperties(result.path);
 
-  // 3. Velocity profiling
-  if (enable_profiling) {
+  // 4. Velocity profiling
+  if (run_profiling) {
     const auto start = Clock::now();
     profile(result.path, start_vel, result.logs);
     result.profiling_time = std::chrono::duration<double>(Clock::now() - start).count();
@@ -137,17 +154,36 @@ bool PostProcessor::runPipeline(GlobalPlanningResult& result,
       pt.v = 0.0;
       pt.a = 0.0;
     }
-    result.profiling_time = 0.0;
+  }
+
+  if (!config_.validator.enabled) {
+    result.diagnostic = TrajectoryDiagnostic();
+    return true;
   }
 
   TrajectoryValidator validator(config_, max_kappa_, wheelbase_);
   TrajectoryDiagnostic diag = validator.validate(result.path, result.logs);
   result.diagnostic = diag;
-
   return diag.is_valid;
 }
 
-bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pair<std::string, std::string>>& logs) {
+template bool PostProcessor::runPipeline<GlobalPlanningResult>(
+    GlobalPlanningResult& result,
+    const GlobalMap* map,
+    double start_vel,
+    bool request_smoothing,
+    bool request_resampling,
+    bool request_profiling);
+
+template bool PostProcessor::runPipeline<LocalPlanningResult>(
+    LocalPlanningResult& result,
+    const GlobalMap* map,
+    double start_vel,
+    bool request_smoothing,
+    bool request_resampling,
+    bool request_profiling);
+
+bool PostProcessor::smooth(Path& path, const GlobalMap* map, std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.size() < 3) {
     return true;
   }
@@ -245,11 +281,13 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pa
 
       // Check collision ONLY for internal points (excluding fixed endpoints)
       bool trial_ok = true;
-      for (int i = 1; i < seg_len - 1; ++i) {
-        size_t global_idx = seg_start + i;
-        if (map.checkCollision(path[global_idx].x, path[global_idx].y, path[global_idx].theta)) {
-          trial_ok = false;
-          break;
+      if (map) {
+        for (int i = 1; i < seg_len - 1; ++i) {
+          size_t global_idx = seg_start + i;
+          if (map->checkCollision(path[global_idx].x, path[global_idx].y, path[global_idx].theta)) {
+            trial_ok = false;
+            break;
+          }
         }
       }
 
@@ -275,7 +313,7 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pa
     }
 
     if (!smooth_success) {
-      logs.push_back({"WARN", "Smoother failed to find collision-free path after multiple attempts. Rolling back to original segment."});
+      logs.push_back({"WARN", "Smoother failed to find a valid path after multiple attempts. Rolling back to original segment."});
       for (int i = 0; i < seg_len; ++i) {
         path[seg_start + i] = original_segment[i];
       }
@@ -971,38 +1009,6 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       path[i].kappa = 0.0;
     }
   }
-}
-
-// ── Free function: profilePath ────────────────────────────────────────────────
-
-void profilePath(Path& path, const KinematicLimits& limits,
-                 double wheelbase, double start_vel, double goal_vel) {
-  if (path.size() < 2) return;
-
-  // Build a minimal PostProcessor config and delegate to the class.
-  // smoothing=false, resampling=false, profiling=true → only velocity profiling runs.
-  GlobalMainConfig tmp;
-  tmp.post_process.profiler.max_vel                  = limits.max_vel;
-  tmp.post_process.profiler.max_accel                = limits.max_accel;
-  tmp.post_process.profiler.max_decel                = limits.max_decel;
-  tmp.post_process.profiler.max_jerk                 = limits.max_jerk;
-  tmp.post_process.profiler.max_steer_vel            = limits.max_steer_vel;
-  tmp.post_process.profiler.max_lat_acc              = limits.max_lat_acc;
-  tmp.post_process.profiler.goal_vel                 = goal_vel;
-  tmp.post_process.profiler.min_velocity_denominator = limits.min_vel_denom;
-  tmp.post_process.profiler.gear_shift_duration      = 1.0;
-  tmp.vehicle.wheelbase                              = wheelbase;
-  tmp.vehicle.min_turning_radius = (limits.max_lat_acc > 1e-3)
-      ? limits.max_vel / limits.max_lat_acc : 5.5;
-
-  // PostProcessor::process() with smoothing=false, resampling=false does not touch GlobalMap.
-  GlobalMap dummy_map(tmp);  // empty map — not used when smoothing is disabled
-  PostProcessor pp(tmp);
-  GlobalPlanningResult result;
-  result.path = path;
-  pp.process(result, dummy_map, start_vel,
-             /*smoothing=*/false, /*resampling=*/false, /*profiling=*/true);
-  path = std::move(result.path);
 }
 
 } // namespace carmaker_planning

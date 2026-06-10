@@ -247,22 +247,17 @@ LocalPlanningResult LocalTrajectoryPlanner::planToEndpoint(
     return local_result;
   }
 
-  GlobalPlanningResult result;
-  result.path = std::move(raw_path);
+  local_result.path = std::move(raw_path);
 
-  const bool ok = post_processor_->process(result,
+  const bool ok = post_processor_->process(local_result,
                                            std::abs(request.start_vel),
-                                           /*enable_resampling=*/true,
-                                           /*enable_profiling=*/true);
-  local_result.logs = std::move(result.logs);
-  local_result.diagnostic = result.diagnostic;
-  local_result.resampling_time = result.resampling_time;
-  local_result.profiling_time = result.profiling_time;
+                                           /*request_smoothing=*/true,
+                                           /*request_resampling=*/true,
+                                           /*request_profiling=*/true);
   local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
   if (!ok) {
     return local_result;
   }
-  local_result.path = std::move(result.path);
   local_result.success = true;
   return local_result;
 }

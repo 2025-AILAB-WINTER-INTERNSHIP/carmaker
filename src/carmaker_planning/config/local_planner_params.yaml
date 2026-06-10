@@ -52,9 +52,18 @@ local_planner:
     idle_after_finish_duration: 0.5 # [s] publish final zero-speed trajectory before idle
 
 local_post_processing:
+  smoother:
+    enabled: true
+    collision_check_enabled: false
+    weight_data: 0.2
+    weight_smooth: 0.35
+    tolerance: 0.001
+    max_iterations: 500
   resampler:
+    enabled: true
     resolution: 0.1 # [m] common local/global path resampling interval
   profiler:
+    enabled: true
     max_vel: 2.0 # [m/s]
     max_accel: 0.8 # [m/s^2]
     max_decel: 0.8 # [m/s^2]
@@ -65,7 +74,6 @@ local_post_processing:
     gear_shift_duration: 1.0
     min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
   validator:
-    time_tolerance_ms: 1.0
-    yaw_tolerance_deg: 5.0
+    enabled: false
   visualization:
     arrow_spacing_meters: 0.2

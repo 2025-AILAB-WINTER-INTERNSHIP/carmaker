@@ -126,17 +126,17 @@ bool GlobalPlanner::postProcess(GlobalPlanningResult& result, const GlobalMap& m
     return false;
   }
 
-  bool run_smoothing = enable_smoothing_;
-  bool run_resampling = enable_resampling_;
-  bool run_profiling = enable_velocity_profiling_;
+  bool request_smoothing = enable_smoothing_;
+  bool request_resampling = enable_resampling_;
+  bool request_profiling = enable_velocity_profiling_;
 
-  if (run_profiling && !run_resampling) {
+  if (request_profiling && !request_resampling) {
     result.warn("Velocity profiling is enabled but resampling is disabled. Forcing resampling to preserve kinematic consistency!");
-    run_resampling = true;
+    request_resampling = true;
   }
 
   bool success = post_processor_->process(result, map, current_velocity,
-                                          run_smoothing, run_resampling, run_profiling);
+                                          request_smoothing, request_resampling, request_profiling);
   if (!success) {
     result.status = PlanningStatus::FAILURE_POST_PROCESSING;
   }

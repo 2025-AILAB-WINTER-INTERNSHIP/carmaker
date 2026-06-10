@@ -313,10 +313,10 @@ void LocalPlannerNodelet::processDiagnostics() {
 }
 
 void LocalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) {
-  LocalPlanningDiagnostic last_res;
+  LocalPlanningDiagnostic diag_snapshot;
   {
     std::lock_guard<std::mutex> lock(diag_mutex_);
-    last_res = last_diag_;
+    diag_snapshot = last_diag_;
   }
 
   bool has_path = false;
@@ -335,7 +335,7 @@ void LocalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
 
   if (!has_path) {
     stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Waiting for global trajectory");
-  } else if (last_res.success) {
+  } else if (diag_snapshot.success) {
     stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Publishing trajectory");
   } else if (idle) {
     stat.summary(diagnostic_updater::DiagnosticStatusWrapper::OK, "Idle");
@@ -351,27 +351,13 @@ void LocalPlannerNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
   stat.add("Total Trajectories", total_trajectories_.load());
   stat.add("Successful Trajectories", successful_trajectories_.load());
   stat.add("Failed Trajectories", failed_trajectories_.load());
-  stat.add("Last Success", last_res.success ? "True" : "False");
-  stat.add("Last Path Points", static_cast<int>(last_res.path_size));
-  stat.add("Last Path Length (m)", last_res.path_length);
-  stat.add("Last Total Time (s)", last_res.total_time);
-  stat.add("Resampling Time (s)", last_res.resampling_time);
-  stat.add("Velocity Profiling Time (s)", last_res.profiling_time);
-  stat.add("Trajectory Valid", last_res.diagnostic.is_valid ? "True" : "False");
-  stat.add("Curvature Violations Count", last_res.diagnostic.curv_violations);
-  stat.add("Yaw Violations Count", last_res.diagnostic.yaw_violations);
-  stat.add("Timestamp Violations Count", last_res.diagnostic.time_violations);
-  stat.add("Velocity Violations Count", last_res.diagnostic.vel_violations);
-  stat.add("Acceleration Violations Count", last_res.diagnostic.acc_violations);
-  stat.add("Jerk Violations Count", last_res.diagnostic.jerk_violations);
-  stat.add("Steering Velocity Violations Count", last_res.diagnostic.steer_vel_violations);
-  stat.add("Max Curvature Violation (rad/m)", last_res.diagnostic.max_curv_violation);
-  stat.add("Max Yaw Error (deg)", last_res.diagnostic.max_yaw_error_rad < 0.0 ? -1.0 : last_res.diagnostic.max_yaw_error_rad * 180.0 / M_PI);
-  stat.add("Max Time Error (s)", last_res.diagnostic.max_time_error_sec);
-  stat.add("Max Velocity Violation (m/s)", last_res.diagnostic.max_vel_violation);
-  stat.add("Max Acceleration Violation (m/s^2)", last_res.diagnostic.max_acc_violation);
-  stat.add("Max Jerk Violation (m/s^3)", last_res.diagnostic.max_jerk_violation);
-  stat.add("Max Steering Velocity Violation (rad/s)", last_res.diagnostic.max_steer_vel_violation);
+  stat.add("Snapshot Success", diag_snapshot.success ? "True" : "False");
+  stat.add("Snapshot Path Points", static_cast<int>(diag_snapshot.path_size));
+  stat.add("Snapshot Path Length (m)", diag_snapshot.path_length);
+  stat.add("Snapshot Total Time (s)", diag_snapshot.total_time);
+  stat.add("Snapshot Smoothing Time (s)", diag_snapshot.smoothing_time);
+  stat.add("Snapshot Resampling Time (s)", diag_snapshot.resampling_time);
+  stat.add("Snapshot Velocity Profiling Time (s)", diag_snapshot.profiling_time);
 }
 
 void LocalPlannerNodelet::updateLocalDiagnostics(const LocalPlanningResult& result) {

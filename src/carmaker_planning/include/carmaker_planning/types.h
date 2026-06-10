@@ -217,6 +217,7 @@ struct GlobalPlanningDiagnostic {
 struct LocalPlanningResult {
   bool success = false;
   Path path;
+  double smoothing_time = -1.0;
   double resampling_time = -1.0;
   double profiling_time = -1.0;
   double total_time = -1.0;
@@ -235,6 +236,7 @@ struct LocalPlanningResult {
 struct LocalPlanningDiagnostic {
   bool success = false;
   double total_time = -1.0;
+  double smoothing_time = -1.0;
   double resampling_time = -1.0;
   double profiling_time = -1.0;
   double path_length = -1.0;
@@ -245,6 +247,7 @@ struct LocalPlanningDiagnostic {
   explicit LocalPlanningDiagnostic(const LocalPlanningResult& res)
     : success(res.success),
       total_time(res.total_time),
+      smoothing_time(res.smoothing_time),
       resampling_time(res.resampling_time),
       profiling_time(res.profiling_time),
       path_length(res.path.empty() ? -1.0 : res.path.back().s),
@@ -306,17 +309,22 @@ struct GlobalPlannerConfig {
 
 struct PostProcessConfig {
   struct Smoother {
+    bool enabled = true;
+    bool collision_check_enabled = true;
     double weight_data, weight_smooth, tolerance;
     int max_iterations;
   } smoother;
   struct Resampler {
+    bool enabled = true;
     double resolution;
   } resampler;
   struct Validator {
+    bool enabled = true;
     double time_tolerance_ms;
     double yaw_tolerance_rad;
   } validator;
   struct Profiler {
+    bool enabled = true;
     double max_vel, max_accel, max_decel, max_jerk, max_steer_vel, max_lat_acc, goal_vel;
     double gear_shift_duration;
     double min_velocity_denominator;
@@ -452,15 +460,20 @@ inline void loadGlobalPlannerConfig(const ros::NodeHandle& nh, GlobalPlannerConf
 inline void loadPostProcessConfig(const ros::NodeHandle& nh,
                                   PostProcessConfig& cfg,
                                   const std::string& ns) {
+  nh.param(ns + "/smoother/enabled", cfg.smoother.enabled, true);
+  nh.param(ns + "/smoother/collision_check_enabled", cfg.smoother.collision_check_enabled, true);
   nh.param(ns + "/smoother/weight_data",    cfg.smoother.weight_data,   0.2);
   nh.param(ns + "/smoother/weight_smooth",  cfg.smoother.weight_smooth, 0.35);
   nh.param(ns + "/smoother/tolerance",      cfg.smoother.tolerance,     0.001);
   nh.param(ns + "/smoother/max_iterations", cfg.smoother.max_iterations, 500);
+  nh.param(ns + "/resampler/enabled", cfg.resampler.enabled, true);
   nh.param(ns + "/resampler/resolution",    cfg.resampler.resolution,   0.1);
 
+  nh.param(ns + "/validator/enabled", cfg.validator.enabled, true);
   nh.param(ns + "/validator/time_tolerance_ms", cfg.validator.time_tolerance_ms, 1.0);
   cfg.validator.yaw_tolerance_rad = deg2rad(nh.param<double>(ns + "/validator/yaw_tolerance_deg", 5.0));
 
+  nh.param(ns + "/profiler/enabled", cfg.profiler.enabled, true);
   nh.param(ns + "/profiler/max_vel",        cfg.profiler.max_vel,       1.5);
   nh.param(ns + "/profiler/max_accel",      cfg.profiler.max_accel,     1.0);
   nh.param(ns + "/profiler/max_decel",      cfg.profiler.max_decel,     1.5);
