@@ -118,6 +118,7 @@ public:
     double start_kappa = 0.0;
     PathPoint target;
     double start_vel = 0.0;
+    Path stitching_path;
   };
 
   LocalTrajectoryPlanner() = default;

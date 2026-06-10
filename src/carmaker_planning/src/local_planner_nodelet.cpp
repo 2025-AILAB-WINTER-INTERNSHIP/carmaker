@@ -625,8 +625,26 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
       LocalTrajectoryPlanner::PlanRequest request;
       request.ego = ego;
       request.start_kappa = start_kappa;
-      request.target = decision.endpoint;
       request.start_vel = ego.v;
+
+      const double dist_to_endpoint = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
+
+      if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
+        // 락 구간 내부: 스티칭 없이 목적지로 바로 다항식 피팅
+        request.target = decision.endpoint;
+      } else {
+        // 락 구간 외부: active_segment의 끝에서 lock_distance 만큼 이전 지점을 s 기준으로 탐색
+        const double target_s = decision.active_segment.back().s - cfg_.trajectory_lock_distance;
+        size_t split_idx = decision.active_segment.size() - 1;
+        while (split_idx > 0 && decision.active_segment[split_idx].s > target_s) {
+          split_idx--;
+        }
+
+        request.target = decision.active_segment[split_idx];
+        request.stitching_path.assign(decision.active_segment.begin() + static_cast<std::ptrdiff_t>(split_idx + 1),
+                                      decision.active_segment.end());
+      }
+
       LocalPlanningResult result = local_trajectory_planner_.planToEndpoint(request);
       logPlannerMessages("[LocalPlanner]", result.logs);
       updateLocalDiagnostics(result);
@@ -635,7 +653,6 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
       }
       path = std::move(result.path);
 
-      double dist_to_endpoint = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
       if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
         path_locked_ = true;
         locked_path_ = path;

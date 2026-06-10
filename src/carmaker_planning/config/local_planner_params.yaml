@@ -37,7 +37,7 @@ vehicle:
 local_planner:
   mode: "local" # "local" -> quintic fitting, "global" -> active global segment
   pose_timeout: 0.5 # [s] stop updating trajectory when GT/EKF pose is stale
-  trajectory_lock_distance: 1.5 # [m] lock local trajectory when distance to endpoint is below this
+  trajectory_lock_distance: 0.5 # [m] lock local trajectory when distance to endpoint is below this
 
   replanning:
     rate_hz: 10.0 # [Hz]  local path refresh rate
@@ -50,8 +50,8 @@ local_planner:
     stop_vel_tol: 0.3 # [m/s] velocity threshold before segment transition/final hold
 
   velocity:
-    min_creep_speed: 0.28 # [m/s] keep moving before planner declares arrival
-    creep_distance: 1.0 # [m] endpoint window where zero profile is lifted to creep speed
+    min_creep_speed: 0.2 # [m/s] keep moving before planner declares arrival
+    creep_distance: 0.4 # [m] endpoint window where zero profile is lifted to creep speed
 
   transition:
     stop_duration: 0.5 # [s] hold zero-speed current segment after cusp/final arrival

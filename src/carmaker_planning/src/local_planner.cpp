@@ -247,6 +247,11 @@ LocalPlanningResult LocalTrajectoryPlanner::planToEndpoint(
     return local_result;
   }
 
+  // 기하 결합 (Stitching): 다항식 피팅 경로 끝에 잔여 글로벌 경로를 단순 결합 (x,y 정보 위주로 후처리에서 재계산됨)
+  if (!request.stitching_path.empty()) {
+    raw_path.insert(raw_path.end(), request.stitching_path.begin(), request.stitching_path.end());
+  }
+
   local_result.path = std::move(raw_path);
 
   const bool ok = post_processor_->process(local_result,
