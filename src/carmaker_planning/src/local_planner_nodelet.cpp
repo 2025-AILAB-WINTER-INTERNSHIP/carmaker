@@ -661,7 +661,7 @@ bool LocalPlannerNodelet::applyTrackingCreepIfNeeded(
   bool changed = false;
   for (size_t i = 0; i + 1 < path.size(); ++i) {
     const double distance_to_end = std::max(0.0, path.back().s - path[i].s);
-    if (distance_to_end <= creep_distance && path[i].v <= 1e-6) {
+    if (distance_to_end <= creep_distance && path[i].v < min_creep_speed) {
       path[i].v = min_creep_speed;
       changed = true;
     }
