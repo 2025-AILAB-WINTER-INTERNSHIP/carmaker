@@ -98,7 +98,7 @@ stanley:
 
 vehicle:
   wheelbase: 2.97
-  min_turning_radius: 10.0 # 유효 회전 반경
+  min_turning_radius: 5.5 # 유효 회전 반경
   # Stanley는 타이어 조향각을 계산한다.
   # steering_ratio = Steer_WhlAng / Vhcl_FL_rz = 8.38 / 0.580 = 14.45
   steering_ratio: 14.45 # 실측 역산값
