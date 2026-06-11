@@ -221,8 +221,7 @@ bool LocalPlannerNodelet::handleTimeJump() {
       last_decision_log_valid_ = false;
       last_logged_finished_ = false;
     }
-    path_locked_ = false;
-    locked_path_.clear();
+
     last_timer_time_ = now;
     NODELET_WARN("[LocalPlanner] Time jump detected. Cleared pending and active trajectory state.");
     return true;
@@ -258,8 +257,6 @@ bool LocalPlannerNodelet::consumePendingTrajectory() {
     last_decision_log_valid_ = false;
     last_logged_finished_ = false;
   }
-  path_locked_ = false;
-  locked_path_.clear();
 
   size_t segment_count = 0;
   {
@@ -597,12 +594,6 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
     Path& path) {
   path.clear();
 
-  if (decision.state != TrajectoryStateMachine::PlannerState::kTracking ||
-      decision.intent != TrajectoryStateMachine::TrajectoryIntent::kTrack) {
-    path_locked_ = false;
-    locked_path_.clear();
-  }
-
   if (decision.path_source == TrajectoryStateMachine::TrajectorySource::kActiveSegment) {
     path = decision.active_segment;
     LocalPlanningResult result;
@@ -610,71 +601,54 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
     result.path = path;
     updateLocalDiagnostics(result);
   } else if (decision.path_source == TrajectoryStateMachine::TrajectorySource::kLocalToEndpoint) {
-    if (path_locked_ && !locked_path_.empty()) {
-      path = locked_path_;
-      total_trajectories_++;
-      successful_trajectories_++;
-    } else {
-      double start_kappa = 0.0;
-      if (!estimateStartKappa(ego, decision.active_segment, start_kappa)) {
-        NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Cannot estimate ego curvature: active segment is empty.");
-        LocalPlanningResult result;
-        result.error("LocalPlannerNodelet: cannot estimate start curvature because active segment is empty.");
-        updateLocalDiagnostics(result);
-        return false;
-      }
-      LocalTrajectoryPlanner::PlanRequest request;
-      request.ego = ego;
-      request.start_kappa = start_kappa;
-      request.start_vel = ego.v;
-
-      const double dist_to_endpoint = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
-
-      if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
-        // 락 구간 내부: 차량의 시작 위치를 뒤로 trajectory_lock_distance 만큼 투영하여 가상의 긴 피팅 구간 확보
-        double dx = cfg_.trajectory_lock_distance;
-        request.ego.x -= dx * cos(ego.theta) * decision.active_direction;
-        request.ego.y -= dx * sin(ego.theta) * decision.active_direction;
-        request.target = decision.endpoint;
-      } else {
-        // 락 구간 외부: 현재 차량 위치(best_idx) 기준 룩어헤드 거리만큼 앞의 지점을 타겟으로 설정
-        size_t ego_idx = 0;
-        double best_d = std::numeric_limits<double>::max();
-        for (size_t i = 0; i < decision.active_segment.size(); ++i) {
-          const double d = dist(ego.x, ego.y, decision.active_segment[i].x, decision.active_segment[i].y);
-          if (d < best_d) {
-            best_d = d;
-            ego_idx = i;
-          }
-        }
-
-        size_t target_idx = ego_idx;
-        double accumulated = 0.0;
-        while (target_idx + 1 < decision.active_segment.size() && accumulated < fitting_lookahead_) {
-          accumulated += dist(decision.active_segment[target_idx], decision.active_segment[target_idx + 1]);
-          target_idx++;
-        }
-
-        request.target = decision.active_segment[target_idx];
-        request.stitching_path.assign(decision.active_segment.begin() + static_cast<std::ptrdiff_t>(target_idx + 1),
-                                      decision.active_segment.end());
-      }
-
-      LocalPlanningResult result = local_trajectory_planner_.planToEndpoint(request);
-      logPlannerMessages("[LocalPlanner]", result.logs);
+    double start_kappa = 0.0;
+    if (!estimateStartKappa(ego, decision.active_segment, start_kappa)) {
+      NODELET_WARN_THROTTLE(1.0, "[LocalPlanner] Cannot estimate ego curvature: active segment is empty.");
+      LocalPlanningResult result;
+      result.error("LocalPlannerNodelet: cannot estimate start curvature because active segment is empty.");
       updateLocalDiagnostics(result);
-      if (!result.success) {
-        return false;
-      }
-      path = std::move(result.path);
+      return false;
+    }
+    LocalTrajectoryPlanner::PlanRequest request;
+    request.ego = ego;
+    
+    // 차량의 시작 위치를 항상 뒤로 back_projection_distance 만큼 투영하여 완만한 피팅 구간 확보
+    double dx = cfg_.back_projection_distance;
+    request.ego.x -= dx * cos(ego.theta) * decision.active_direction;
+    request.ego.y -= dx * sin(ego.theta) * decision.active_direction;
+    
+    request.start_kappa = start_kappa;
+    request.start_vel = ego.v;
 
-      if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
-        path_locked_ = true;
-        locked_path_ = path;
-        NODELET_INFO("[LocalPlanner] Distance to endpoint (%.3fm) <= lock threshold (%.3fm). Trajectory LOCKED.",
-                     dist_to_endpoint, cfg_.trajectory_lock_distance);
+    // 현재 차량 위치(best_idx) 기준 룩어헤드 거리만큼 앞의 지점을 타겟으로 설정
+    size_t ego_idx = 0;
+    double best_d = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < decision.active_segment.size(); ++i) {
+      const double d = dist(ego.x, ego.y, decision.active_segment[i].x, decision.active_segment[i].y);
+      if (d < best_d) {
+        best_d = d;
+        ego_idx = i;
       }
     }
+
+    size_t target_idx = ego_idx;
+    double accumulated = 0.0;
+    while (target_idx + 1 < decision.active_segment.size() && accumulated < fitting_lookahead_) {
+      accumulated += dist(decision.active_segment[target_idx], decision.active_segment[target_idx + 1]);
+      target_idx++;
+    }
+
+    request.target = decision.active_segment[target_idx];
+    request.stitching_path.assign(decision.active_segment.begin() + static_cast<std::ptrdiff_t>(target_idx + 1),
+                                  decision.active_segment.end());
+
+    LocalPlanningResult result = local_trajectory_planner_.planToEndpoint(request);
+    logPlannerMessages("[LocalPlanner]", result.logs);
+    updateLocalDiagnostics(result);
+    if (!result.success) {
+      return false;
+    }
+    path = std::move(result.path);
   } else {
     return false;
   }

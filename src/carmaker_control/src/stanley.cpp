@@ -39,7 +39,7 @@ double Stanley::calculate(double cte, double heading_error, double velocity,
   // heading_error는 차량 yaw와 trajectory pose yaw를 맞추는 항이다.
   // 후진에서는 같은 조향각이 yaw를 전진과 반대로 변화시키므로 heading 항을 뒤집는다.
   // lateral error 항은 path 좌우 기준을 유지해야 후진 path 반대 방향으로 꺾지 않는다.
-  const double steer_angle = heading_sign * (heading_gain_ * heading_error + cte_term);
+  const double steer_angle = heading_sign * heading_gain_ * heading_error + cte_term;
   return std::clamp(steer_angle, -max_steer_angle_, max_steer_angle_);
 }
 

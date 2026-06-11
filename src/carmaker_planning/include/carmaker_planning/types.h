@@ -355,7 +355,7 @@ struct LocalPlannerConfig {
   double replanning_rate_hz        = 10.0; ///< [Hz]  local path refresh rate
   double min_creep_speed = 0.1;            ///< [m/s] minimum tracking speed near endpoint
   double creep_distance = 0.5;             ///< [m] distance window for endpoint creep
-  double trajectory_lock_distance = 0.5;   ///< [m] lock local trajectory when distance to endpoint is below this
+  double back_projection_distance = 0.5;   ///< [m] lock local trajectory when distance to endpoint is below this
 
   PostProcessConfig post_process;
 };
@@ -379,7 +379,7 @@ inline void loadLocalPlannerConfig(const ros::NodeHandle& nh, LocalPlannerConfig
   nh.param(ns + "/arrival/stop_vel_tol", cfg.stop_vel_tol, 0.05);
 
   nh.param(ns + "/replanning/rate_hz",         cfg.replanning_rate_hz,        10.0);
-  nh.param(ns + "/trajectory_lock_distance",   cfg.trajectory_lock_distance,  0.5);
+  nh.param(ns + "/back_projection_distance",   cfg.back_projection_distance,  0.5);
   nh.param(ns + "/velocity/min_creep_speed", cfg.min_creep_speed, 0.1);
   nh.param(ns + "/velocity/creep_distance", cfg.creep_distance, 0.5);
 
