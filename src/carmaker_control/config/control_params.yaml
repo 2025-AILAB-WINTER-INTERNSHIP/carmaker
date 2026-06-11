@@ -12,7 +12,7 @@ setting:
 
 control:
   # Loop and state source ------------------------------------------------------
-  rate: 30.0
+  rate: 100.0
   # odom: localization이 publish하는 /localization/odom 사용
   # dynamics: CarMaker GT /carmaker/dynamic_info 사용
   state_source: "dynamics"
@@ -79,20 +79,20 @@ stanley:
   # Ioniq 5 설정값(wheelbase 2.97m, min_turning_radius 5.5m)으로 계산하면 약 28.4deg다.
   # 후진에서는 heading 항만 후진 yaw dynamics에 맞게 반대로 적용하고,
   # lateral error 항은 path 좌우 기준을 유지한다.
-  k: 2.5
-  k_soft: 0.15
-  cte_gain: 2.0
-  heading_gain: 1.8
+  k: 1.5
+  k_soft: 0.5
+  cte_gain: 1.0
+  heading_gain: 1.0
   max_steer_angle_deg: 28.4
   reverse_steering_scale: 1.3
   # Trajectory curvature 기반 feedforward. 큰 주차 곡률에서 feedback보다 먼저 조향한다.
-  curvature_ff_gain: 1.0
+  curvature_ff_gain: 0.8
   # 후진에서는 같은 조향각이 yaw를 반대로 변화시키므로 curvature feedforward 부호도 반대로 둔다.
   reverse_curvature_ff_sign: -1.0
 
 vehicle:
   wheelbase: 2.97
-  min_turning_radius: 5.5
+  min_turning_radius: 9.5
   # Stanley는 타이어 조향각을 계산한다. CarMaker control_signal/steerangle은
   # steering wheel command 범위로 보고 tight parking에서는 4.5까지 허용한다.
   steering_ratio: 14.0
