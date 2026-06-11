@@ -101,6 +101,7 @@ private:
   double             pose_timeout_ = 0.5;
   double             wheelbase_ = 2.97;
   double             diag_period_ = 1.0;
+  double             fitting_lookahead_ = 2.0;
   LocalTrajectoryPlanner local_trajectory_planner_;
   TrajectoryStateMachine::Config state_machine_config_;
   std::unique_ptr<Visualizer> visualizer_;

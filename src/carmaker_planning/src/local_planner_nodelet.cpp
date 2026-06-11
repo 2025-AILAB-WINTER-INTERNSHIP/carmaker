@@ -45,6 +45,7 @@ void LocalPlannerNodelet::onInit() {
   }
 
   pose_timeout_ = std::max(0.0, pnh_.param<double>("local_planner/pose_timeout", 0.5));
+  pnh_.param("local_planner/fitting_lookahead", fitting_lookahead_, 2.0);
 
   state_machine_config_.mode = TrajectoryStateMachine::parseMode(mode_);
   state_machine_config_.endpoint_xy_tol = cfg_.endpoint_xy_tol;
@@ -633,15 +634,26 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
         // 락 구간 내부: 스티칭 없이 목적지로 바로 다항식 피팅
         request.target = decision.endpoint;
       } else {
-        // 락 구간 외부: active_segment의 끝에서 lock_distance 만큼 이전 지점을 s 기준으로 탐색
-        const double target_s = decision.active_segment.back().s - cfg_.trajectory_lock_distance;
-        size_t split_idx = decision.active_segment.size() - 1;
-        while (split_idx > 0 && decision.active_segment[split_idx].s > target_s) {
-          split_idx--;
+        // 락 구간 외부: 현재 차량 위치(best_idx) 기준 룩어헤드 거리만큼 앞의 지점을 타겟으로 설정
+        size_t ego_idx = 0;
+        double best_d = std::numeric_limits<double>::max();
+        for (size_t i = 0; i < decision.active_segment.size(); ++i) {
+          const double d = dist(ego.x, ego.y, decision.active_segment[i].x, decision.active_segment[i].y);
+          if (d < best_d) {
+            best_d = d;
+            ego_idx = i;
+          }
         }
 
-        request.target = decision.active_segment[split_idx];
-        request.stitching_path.assign(decision.active_segment.begin() + static_cast<std::ptrdiff_t>(split_idx + 1),
+        size_t target_idx = ego_idx;
+        double accumulated = 0.0;
+        while (target_idx + 1 < decision.active_segment.size() && accumulated < fitting_lookahead_) {
+          accumulated += dist(decision.active_segment[target_idx], decision.active_segment[target_idx + 1]);
+          target_idx++;
+        }
+
+        request.target = decision.active_segment[target_idx];
+        request.stitching_path.assign(decision.active_segment.begin() + static_cast<std::ptrdiff_t>(target_idx + 1),
                                       decision.active_segment.end());
       }
 
