@@ -36,9 +36,9 @@ vehicle:
   length: 4.635 # meters
   wheelbase: 2.97 # meters
   rear_axle_offset: 0.82 # meters (Rear Bumper to Rear Axle)
-  min_turning_radius: 9.5 # meters
-  # Ioniq 5 wheelbase/min_turning_radius 기준: atan(2.97 / 5.5) = 28.4 deg
-  max_steer_angle_deg: 28.4 # degrees
+  min_turning_radius: 10.0 # meters — 유효 회전 반경
+  # 실측 측정값: Vhcl_FL_rz ±0.580 rad (33.2°), Steer_WhlAng ±8.38 rad
+  max_steer_angle_deg: 33.2 # degrees — 실측 물리 타이어 최대각 (28.4 → 33.2)
 
   limits:
     max_vel: 10.0 # m/s

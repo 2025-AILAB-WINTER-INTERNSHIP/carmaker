@@ -28,11 +28,11 @@ control:
   # Target speed selection ----------------------------------------------------
   # segment 완료 판정 전에는 target velocity가 0이어도 이 속도 이상으로 추종한다.
   # planner가 publish한 all-zero trajectory는 정지/선제 조향 단계로 보고 0속도를 유지한다.
-  min_tracking_speed: 0.28
+  min_tracking_speed: 0.25
   min_creep_speed: 0.20
-  arrival_slow_distance: 0.5
+  arrival_slow_distance: 1.0
   # Parking speed cap.
-  max_target_speed: 10
+  max_target_speed: 2
 
   # Lookahead and preview -----------------------------------------------------
   # 실제 lookahead = lookahead_distance + lookahead_time * current_speed 이며 min/max로 제한된다.
@@ -41,7 +41,7 @@ control:
   min_lookahead_distance: 0.2
   max_lookahead_distance: 0.8
   # Stanley feedback은 nearest 기준으로 두고, 곡률 feedforward만 더 앞을 본다.
-  curvature_preview_distance: 1.0
+  curvature_preview_distance: 0.8
   curvature_preview_window: 0.4
 
   # Path index tracking -------------------------------------------------------
@@ -76,27 +76,34 @@ pid:
 
 stanley:
   # Stanley 조향 파라미터. max_steer_angle_deg는 타이어 조향각 기준이다.
-  # Ioniq 5 설정값(wheelbase 2.97m, min_turning_radius 5.5m)으로 계산하면 약 28.4deg다.
+  # [실측 기반 계산]
+  #   Vhcl_FL_rz 물리 최대각: ±0.580 rad (33.2°)
+  #   Steer_WhlAng 핸들 최대각: ±8.38 rad
+  #   → steering_ratio = 8.38 / 0.580 = 14.45
+  #   → 이론 min_turning_radius = 2.97 / tan(0.580) ≈ 4.57 m
+  #   → 실측 유효 회전 반경: ~10 m (타이어 슬립 / CarMaker 모델 특성)
+  #   → max_steer_angle_deg = 33.2° (실측 물리 한계)
   # 후진에서는 heading 항만 후진 yaw dynamics에 맞게 반대로 적용하고,
   # lateral error 항은 path 좌우 기준을 유지한다.
-  k: 1.5
-  k_soft: 0.5
-  cte_gain: 1.0
-  heading_gain: 1.0
-  max_steer_angle_deg: 28.4
-  reverse_steering_scale: 1.3
+  k: 2.5 # 횡오차 복귀 강도
+  k_soft: 0.3 # 저속 분모 보정
+  cte_gain: 1.8 # 횡오차 gain
+  heading_gain: 1.5 # 헤딩 오차 gain
+  max_steer_angle_deg: 33.2 # 실측 물리 최대 타이어각
+  reverse_steering_scale: 1.2 # 후진 측방 오차 스케일
   # Trajectory curvature 기반 feedforward. 큰 주차 곡률에서 feedback보다 먼저 조향한다.
-  curvature_ff_gain: 0.8
+  curvature_ff_gain: 1.0 # 곡률 feedforward gain
   # 후진에서는 같은 조향각이 yaw를 반대로 변화시키므로 curvature feedforward 부호도 반대로 둔다.
   reverse_curvature_ff_sign: -1.0
 
 vehicle:
   wheelbase: 2.97
-  min_turning_radius: 9.5
-  # Stanley는 타이어 조향각을 계산한다. CarMaker control_signal/steerangle은
-  # steering wheel command 범위로 보고 tight parking에서는 4.5까지 허용한다.
-  steering_ratio: 14.0
-  max_steer_command: 8.5
+  min_turning_radius: 10.0 # 유효 회전 반경
+  # Stanley는 타이어 조향각을 계산한다.
+  # steering_ratio = Steer_WhlAng / Vhcl_FL_rz = 8.38 / 0.580 = 14.45
+  steering_ratio: 14.45 # 실측 역산값
+  # max_steer_command = 핸들 물리 최대각 = 8.38 rad
+  max_steer_command: 8.38 # 실측 핸들 최대각
   # 조향 부호가 반대로 보이면 -1.0으로 바꿔서 테스트한다.
   steering_command_sign: 1.0
 

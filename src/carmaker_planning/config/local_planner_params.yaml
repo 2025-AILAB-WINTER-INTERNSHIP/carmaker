@@ -29,13 +29,13 @@ setting:
 # Vehicle geometry (copied from global_planner_params.yaml for self-containment)
 vehicle:
   wheelbase: 2.97
-  min_turning_radius: 9.5
+  min_turning_radius: 10.0 # 유효 회전 반경
   limits:
     max_steer_vel: 0.6108 # [rad/s]
 
 # Local planner parameters
 local_planner:
-  mode: "local" # "local" -> quintic fitting, "global" -> active global segment
+  mode: "global" # "local" -> quintic fitting, "global" -> active global segment
   pose_timeout: 0.5 # [s] stop updating trajectory when GT/EKF pose is stale
   fitting_lookahead: 3.125 # [m] local dynamic lookahead distance for polynomial fitting and stitching
   trajectory_lock_distance: 1.0 # [m] lock local trajectory when distance to endpoint is below this
@@ -45,10 +45,10 @@ local_planner:
 
   arrival:
     endpoint_xy_tol: 0.15 # [m] final parking XY threshold
-    endpoint_yaw_tol: 0.25 # [rad] final parking heading threshold
+    endpoint_yaw_tol: 0.15 # [rad] final parking heading threshold
     segment_transition_xy_tol: 0.15 # [m] relaxed non-final cusp transition threshold
-    segment_transition_yaw_tol: 0.25 # [rad] relaxed non-final cusp heading threshold
-    stop_vel_tol: 0.3 # [m/s] velocity threshold before segment transition/final hold
+    segment_transition_yaw_tol: 0.15 # [rad] relaxed non-final cusp heading threshold
+    stop_vel_tol: 0.35 # [m/s] velocity threshold before segment transition/final hold
 
   velocity:
     min_creep_speed: 0.2 # [m/s] keep moving before planner declares arrival
