@@ -631,7 +631,10 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
       const double dist_to_endpoint = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
 
       if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
-        // 락 구간 내부: 스티칭 없이 목적지로 바로 다항식 피팅
+        // 락 구간 내부: 차량의 시작 위치를 뒤로 trajectory_lock_distance 만큼 투영하여 가상의 긴 피팅 구간 확보
+        double dx = cfg_.trajectory_lock_distance;
+        request.ego.x -= dx * cos(ego.theta) * decision.active_direction;
+        request.ego.y -= dx * sin(ego.theta) * decision.active_direction;
         request.target = decision.endpoint;
       } else {
         // 락 구간 외부: 현재 차량 위치(best_idx) 기준 룩어헤드 거리만큼 앞의 지점을 타겟으로 설정

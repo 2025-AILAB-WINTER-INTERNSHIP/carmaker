@@ -981,15 +981,6 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
     }
   }
 
-  // 3. Keep legacy zero-curvature handling for non-preserved direction changes,
-  // then restore planned segment-boundary yaw/kappa below.
-  for (size_t i = 1; i < path.size(); ++i) {
-    if (path[i - 1].direction != path[i].direction) {
-      path[i - 1].kappa = 0.0;
-      path[i].kappa = 0.0;
-    }
-  }
-
   // 백업해 둔 경계 상태 복원 (theta, kappa)
   for (const auto& item : preserved_points) {
     path[item.first].theta = item.second.theta;
