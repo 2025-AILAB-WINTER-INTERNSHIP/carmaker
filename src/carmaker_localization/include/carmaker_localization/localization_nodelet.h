@@ -110,7 +110,6 @@ private:
 
     // Frame transformation helpers
     Eigen::Vector3d transformPose(const Eigen::Vector3d& pose_in, double offset_x) const;
-    Eigen::Vector2d transformVelocity(const Eigen::Vector2d& vel_in, double yaw_rate, double offset_x) const;
     Eigen::Matrix3d propagateCovariance(const Eigen::Matrix3d& cov_in, double yaw, double offset_x) const;
 
     // =========================================================================
@@ -121,9 +120,6 @@ private:
     // =========================================================================
     // 2. Read-Only Configuration Parameters
     // =========================================================================
-    int imu_id_ = 0;
-    double imu_offset_x_ = 0.0;
-    double imu_offset_y_ = 0.0;
     std::string global_frame_;
     std::string prediction_bumper_frame_;
     std::string prediction_rear_axle_frame_;
@@ -151,11 +147,9 @@ private:
     double track_width_ = 1.634;
     double rear_axle_x_ = 0.82;
     double wheelbase_ = 2.97;
-    double steering_ratio_ = 1.0;  // Steer_WhlAng → road wheel angle conversion ratio
 
     // EKF Noise Config
     double wheel_speed_std_ = 0.05;
-    double imu_acc_std_ = 0.1;
     double imu_gyro_std_ = 0.01;
     double q_pos_std_ = 0.05;
     double q_yaw_std_ = 0.03;

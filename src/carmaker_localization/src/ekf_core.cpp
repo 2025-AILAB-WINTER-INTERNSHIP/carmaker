@@ -6,7 +6,7 @@
 namespace carmaker_localization {
 
 EkfCore::EkfCore()
-    : is_initialized_(false), last_time_(0.0), wheelbase_(2.97), rear_axle_offset_(0.82), imu_offset_x_(0.0), imu_offset_y_(0.0) {
+    : is_initialized_(false), last_time_(0.0) {
     x_.setZero();
     P_.setIdentity();
     Q_.setZero();
@@ -20,7 +20,7 @@ EkfCore::EkfCore()
     Q_(B_YAW_RATE, B_YAW_RATE) = 1e-4;
 }
 
-void EkfCore::initialize(double x, double y, double yaw, double timestamp, double vx, double vy) {
+void EkfCore::initialize(double x, double y, double yaw, double timestamp, double vx) {
     std::lock_guard<std::mutex> lock(mutex_);
     x_.setZero();
     x_(X) = x;
@@ -41,41 +41,6 @@ void EkfCore::setProcessNoise(const StateMatrix& Q) {
     Q_ = Q;
 }
 
-void EkfCore::setWheelbase(double wheelbase) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (wheelbase > 0.0) {
-        wheelbase_ = wheelbase;
-        if (log_info_) {
-            std::ostringstream oss;
-            oss << "[EkfCore] Wheelbase set to: " << wheelbase_ << " m";
-            log_info_(oss.str());
-        }
-    }
-}
-
-void EkfCore::setRearAxleOffset(double offset) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (offset >= 0.0) {
-        rear_axle_offset_ = offset;
-        if (log_info_) {
-            std::ostringstream oss;
-            oss << "[EkfCore] Rear axle offset set to: " << rear_axle_offset_ << " m";
-            log_info_(oss.str());
-        }
-    }
-}
-
-void EkfCore::setImuOffsets(double offset_x, double offset_y) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    imu_offset_x_ = offset_x;
-    imu_offset_y_ = offset_y;
-    if (log_info_) {
-        std::ostringstream oss;
-        oss << "[EkfCore] IMU offsets set to: x=" << imu_offset_x_ << " m, y=" << imu_offset_y_ << " m";
-        log_info_(oss.str());
-    }
-}
-
 void EkfCore::setLogCallbacks(std::function<void(const std::string&)> info,
                                std::function<void(const std::string&)> warn) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -83,7 +48,7 @@ void EkfCore::setLogCallbacks(std::function<void(const std::string&)> info,
     log_warn_ = std::move(warn);
 }
 
-void EkfCore::prediction(double timestamp, const PredictionInput& u) {
+void EkfCore::prediction(double timestamp) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -104,11 +69,11 @@ void EkfCore::prediction(double timestamp, const PredictionInput& u) {
     double cos_yaw = std::cos(yaw);
     double sin_yaw = std::sin(yaw);
 
-    // 6차원 기구학 오도메트리 전파
+    // 6차원 상태 기반 등속/등요레이트(YAW_RATE) 오도메트리 전파
     x_(X) += vx * cos_yaw * dt;
     x_(Y) += vx * sin_yaw * dt;
     x_(YAW) += yaw_rate * dt;
-    // vx, yaw_rate, b_yaw_rate는 등속 예측 모델에 따라 유지됨
+    // vx, yaw_rate, b_yaw_rate는 등속/등요레이트(YAW_RATE) 예측 모델에 따라 유지됨
 
     // 자코비안 F 행렬 [6x6]
     StateMatrix F = StateMatrix::Identity();
@@ -173,7 +138,7 @@ void EkfCore::correctWheel(double vx, double yaw_rate, const Eigen::Matrix2d& R,
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // 6D EKF: 종속도(VX)와 요레이트(YAW_RATE)만 관측으로 업데이트
+    // 6D EKF: 종방향 속도(VX)와 요레이트(YAW_RATE)만 관측으로 업데이트
     Eigen::Matrix<double, 2, STATE_DIM> H = Eigen::Matrix<double, 2, STATE_DIM>::Zero();
     H(0, VX) = 1.0;
     H(1, YAW_RATE) = 1.0;
