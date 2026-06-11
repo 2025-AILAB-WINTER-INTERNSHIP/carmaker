@@ -47,6 +47,7 @@ void LocalPlannerNodelet::onInit() {
   pose_timeout_ = std::max(0.0, pnh_.param<double>("local_planner/pose_timeout", 0.5));
   pnh_.param("local_planner/fitting_lookahead", fitting_lookahead_, 2.0);
 
+  wheelbase_ = pnh_.param<double>("vehicle/wheelbase", 2.97);
   state_machine_config_.mode = TrajectoryStateMachine::parseMode(mode_);
   state_machine_config_.endpoint_xy_tol = cfg_.endpoint_xy_tol;
   state_machine_config_.endpoint_yaw_tol = cfg_.endpoint_yaw_tol;
@@ -58,8 +59,6 @@ void LocalPlannerNodelet::onInit() {
   state_machine_config_.presteer_duration =
       pnh_.param<double>("local_planner/transition/presteer_duration", 0.6);
   trajectory_state_machine_.configure(state_machine_config_);
-
-  wheelbase_ = pnh_.param<double>("vehicle/wheelbase", 2.97);
   min_turning_radius_ = pnh_.param<double>("vehicle/min_turning_radius", 5.2);
   local_trajectory_planner_.configure(cfg_.post_process,
                                       wheelbase_,
@@ -667,16 +666,24 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
         return false;
       }
       path = std::move(result.path);
-
-      if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
-        path_locked_ = true;
-        locked_path_ = path;
-        NODELET_INFO("[LocalPlanner] Distance to endpoint (%.3fm) <= lock threshold (%.3fm). Trajectory LOCKED.",
-                     dist_to_endpoint, cfg_.trajectory_lock_distance);
-      }
     }
   } else {
     return false;
+  }
+
+  // 전진 주행일 경우 최종 경로 끝단에 휠베이스 오프셋 일괄 연장 적용! (락 구간 피팅 궤적도 자동으로 포함됨)
+  if (!path.empty() && decision.active_direction == 1) {
+    appendWheelbaseOffset(path, wheelbase_);
+  }
+
+  // 락 상태 저장 (연장 처리가 완료된 완성본이 locked_path_에 안전하게 저장됨)
+  if (decision.path_source == TrajectoryStateMachine::TrajectorySource::kLocalToEndpoint && !path_locked_) {
+    const double dist_to_endpoint = dist(ego.x, ego.y, decision.endpoint.x, decision.endpoint.y);
+    if (dist_to_endpoint <= cfg_.trajectory_lock_distance) {
+      path_locked_ = true;
+      locked_path_ = path;
+      NODELET_INFO("[LocalPlanner] Distance to endpoint (%.3fm) <= lock threshold. Trajectory LOCKED & EXTENDED.", dist_to_endpoint);
+    }
   }
 
   applyStopIntentIfNeeded(path, decision.intent);
@@ -726,20 +733,28 @@ bool LocalPlannerNodelet::applyTrackingCreepIfNeeded(
     return false;
   }
 
+  const double offset = (path.back().direction == 1) ? wheelbase_ : 0.0;
+
   bool changed = false;
   for (size_t i = 0; i + 1 < path.size(); ++i) {
-    const double distance_to_end = std::max(0.0, path.back().s - path[i].s);
-    if (distance_to_end <= creep_distance && path[i].v < min_creep_speed) {
-      path[i].v = min_creep_speed;
-      changed = true;
+    const double distance_to_end = std::max(0.0, path.back().s - offset - path[i].s);
+    if (distance_to_end <= creep_distance && path[i].s < path.back().s - offset) {
+      if (path[i].v < min_creep_speed) {
+        path[i].v = min_creep_speed;
+        changed = true;
+      }
     }
   }
 
-  if (std::abs(path.back().v) > 1e-6 || std::abs(path.back().a) > 1e-6) {
-    changed = true;
+  for (size_t i = 0; i < path.size(); ++i) {
+    if (path[i].s >= path.back().s - offset - 1e-3) {
+      if (std::abs(path[i].v) > 1e-6 || std::abs(path[i].a) > 1e-6) {
+        path[i].v = 0.0;
+        path[i].a = 0.0;
+        changed = true;
+      }
+    }
   }
-  path.back().v = 0.0;
-  path.back().a = 0.0;
   return changed;
 }
 
@@ -761,11 +776,48 @@ void LocalPlannerNodelet::recomputeTimingAndAcceleration(Path& path) const {
 
     const double v_prev = std::max(0.0, std::abs(path[i - 1].v));
     const double v_curr = std::max(0.0, std::abs(path[i].v));
-    const double denom = std::max(v_prev + v_curr, min_velocity_denominator);
-    const double dt = 2.0 * std::max(0.0, ds) / denom;
+    double dt = 0.0;
+    if (v_prev + v_curr > 1e-3) {
+      const double denom = std::max(v_prev + v_curr, min_velocity_denominator);
+      dt = 2.0 * std::max(0.0, ds) / denom;
+    } else {
+      dt = 0.0;
+    }
 
     path[i].t = path[i - 1].t + dt;
     path[i].a = dt > 1e-6 ? (path[i].v - path[i - 1].v) / dt : 0.0;
+  }
+}
+
+void LocalPlannerNodelet::appendWheelbaseOffset(Path& path, double wheelbase) const {
+  if (path.empty() || wheelbase <= 0.0) return;
+  double resolution = 0.1;
+  if (path.size() >= 2) {
+    resolution = dist(path[path.size() - 2], path.back());
+    if (resolution <= 1e-3) {
+      resolution = 0.1;
+    }
+  }
+  const auto& last_pt = path.back();
+  const double theta = last_pt.theta;
+  const double time_from_start = last_pt.t;
+  const double start_s = last_pt.s;
+
+  int num_offset_points = static_cast<int>(std::ceil(wheelbase / resolution));
+  path.reserve(path.size() + num_offset_points);
+  for (int i = 1; i <= num_offset_points; ++i) {
+    double d = std::min(wheelbase, i * resolution);
+    PathPoint p;
+    p.x = last_pt.x + d * std::cos(theta);
+    p.y = last_pt.y + d * std::sin(theta);
+    p.theta = theta;
+    p.kappa = 0.0;
+    p.v = 0.0;
+    p.a = 0.0;
+    p.direction = last_pt.direction;
+    p.s = start_s + d;
+    p.t = time_from_start;
+    path.push_back(p);
   }
 }
 

@@ -75,6 +75,7 @@ private:
   bool   applyTrackingCreepIfNeeded(Path& path,
                                     TrajectoryStateMachine::TrajectoryIntent intent) const;
   void   recomputeTimingAndAcceleration(Path& path) const;
+  void   appendWheelbaseOffset(Path& path, double wheelbase) const;
   bool   isZeroSpeedTrajectory(const Path& path) const;
 
   // ── Visualization ───────────────────────────────────────────────────────────

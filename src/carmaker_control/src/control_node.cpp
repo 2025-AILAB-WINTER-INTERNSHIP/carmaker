@@ -169,12 +169,15 @@ private:
                                 const PathPoint& feedback_reference,
                                 double preview_curvature,
                                 double speed,
-                                int direction,
-                                double distance_to_end) const;
+                                int direction) const;
   TargetSpeedDecision selectTargetSpeed(const ActiveTrajectory& trajectory,
                                         std::size_t nearest_index,
                                         std::size_t target_index,
                                         double distance_to_end) const;
+  double computeRemainingDistance(const std::vector<PathPoint>& path,
+                                  std::size_t nearest_index,
+                                  const Pose2D& pose,
+                                  int direction) const;
   static TargetSpeedDecision selectTargetSpeedForPath(const std::vector<PathPoint>& path,
                                                       std::size_t nearest_index,
                                                       std::size_t target_index,
@@ -187,9 +190,11 @@ private:
 
   void advertiseDebugTopics();
   void publishDebugTelemetry(const Pose2D& pose,
+                             const Pose2D& tracking_pose,
                              double signed_speed,
                              const ActiveTrajectory* trajectory,
-                             std::size_t nearest_index,
+                             std::size_t nearest_index_rear,
+                             std::size_t nearest_index_tracking,
                              std::size_t target_index,
                              double target_speed,
                              double lookahead,
@@ -723,7 +728,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   if (!should_track) {
     // 경로가 없거나 timeout이면 release_duration 동안만 stop command를 유지한다.
-    publishDebugTelemetry(pose, signed_speed, nullptr, 0, 0, 0.0, 0.0, 0, 0.0, 2);
+    publishDebugTelemetry(pose, pose, signed_speed, nullptr, 0, 0, 0, 0.0, 0.0, 0, 0.0, 2);
     publishIdleStopUntilRelease(now);
     speed_pid_.reset();
     return;
@@ -732,45 +737,51 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   resetIdleRelease();
 
   const double current_speed = std::abs(signed_speed);
-  const std::size_t nearest_index =
+  const std::size_t nearest_index_rear =
       findNearestIndex(active_trajectory, pose, previous_nearest_index);
   {
     std::lock_guard<std::mutex> lock(trajectory_mutex_);
     if (active_trajectory.direction() == active_trajectory_.direction()) {
-      nearest_index_ = nearest_index;
+      nearest_index_ = nearest_index_rear;
     }
   }
+
+  Pose2D tracking_pose = pose;
+  if (active_trajectory.direction() > 0) {
+    tracking_pose.x = pose.x + wheelbase_ * std::cos(pose.yaw);
+    tracking_pose.y = pose.y + wheelbase_ * std::sin(pose.yaw);
+  }
+
+  const std::size_t nearest_index_tracking =
+      findNearestIndex(active_trajectory, tracking_pose, previous_nearest_index);
+
+  // Use arc-length along path from nearest index to the end instead of
+  // Euclidean distance. On curved paths, Euclidean distance underestimates the
+  // actual remaining travel distance, causing late deceleration and overshoot.
+  const double distance_to_end = computeRemainingDistance(active_trajectory.points, nearest_index_rear, pose, active_trajectory.direction());
 
   // 속도 목표와 curvature feedforward는 lookahead point에서 읽고,
   // Stanley feedback 오차는 nearest point 기준으로 계산한다.
   // 코너에서 너무 앞 점만 보면 lateral error가 늦게 반영될 수 있어서 둘을 분리한다.
   const double lookahead = clamp(lookahead_distance_ + lookahead_time_ * current_speed, min_lookahead_distance_, max_lookahead_distance_);
-  const std::size_t target_index = findLookaheadIndex(active_trajectory, nearest_index, lookahead);
+  const std::size_t target_index = findLookaheadIndex(active_trajectory, nearest_index_rear, lookahead);
   std::size_t preview_index = target_index;
-  const double preview_curvature = computePreviewCurvature(active_trajectory, nearest_index, preview_index);
+  const double preview_curvature = computePreviewCurvature(active_trajectory, nearest_index_rear, preview_index);
 
-  // Use arc-length along path from nearest index to the end instead of
-  // Euclidean distance. On curved paths, Euclidean distance underestimates the
-  // actual remaining travel distance, causing late deceleration and overshoot.
-  double distance_to_end = distance2D(pose, active_trajectory.points[nearest_index]);
-  for (std::size_t i = nearest_index; i + 1 < active_trajectory.size(); ++i) {
-    distance_to_end += distance2D(active_trajectory.points[i], active_trajectory.points[i + 1]);
-  }
-  const TargetSpeedDecision speed_decision = selectTargetSpeed(active_trajectory, nearest_index, target_index, distance_to_end);
+  const TargetSpeedDecision speed_decision = selectTargetSpeed(active_trajectory, nearest_index_rear, target_index, distance_to_end);
   const double target_speed = speed_decision.target_speed;
-  const double steer_command = computeSteeringCommand(pose, active_trajectory.points[nearest_index],
+  const double steer_command = computeSteeringCommand(tracking_pose, active_trajectory.points[nearest_index_tracking],
                                 preview_curvature,
                                 std::max(current_speed, target_speed),
-                                active_trajectory.direction(),
-                                distance_to_end);
+                                active_trajectory.direction());
 
   const bool stop_trajectory = std::all_of(active_trajectory.points.begin(), active_trajectory.points.end(),
                                 [this](const PathPoint& point) {
                                     return point.target_speed <= stop_trajectory_velocity_epsilon_;
                                 });
   if (stop_trajectory) {
-    publishDebugTelemetry(pose, signed_speed, &active_trajectory,
-                          nearest_index, target_index, 0.0, lookahead, 2, steer_command,
+    publishDebugTelemetry(pose, tracking_pose, signed_speed, &active_trajectory,
+                          nearest_index_rear, nearest_index_tracking, target_index, 0.0, lookahead, 2, steer_command,
                           3, 0.0, kSpeedReasonAllZeroStop,
                           preview_index, curvature_preview_distance_, preview_curvature);
     speed_pid_.reset();
@@ -780,8 +791,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   const double accel_command = speed_pid_.calculate(target_speed, current_speed, dt);
 
-  publishDebugTelemetry(pose, signed_speed, &active_trajectory,
-                        nearest_index, target_index, target_speed, lookahead, 1, steer_command,
+  publishDebugTelemetry(pose, tracking_pose, signed_speed, &active_trajectory,
+                        nearest_index_rear, nearest_index_tracking, target_index, target_speed, lookahead, 1, steer_command,
                         0, speed_decision.raw_target_speed, speed_decision.reason,
                         preview_index, curvature_preview_distance_, preview_curvature);
   publishControl(active_trajectory.direction(), steer_command, accel_command);
@@ -894,8 +905,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            const PathPoint& feedback_reference,
                                            double preview_curvature,
                                            double speed,
-                                           int direction,
-                                           double distance_to_end) const
+                                           int direction) const
 {
   // cte 부호 규약:
   // 경로 yaw 기준 차량이 왼쪽에 있으면 cte가 음수가 된다.
@@ -907,18 +917,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                      std::cos(feedback_reference.yaw) * dy;
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
 
-  // If moving forward, project the tracking point to the front axle.
-  // Smoothly transition the tracking point from front axle to rear axle as the vehicle
-  // approaches the final destination (within arrival_slow_distance_).
-  // This combines front-axle stability during normal tracking with rear-axle precision
-  // at the final destination, preventing overshoot.
-  double cte_feedback = cte;
-  if (direction > 0) {
-    const double scale = (arrival_slow_distance_ > 0.0) ? std::clamp(distance_to_end / arrival_slow_distance_, 0.0, 1.0) : 1.0;
-    cte_feedback += scale * wheelbase_ * std::sin(heading_error);
-  }
-
-  const double tire_steer = stanley_.calculate(cte_feedback, heading_error, speed, direction, reverse_steering_scale_);
+  const double tire_steer = stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
   const double curvature_ff = computeCurvatureFeedforward(preview_curvature, direction);
   const double steer_command = steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 
@@ -940,6 +939,25 @@ ControlNode::TargetSpeedDecision ControlNode::selectTargetSpeed(
                                   max_target_speed_,
                                   stop_trajectory_velocity_epsilon_,
                                   arrival_slow_distance_);
+}
+
+double ControlNode::computeRemainingDistance(const std::vector<PathPoint>& path,
+                                             std::size_t nearest_index,
+                                             const Pose2D& pose,
+                                             int direction) const
+{
+  if (path.empty()) {
+    return 0.0;
+  }
+  const std::size_t idx = std::min(nearest_index, path.size() - 1);
+  double dist_to_end = distance2D(pose, path[idx]);
+  for (std::size_t i = idx; i + 1 < path.size(); ++i) {
+    dist_to_end += distance2D(path[i], path[i + 1]);
+  }
+  if (direction > 0) {
+    dist_to_end = std::max(0.0, dist_to_end - wheelbase_);
+  }
+  return dist_to_end;
 }
 
 ControlNode::TargetSpeedDecision ControlNode::selectTargetSpeedForPath(
@@ -1081,9 +1099,11 @@ void ControlNode::advertiseDebugTopics()
 }
 
 void ControlNode::publishDebugTelemetry(const Pose2D& pose,
+                                        const Pose2D& tracking_pose,
                                         double signed_speed,
                                         const ActiveTrajectory* trajectory,
-                                        std::size_t nearest_index,
+                                        std::size_t nearest_index_rear,
+                                        std::size_t nearest_index_tracking,
                                         std::size_t target_index,
                                         double target_speed,
                                         double lookahead,
@@ -1127,41 +1147,45 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   }
 
   publishPoseDebug(debug_current_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
-  publishPoseDebug(debug_current_control_pose_pub_, pose.x, pose.y, pose.yaw, stamp);
+  publishPoseDebug(debug_current_control_pose_pub_, tracking_pose.x, tracking_pose.y, tracking_pose.yaw, stamp);
 
   if (trajectory && !trajectory->empty()) {
     const auto& path = trajectory->points;
     direction = trajectory->direction();
-    const std::size_t nearest = std::min(nearest_index, path.size() - 1);
+    const std::size_t nearest_rear = std::min(nearest_index_rear, path.size() - 1);
+    const std::size_t nearest_tracking = std::min(nearest_index_tracking, path.size() - 1);
     const std::size_t target = std::min(target_index, path.size() - 1);
     const bool has_preview =
         preview_index != std::numeric_limits<std::size_t>::max();
     const std::size_t preview =
         has_preview ? std::min(preview_index, path.size() - 1) : target;
-    nearest_index_value = static_cast<int>(nearest);
+    nearest_index_value = static_cast<int>(nearest_rear);
     target_index_value = static_cast<int>(target);
     preview_index_value = has_preview ? static_cast<int>(preview) : -1;
-    const PathPoint& nearest_point = path[nearest];
+    const PathPoint& nearest_rear_point = path[nearest_rear];
+    const PathPoint& nearest_tracking_point = path[nearest_tracking];
     const PathPoint& target_point = path[target];
     const PathPoint& preview_point = path[preview];
-    distance_to_end = distance2D(pose, path.back());
+    
+    distance_to_end = computeRemainingDistance(path, nearest_rear, pose, direction);
+
     if (has_preview) {
       preview_curvature_value = preview_curvature;
       preview_distance_value = preview_distance;
     }
 
-    publishPoseDebug(debug_nearest_pose_pub_, nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
-    publishPoseDebug(debug_nearest_control_pose_pub_, nearest_point.x, nearest_point.y, nearest_point.yaw, stamp);
+    publishPoseDebug(debug_nearest_pose_pub_, nearest_rear_point.x, nearest_rear_point.y, nearest_rear_point.yaw, stamp);
+    publishPoseDebug(debug_nearest_control_pose_pub_, nearest_tracking_point.x, nearest_tracking_point.y, nearest_tracking_point.yaw, stamp);
     publishPoseDebug(debug_lookahead_pose_pub_, target_point.x, target_point.y, target_point.yaw, stamp);
     if (has_preview) {
       publishPoseDebug(debug_curvature_preview_pose_pub_, preview_point.x, preview_point.y, preview_point.yaw, stamp);
     }
 
-    const double dx = pose.x - nearest_point.x;
-    const double dy = pose.y - nearest_point.y;
-    cte = std::sin(nearest_point.yaw) * dx -
-          std::cos(nearest_point.yaw) * dy;
-    heading_error = normalizeAngle(nearest_point.yaw - pose.yaw);
+    const double dx = tracking_pose.x - nearest_tracking_point.x;
+    const double dy = tracking_pose.y - nearest_tracking_point.y;
+    cte = std::sin(nearest_tracking_point.yaw) * dx -
+          std::cos(nearest_tracking_point.yaw) * dy;
+    heading_error = normalizeAngle(nearest_tracking_point.yaw - tracking_pose.yaw);
     curvature_ff = steering_command_sign_ * steering_ratio_ * computeCurvatureFeedforward(preview_curvature, direction);
     steer_saturated = std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
