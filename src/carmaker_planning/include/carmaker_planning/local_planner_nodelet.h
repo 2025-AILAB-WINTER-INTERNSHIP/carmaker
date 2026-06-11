@@ -161,6 +161,9 @@ private:
   TrajectoryStateMachine::TrajectorySource last_diag_source_ =
       TrajectoryStateMachine::TrajectorySource::kNone;
 
+  // Trajectory lock mechanism for local mode near endpoint
+  bool path_locked_ = false;
+  Path locked_path_;
 };
 
 } // namespace carmaker_planning
