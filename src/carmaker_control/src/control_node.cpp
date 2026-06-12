@@ -629,7 +629,14 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
 {
   const double dx = pose.x - feedback_reference.x;
   const double dy = pose.y - feedback_reference.y;
-  const double cte = std::sin(feedback_reference.yaw) * dx - std::cos(feedback_reference.yaw) * dy;
+  double cte = std::sin(feedback_reference.yaw) * dx - std::cos(feedback_reference.yaw) * dy;
+
+  // Apply geometric off-tracking compensation for forward driving (Method 2)
+  if (direction >= 0) {
+    const double off_tracking_offset = (wheelbase_ * wheelbase_ * feedback_reference.curvature) / 2.0;
+    cte -= off_tracking_offset;
+  }
+
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
 
   double tire_steer = 0.0;
