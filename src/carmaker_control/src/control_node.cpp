@@ -254,6 +254,7 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
   latest_trajectory_msg_ = msg;
   trajectory_received_ = true;
   last_trajectory_time_ = ros::Time::now();
+  idle_control_released_ = false;
 }
 
 void ControlNode::odomCallback(const nav_msgs::OdometryConstPtr& msg)
