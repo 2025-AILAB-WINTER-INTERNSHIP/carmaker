@@ -492,13 +492,13 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   
   const double lookahead = clamp(lp.distance + lp.time * current_speed, lp.min_distance, lp.max_distance);
 
-  std::size_t preview_index = 0;
-  const std::size_t target_index = findLookaheadIndex(active_trajectory_, nearest_index_, lookahead);
   const std::size_t nearest_index_tracking = findNearestIndex(active_trajectory_, tracking_pose, nearest_index_);
-
+  const std::size_t target_index = findLookaheadIndex(active_trajectory_, nearest_index_tracking, lookahead);
+  const std::size_t target_index_speed = findLookaheadIndex(active_trajectory_, nearest_index_, lookahead);
+  std::size_t preview_index = 0;
   const double preview_curvature = computePreviewCurvature(active_trajectory_, nearest_index_tracking, preview_index);
 
-  const TargetSpeedDecision speed_decision = selectTargetSpeed(active_trajectory_, nearest_index_, target_index, distance_to_end);
+  const TargetSpeedDecision speed_decision = selectTargetSpeed(active_trajectory_, nearest_index_, target_index_speed, distance_to_end);
   const double target_speed = speed_decision.target_speed;
   const double steer_command = computeSteeringCommand(tracking_pose, active_trajectory_.points[nearest_index_tracking],
                                 preview_curvature,
