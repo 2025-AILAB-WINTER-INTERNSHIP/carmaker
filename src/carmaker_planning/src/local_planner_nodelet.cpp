@@ -805,13 +805,21 @@ void LocalPlannerNodelet::appendWheelbaseOffset(Path& path, double wheelbase) co
 
   int num_offset_points = static_cast<int>(std::ceil(wheelbase / resolution));
   path.reserve(path.size() + num_offset_points);
+  const double K = last_pt.kappa;
   for (int i = 1; i <= num_offset_points; ++i) {
     double d = std::min(wheelbase, i * resolution);
     PathPoint p;
-    p.x = last_pt.x + d * std::cos(theta);
-    p.y = last_pt.y + d * std::sin(theta);
-    p.theta = theta;
-    p.kappa = 0.0;
+    if (std::abs(K) < 1e-4) {
+      p.x = last_pt.x + d * std::cos(theta);
+      p.y = last_pt.y + d * std::sin(theta);
+      p.theta = theta;
+    } else {
+      const double delta_theta = K * d;
+      p.theta = wrap_to_pi(theta + delta_theta);
+      p.x = last_pt.x + (std::sin(theta + delta_theta) - std::sin(theta)) / K;
+      p.y = last_pt.y - (std::cos(theta + delta_theta) - std::cos(theta)) / K;
+    }
+    p.kappa = K;
     p.v = 0.0;
     p.a = 0.0;
     p.direction = last_pt.direction;
