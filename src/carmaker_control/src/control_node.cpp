@@ -771,12 +771,12 @@ void ControlNode::advertiseDebugTopics()
     debug_topic_prefix_.pop_back();
   }
 
-  debug_pubs_.current_pose = advertiseDebug<geometry_msgs::PoseStamped>("current_pose");
-  debug_pubs_.current_control_pose = advertiseDebug<geometry_msgs::PoseStamped>("current_control_pose");
+  debug_pubs_.rear_axle_pose = advertiseDebug<geometry_msgs::PoseStamped>("rear_axle_pose");
+  debug_pubs_.front_axle_pose = advertiseDebug<geometry_msgs::PoseStamped>("front_axle_pose");
   debug_pubs_.nearest_pose = advertiseDebug<geometry_msgs::PoseStamped>("nearest_pose");
-  debug_pubs_.nearest_control_pose = advertiseDebug<geometry_msgs::PoseStamped>("nearest_control_pose");
+  debug_pubs_.control_pose = advertiseDebug<geometry_msgs::PoseStamped>("control_pose");
   debug_pubs_.lookahead_pose = advertiseDebug<geometry_msgs::PoseStamped>("lookahead_pose");
-  debug_pubs_.curvature_preview_pose = advertiseDebug<geometry_msgs::PoseStamped>("curvature_preview_pose");
+  debug_pubs_.feedforward_pose = advertiseDebug<geometry_msgs::PoseStamped>("feedforward_pose");
   debug_pubs_.active_path = advertiseDebug<nav_msgs::Path>("active_path", 1, true);
 
   debug_pubs_.current_speed = advertiseDebug<std_msgs::Float64>("current_speed");
@@ -845,9 +845,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
       trajectory_age = (stamp - last_trajectory_time_).toSec();
     }
   }
-
-  publishPoseDebug(debug_pubs_.current_pose, pose.x, pose.y, pose.yaw, stamp);
-  publishPoseDebug(debug_pubs_.current_control_pose, tracking_pose.x, tracking_pose.y, tracking_pose.yaw, stamp);
+  publishPoseDebug(debug_pubs_.rear_axle_pose, pose.x, pose.y, pose.yaw, stamp);
+  publishPoseDebug(debug_pubs_.front_axle_pose, tracking_pose.x, tracking_pose.y, tracking_pose.yaw, stamp);
 
   if (trajectory && !trajectory->empty()) {
     const auto& path = trajectory->points;
@@ -875,10 +874,10 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     }
 
     publishPoseDebug(debug_pubs_.nearest_pose, nearest_rear_point.x, nearest_rear_point.y, nearest_rear_point.yaw, stamp);
-    publishPoseDebug(debug_pubs_.nearest_control_pose, nearest_tracking_point.x, nearest_tracking_point.y, nearest_tracking_point.yaw, stamp);
+    publishPoseDebug(debug_pubs_.control_pose, nearest_tracking_point.x, nearest_tracking_point.y, nearest_tracking_point.yaw, stamp);
     publishPoseDebug(debug_pubs_.lookahead_pose, target_point.x, target_point.y, target_point.yaw, stamp);
     if (has_preview) {
-      publishPoseDebug(debug_pubs_.curvature_preview_pose, preview_point.x, preview_point.y, preview_point.yaw, stamp);
+      publishPoseDebug(debug_pubs_.feedforward_pose, preview_point.x, preview_point.y, preview_point.yaw, stamp);
     }
 
     const double dx = tracking_pose.x - nearest_tracking_point.x;

@@ -99,12 +99,12 @@ private:
   };
 
   struct DebugPublishers {
-    ros::Publisher current_pose;
-    ros::Publisher current_control_pose;
+    ros::Publisher rear_axle_pose;
+    ros::Publisher front_axle_pose;
     ros::Publisher nearest_pose;
-    ros::Publisher nearest_control_pose;
+    ros::Publisher control_pose;
     ros::Publisher lookahead_pose;
-    ros::Publisher curvature_preview_pose;
+    ros::Publisher feedforward_pose;
     ros::Publisher active_path;
 
     ros::Publisher current_speed;

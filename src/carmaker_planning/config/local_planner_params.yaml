@@ -44,10 +44,10 @@ local_planner:
     rate_hz: 10.0 # [Hz]  local path refresh rate
 
   arrival:
-    endpoint_xy_tol: 0.1 # [m] final parking XY threshold
-    endpoint_yaw_tol: 0.1 # [rad] final parking heading threshold
-    segment_transition_xy_tol: 0.1 # [m] relaxed non-final cusp transition threshold
-    segment_transition_yaw_tol: 0.1 # [rad] relaxed non-final cusp heading threshold
+    endpoint_xy_tol: 0.05 # [m] final parking XY threshold
+    endpoint_yaw_tol: 0.05 # [rad] final parking heading threshold
+    segment_transition_xy_tol: 0.05 # [m] relaxed non-final cusp transition threshold
+    segment_transition_yaw_tol: 0.05 # [rad] relaxed non-final cusp heading threshold
     stop_vel_tol: 0.35 # [m/s] velocity threshold before segment transition/final hold
 
   velocity:

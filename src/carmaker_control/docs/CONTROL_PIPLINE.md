@@ -697,15 +697,15 @@ steerangle = 0 또는 지정된 steer 값
 
 ### RViz용 토픽
 
-| 토픽                                    | 타입                        | 설명                                                                                                   |
-| --------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `/control/debug/current_pose`           | `geometry_msgs/PoseStamped` | control이 현재 상태로 사용 중인 차량 pose. `odom` 모드면 localization pose, `dynamics` 모드면 GT pose  |
-| `/control/debug/current_control_pose`   | `geometry_msgs/PoseStamped` | Stanley 조향 오차 계산에 쓰는 rear axle pose. 현재는 `/control/debug/current_pose`와 동일              |
-| `/control/debug/nearest_pose`           | `geometry_msgs/PoseStamped` | 현재 active segment에서 차량과 가장 가까운 trajectory point                                            |
-| `/control/debug/nearest_control_pose`   | `geometry_msgs/PoseStamped` | Stanley 조향 오차 계산에 쓰는 rear axle 기준 nearest pose. 현재는 `/control/debug/nearest_pose`와 동일 |
-| `/control/debug/lookahead_pose`         | `geometry_msgs/PoseStamped` | 목표 속도를 읽는 lookahead point                                                                       |
-| `/control/debug/curvature_preview_pose` | `geometry_msgs/PoseStamped` | 곡률 feedforward가 미리 보는 preview point                                                             |
-| `/control/debug/active_path`            | `nav_msgs/Path`             | 현재 추종 중인 전진/후진 segment                                                                       |
+| 토픽                                   | 타입                        | 설명                                                                                                                                           |
+| -------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/control/debug/rear_axle_pose`        | `geometry_msgs/PoseStamped` | 차량의 실제 후륜 축 위치 및 자세 (좌표계 원점)                                                                                                 |
+| `/control/debug/front_axle_pose`       | `geometry_msgs/PoseStamped` | 차량의 실제 전륜 축 위치 및 자세 (휠베이스 전방 투영)                                                                                          |
+| `/control/debug/nearest_pose`          | `geometry_msgs/PoseStamped` | 실제 후륜 축 위치와 가장 가까운 경로 상의 지점 (잔여 거리 계산 및 속도 검색 시작 지점)                                                          |
+| `/control/debug/control_pose`          | `geometry_msgs/PoseStamped` | 실제 전륜 축 위치와 가장 가까운 경로 상의 지점 (Stanley 피드백 CTE/헤딩오차 계산 기준점)                                                      |
+| `/control/debug/lookahead_pose`        | `geometry_msgs/PoseStamped` | 앞바퀴 조향 룩어헤드를 위해 전륜 축 기준 전방 룩어헤드 거리(속도 비례 $0.2\text{m}\sim0.8\text{m}$) 앞의 경로 점                               |
+| `/control/debug/feedforward_pose`      | `geometry_msgs/PoseStamped` | 피드포워드 선제 조향각 계산을 위해 전륜 축 기준 전방 $0.6\text{m}$ 고정 거리 앞의 경로 점 (곡률 프리뷰 지점)                                   |
+| `/control/debug/active_path`           | `nav_msgs/Path`             | 현재 추종 중인 전진/후진 segment                                                                                                               |
 
 RViz 설정 예:
 
@@ -713,22 +713,22 @@ RViz 설정 예:
 Fixed Frame: Fr0
 
 Add -> Pose
-  Topic: /control/debug/current_pose
+  Topic: /control/debug/rear_axle_pose
 
 Add -> Pose
-  Topic: /control/debug/current_control_pose
+  Topic: /control/debug/front_axle_pose
 
 Add -> Pose
   Topic: /control/debug/nearest_pose
 
 Add -> Pose
-  Topic: /control/debug/nearest_control_pose
+  Topic: /control/debug/control_pose
 
 Add -> Pose
   Topic: /control/debug/lookahead_pose
 
 Add -> Pose
-  Topic: /control/debug/curvature_preview_pose
+  Topic: /control/debug/feedforward_pose
 
 Add -> Path
   Topic: /control/debug/active_path
