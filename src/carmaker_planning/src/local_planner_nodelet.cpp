@@ -813,7 +813,9 @@ void LocalPlannerNodelet::appendWheelbaseOffset(Path& path, double wheelbase) co
     p.x = last_pt.x + d * std::cos(theta);
     p.y = last_pt.y + d * std::sin(theta);
     p.theta = theta;
-    p.kappa = 0.0; // 직선 구간이므로 곡률은 0.0
+    // 0.0까지 선형적으로 감쇠하도록 처리하여 부드러운 핸들 정렬 유도
+    double ratio = (wheelbase <= 1e-6) ? 1.0 : std::max(0.0, std::min(1.0, d / wheelbase));
+    p.kappa = last_pt.kappa * (1.0 - ratio);
     p.v = 0.0;
     p.a = 0.0;
     p.direction = last_pt.direction;
