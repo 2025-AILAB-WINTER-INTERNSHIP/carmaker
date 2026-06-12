@@ -501,7 +501,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   const double steer_command = computeSteeringCommand(tracking_pose, active_trajectory_.points[nearest_index_tracking],
                                 preview_curvature,
                                 std::max(current_speed, target_speed),
-                                active_trajectory_.direction());
+                                active_trajectory_.direction(),
+                                active_trajectory_.points[nearest_index_].curvature);
 
   if (isStopTrajectory(active_trajectory_.points)) {
     publishDebugTelemetry(state.pose, tracking_pose, state.signed_speed, &active_trajectory_,
@@ -625,7 +626,8 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            const PathPoint& feedback_reference,
                                            double preview_curvature,
                                            double speed,
-                                           int direction) const
+                                           int direction,
+                                           double rear_curvature) const
 {
   const double dx = pose.x - feedback_reference.x;
   const double dy = pose.y - feedback_reference.y;
@@ -633,7 +635,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
 
   // Apply geometric off-tracking compensation for forward driving (Method 2)
   if (direction >= 0) {
-    const double off_tracking_offset = (wheelbase_ * wheelbase_ * feedback_reference.curvature) / 2.0;
+    const double off_tracking_offset = (wheelbase_ * wheelbase_ * rear_curvature) / 2.0;
     cte -= off_tracking_offset;
   }
 

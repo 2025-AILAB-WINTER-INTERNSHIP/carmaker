@@ -161,7 +161,8 @@ private:
                                 const PathPoint& feedback_reference,
                                 double preview_curvature,
                                 double speed,
-                                int direction) const;
+                                int direction,
+                                double rear_curvature = 0.0) const;
   TargetSpeedDecision selectTargetSpeed(const ActiveTrajectory& trajectory,
                                         std::size_t nearest_index,
                                         std::size_t target_index,

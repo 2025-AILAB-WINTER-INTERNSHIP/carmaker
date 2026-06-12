@@ -140,8 +140,9 @@ geometry_msgs::PoseArray Visualizer::createPoseArrayMsg(const Path& path, const 
     bool is_last = (i == path.size() - 1);
     bool is_cusp_start = (i > 0 && path[i].direction != path[i-1].direction);
     bool is_cusp_end = (i < path.size() - 1 && path[i].direction != path[i+1].direction);
+    bool is_original_endpoint = (i > 0 && std::abs(path[i].v) <= 1e-6 && std::abs(path[i-1].v) > 1e-6);
 
-    if (is_first || is_last || is_cusp_start || is_cusp_end || (pt.s - last_s >= arrow_spacing_meters_)) {
+    if (is_first || is_last || is_cusp_start || is_cusp_end || is_original_endpoint || (pt.s - last_s >= arrow_spacing_meters_)) {
       geometry_msgs::Pose pose;
 
       pose.position.x = pt.x;
