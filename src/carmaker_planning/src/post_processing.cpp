@@ -967,6 +967,15 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
           path[global_idx + 1].x, path[global_idx + 1].y);
     }
 
+    // Extrapolate curvature to segment boundary points to prevent discontinuities
+    if (seg_len >= 3) {
+      path[seg_start].kappa = path[seg_start + 1].kappa;
+      path[seg_end].kappa = path[seg_end - 1].kappa;
+    } else {
+      path[seg_start].kappa = 0.0;
+      path[seg_end].kappa = 0.0;
+    }
+
     // 2-3) Apply wide-window adaptive Moving Average Filter on Curvature (kappa) multiple times
     if (seg_len > 2) {
       std::vector<double> kappas(seg_len);
@@ -975,16 +984,16 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       }
       const int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
       applyMovingAverage(kappas, half_w, 2);
-      for (size_t i = 1; i < seg_len - 1; ++i) {
+      // Apply filtered curvature to all points in the segment including boundaries
+      for (size_t i = 0; i < seg_len; ++i) {
         path[seg_start + i].kappa = kappas[i];
       }
     }
   }
 
-  // 백업해 둔 경계 상태 복원 (theta, kappa)
+  // 백업해 둔 경계 상태 복원 (theta는 오리지널 타겟 자세 유지를 위해 복원, kappa는 부드러운 전이를 위해 복원 제외)
   for (const auto& item : preserved_points) {
     path[item.first].theta = item.second.theta;
-    path[item.first].kappa = item.second.kappa;
   }
 }
 

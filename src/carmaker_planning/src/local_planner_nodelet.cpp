@@ -803,27 +803,37 @@ void LocalPlannerNodelet::appendWheelbaseOffset(Path& path, double wheelbase) co
   const double time_from_start = last_pt.t;
   const double start_s = last_pt.s;
 
-  int num_offset_points = static_cast<int>(std::ceil(wheelbase / resolution));
-  path.reserve(path.size() + num_offset_points);
   const double K = last_pt.kappa;
+  
+  // Calculate exact arc length corresponding to a chord length equal to the wheelbase
+  double arc_length = wheelbase;
+  if (std::abs(K) >= 1e-4) {
+    arc_length = 2.0 * std::asin(std::max(-1.0, std::min(1.0, wheelbase * K / 2.0))) / K;
+  }
+
+  int num_offset_points = static_cast<int>(std::ceil(arc_length / resolution));
+  path.reserve(path.size() + num_offset_points);
+  
+  const double s_scale = (arc_length > 1e-6) ? (wheelbase / arc_length) : 1.0;
+
   for (int i = 1; i <= num_offset_points; ++i) {
-    double d = std::min(wheelbase, i * resolution);
+    double s = std::min(arc_length, i * resolution);
     PathPoint p;
     if (std::abs(K) < 1e-4) {
-      p.x = last_pt.x + d * std::cos(theta);
-      p.y = last_pt.y + d * std::sin(theta);
+      p.x = last_pt.x + s * std::cos(theta);
+      p.y = last_pt.y + s * std::sin(theta);
       p.theta = theta;
     } else {
-      const double delta_theta = K * d;
-      p.theta = wrap_to_pi(theta + delta_theta);
+      const double delta_theta = K * s;
+      p.theta = wrap_to_pi(theta + delta_theta); // Continuous tangent heading for Stanley
       p.x = last_pt.x + (std::sin(theta + delta_theta) - std::sin(theta)) / K;
       p.y = last_pt.y - (std::cos(theta + delta_theta) - std::cos(theta)) / K;
     }
-    p.kappa = K;
+    p.kappa = K; // Continuous curvature
     p.v = 0.0;
     p.a = 0.0;
     p.direction = last_pt.direction;
-    p.s = start_s + d;
+    p.s = start_s + s * s_scale; // Scale s to keep total s-span exactly matching the wheelbase
     p.t = time_from_start;
     path.push_back(p);
   }
