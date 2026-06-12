@@ -126,6 +126,7 @@ private:
     double target_speed{0.0};
     double curvature{0.0};
     int direction{1};
+    double s{0.0};
   };
 
   struct ActiveTrajectory {
@@ -164,7 +165,7 @@ private:
   double computePreviewCurvature(const ActiveTrajectory& trajectory,
                                  std::size_t nearest_index,
                                  std::size_t& preview_index) const;
-  double computeCurvatureFeedforward(double preview_curvature, int direction) const;
+  double computeCurvatureFeedforward(double preview_curvature, int direction, double ff_gain) const;
   double computeSteeringCommand(const Pose2D& pose,
                                 const PathPoint& feedback_reference,
                                 double preview_curvature,
@@ -279,7 +280,8 @@ private:
   bool trajectory_received_{false};
 
   PID speed_pid_;
-  Stanley stanley_;
+  Stanley forward_stanley_;
+  Stanley reverse_stanley_;
 
   std::string trajectory_topic_;
   std::string odom_topic_;
@@ -301,12 +303,19 @@ private:
   double min_creep_speed_{0.1};
   double arrival_slow_distance_{0.5};
   double max_target_speed_{0.7};
-  double lookahead_distance_{0.35};
-  double lookahead_time_{0.2};
-  double min_lookahead_distance_{0.2};
-  double max_lookahead_distance_{0.8};
-  double curvature_preview_distance_{0.8};
-  double curvature_preview_window_{0.4};
+  double forward_lookahead_distance_{0.35};
+  double forward_lookahead_time_{0.2};
+  double forward_min_lookahead_distance_{0.2};
+  double forward_max_lookahead_distance_{0.8};
+  double forward_curvature_preview_distance_{0.8};
+  double forward_curvature_preview_window_{0.4};
+
+  double reverse_lookahead_distance_{0.35};
+  double reverse_lookahead_time_{0.2};
+  double reverse_min_lookahead_distance_{0.2};
+  double reverse_max_lookahead_distance_{0.8};
+  double reverse_curvature_preview_distance_{0.8};
+  double reverse_curvature_preview_window_{0.4};
   int nearest_search_back_{20};
   int nearest_search_ahead_{120};
 
@@ -324,8 +333,8 @@ private:
   double steering_ratio_{9.0};
   double max_steer_command_{4.5};
   double steering_command_sign_{1.0};
-  double reverse_steering_scale_{1.0};
-  double curvature_ff_gain_{0.6};
+  double forward_curvature_ff_gain_{1.0};
+  double reverse_curvature_ff_gain_{0.8};
   double reverse_curvature_ff_sign_{-1.0};
   double last_steer_command_{0.0};
   double idle_release_initial_steer_{0.0};
@@ -421,14 +430,34 @@ void ControlNode::loadParameters()
 
   // lookahead는 속도가 높을수록 조금 멀리 보도록 base + time * speed 형태로 계산한다.
   // 단, 너무 가까워 떨리거나 너무 멀어 코너를 뭉개지 않도록 min/max로 제한한다.
-  pnh_.param("control/lookahead_distance", lookahead_distance_, 0.35);
-  pnh_.param("control/lookahead_time", lookahead_time_, 0.2);
-  pnh_.param("control/min_lookahead_distance", min_lookahead_distance_, 0.2);
-  pnh_.param("control/max_lookahead_distance", max_lookahead_distance_, 0.8);
-  pnh_.param("control/curvature_preview_distance", curvature_preview_distance_, 0.8);
-  pnh_.param("control/curvature_preview_window", curvature_preview_window_, 0.4);
-  curvature_preview_distance_ = std::max(0.0, curvature_preview_distance_);
-  curvature_preview_window_ = std::max(0.0, curvature_preview_window_);
+  // Load forward lookahead/preview parameters
+  pnh_.param("control/forward/lookahead_distance", forward_lookahead_distance_, 0.35);
+  pnh_.param("control/forward/lookahead_time", forward_lookahead_time_, 0.2);
+  pnh_.param("control/forward/min_lookahead_distance", forward_min_lookahead_distance_, 0.2);
+  pnh_.param("control/forward/max_lookahead_distance", forward_max_lookahead_distance_, 0.8);
+  pnh_.param("control/forward/curvature_preview_distance", forward_curvature_preview_distance_, 0.6);
+  pnh_.param("control/forward/curvature_preview_window", forward_curvature_preview_window_, 0.4);
+
+  forward_curvature_preview_distance_ = std::max(0.0, forward_curvature_preview_distance_);
+  forward_curvature_preview_window_ = std::max(0.0, forward_curvature_preview_window_);
+
+  // Load reverse lookahead/preview parameters
+  reverse_lookahead_distance_ = forward_lookahead_distance_;
+  reverse_lookahead_time_ = forward_lookahead_time_;
+  reverse_min_lookahead_distance_ = forward_min_lookahead_distance_;
+  reverse_max_lookahead_distance_ = forward_max_lookahead_distance_;
+  reverse_curvature_preview_distance_ = forward_curvature_preview_distance_;
+  reverse_curvature_preview_window_ = forward_curvature_preview_window_;
+
+  pnh_.param("control/reverse/lookahead_distance", reverse_lookahead_distance_, reverse_lookahead_distance_);
+  pnh_.param("control/reverse/lookahead_time", reverse_lookahead_time_, reverse_lookahead_time_);
+  pnh_.param("control/reverse/min_lookahead_distance", reverse_min_lookahead_distance_, reverse_min_lookahead_distance_);
+  pnh_.param("control/reverse/max_lookahead_distance", reverse_max_lookahead_distance_, reverse_max_lookahead_distance_);
+  pnh_.param("control/reverse/curvature_preview_distance", reverse_curvature_preview_distance_, reverse_curvature_preview_distance_);
+  pnh_.param("control/reverse/curvature_preview_window", reverse_curvature_preview_window_, reverse_curvature_preview_window_);
+
+  reverse_curvature_preview_distance_ = std::max(0.0, reverse_curvature_preview_distance_);
+  reverse_curvature_preview_window_ = std::max(0.0, reverse_curvature_preview_window_);
 
   // nearest search는 이전 index 주변만 훑어 경로가 겹칠 때 뒤쪽 segment로 튀는 것을 줄인다.
   pnh_.param("control/nearest_search_back", nearest_search_back_, 20);
@@ -462,20 +491,37 @@ void ControlNode::loadParameters()
   pnh_.param("stanley/max_steer_angle_deg", max_tire_steer_deg, max_tire_steer_deg);
   const double max_tire_steer = deg2rad(max_tire_steer_deg);
 
-  double stanley_k = 2.5;
-  double stanley_k_soft = 0.15;
-  double stanley_cte_gain = 2.0;
-  double stanley_heading_gain = 1.8;
-  pnh_.param("stanley/k", stanley_k, stanley_k);
-  pnh_.param("stanley/k_soft", stanley_k_soft, stanley_k_soft);
-  pnh_.param("stanley/cte_gain", stanley_cte_gain, stanley_cte_gain);
-  pnh_.param("stanley/heading_gain", stanley_heading_gain, stanley_heading_gain);
-  pnh_.param("stanley/reverse_steering_scale", reverse_steering_scale_, 1.3);
-  pnh_.param("stanley/curvature_ff_gain", curvature_ff_gain_, 0.6);
-  pnh_.param("stanley/reverse_curvature_ff_sign", reverse_curvature_ff_sign_, -1.0);
+  // Load forward Stanley parameters
+  double forward_k = 3.0;
+  double forward_k_soft = 0.3;
+  double forward_cte_gain = 2.0;
+  double forward_heading_gain = 1.4;
+  pnh_.param("stanley/forward/k", forward_k, forward_k);
+  pnh_.param("stanley/forward/k_soft", forward_k_soft, forward_k_soft);
+  pnh_.param("stanley/forward/cte_gain", forward_cte_gain, forward_cte_gain);
+  pnh_.param("stanley/forward/heading_gain", forward_heading_gain, forward_heading_gain);
+  pnh_.param("stanley/forward/curvature_ff_gain", forward_curvature_ff_gain_, 1.0);
+
+  // Configure forward Stanley
+  forward_stanley_.configure(forward_k, forward_k_soft, max_tire_steer,
+                             forward_cte_gain, forward_heading_gain);
+
+  // Load reverse Stanley parameters (with fallback to forward parameters)
+  double reverse_k = forward_k;
+  double reverse_k_soft = forward_k_soft;
+  double reverse_cte_gain = forward_cte_gain;
+  double reverse_heading_gain = forward_heading_gain;
+  pnh_.param("stanley/reverse/k", reverse_k, reverse_k);
+  pnh_.param("stanley/reverse/k_soft", reverse_k_soft, reverse_k_soft);
+  pnh_.param("stanley/reverse/cte_gain", reverse_cte_gain, reverse_cte_gain);
+  pnh_.param("stanley/reverse/heading_gain", reverse_heading_gain, reverse_heading_gain);
+  pnh_.param("stanley/reverse/curvature_ff_gain", reverse_curvature_ff_gain_, forward_curvature_ff_gain_);
+  pnh_.param("stanley/reverse/reverse_curvature_ff_sign", reverse_curvature_ff_sign_, -1.0);
   reverse_curvature_ff_sign_ = reverse_curvature_ff_sign_ < 0.0 ? -1.0 : 1.0;
-  stanley_.configure(stanley_k, stanley_k_soft, max_tire_steer,
-                     stanley_cte_gain, stanley_heading_gain);
+
+  // Configure reverse Stanley
+  reverse_stanley_.configure(reverse_k, reverse_k_soft, max_tire_steer,
+                             reverse_cte_gain, reverse_heading_gain);
 
   // PID 출력은 gas/brake가 아니라 desired acceleration이다.
   // publishControl에서 이 값을 gas/brake/accel 필드로 다시 변환한다.
@@ -520,11 +566,18 @@ void ControlNode::trajectoryCallback(const carmaker_msgs::TrajectoryPathConstPtr
   ActiveTrajectory new_trajectory;
   new_trajectory.points.reserve(msg->points.size());
   bool mixed_direction = false;
-  for (const auto& point : msg->points) {
+  double s_accumulated = 0.0;
+  for (std::size_t i = 0; i < msg->points.size(); ++i) {
+    const auto& point = msg->points[i];
     if (point.direction == 0 || (point.direction < 0 ? -1 : 1) != new_direction) {
       mixed_direction = true;
     }
-    new_trajectory.points.push_back(makePathPoint(point, new_direction));
+    PathPoint pt = makePathPoint(point, new_direction);
+    if (i > 0) {
+      s_accumulated += distance2D(new_trajectory.points.back(), pt);
+    }
+    pt.s = s_accumulated;
+    new_trajectory.points.push_back(pt);
   }
 
   if (mixed_direction) {
@@ -763,7 +816,14 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   // 속도 목표와 curvature feedforward는 lookahead point에서 읽고,
   // Stanley feedback 오차는 nearest point 기준으로 계산한다.
   // 코너에서 너무 앞 점만 보면 lateral error가 늦게 반영될 수 있어서 둘을 분리한다.
-  const double lookahead = clamp(lookahead_distance_ + lookahead_time_ * current_speed, min_lookahead_distance_, max_lookahead_distance_);
+  const int dir = active_trajectory.direction();
+  const double cur_lookahead_dist = (dir >= 0) ? forward_lookahead_distance_ : reverse_lookahead_distance_;
+  const double cur_lookahead_time = (dir >= 0) ? forward_lookahead_time_ : reverse_lookahead_time_;
+  const double cur_min_lookahead = (dir >= 0) ? forward_min_lookahead_distance_ : reverse_min_lookahead_distance_;
+  const double cur_max_lookahead = (dir >= 0) ? forward_max_lookahead_distance_ : reverse_max_lookahead_distance_;
+  const double cur_curvature_preview_dist = (dir >= 0) ? forward_curvature_preview_distance_ : reverse_curvature_preview_distance_;
+
+  const double lookahead = clamp(cur_lookahead_dist + cur_lookahead_time * current_speed, cur_min_lookahead, cur_max_lookahead);
   const std::size_t target_index = findLookaheadIndex(active_trajectory, nearest_index_rear, lookahead);
   std::size_t preview_index = target_index;
   const double preview_curvature = computePreviewCurvature(active_trajectory, nearest_index_rear, preview_index);
@@ -783,7 +843,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
     publishDebugTelemetry(pose, tracking_pose, signed_speed, &active_trajectory,
                           nearest_index_rear, nearest_index_tracking, target_index, 0.0, lookahead, 2, steer_command,
                           3, 0.0, kSpeedReasonAllZeroStop,
-                          preview_index, curvature_preview_distance_, preview_curvature);
+                          preview_index, cur_curvature_preview_dist, preview_curvature);
     speed_pid_.reset();
     publishStop(active_trajectory.direction(), steer_command);
     return;
@@ -794,7 +854,7 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   publishDebugTelemetry(pose, tracking_pose, signed_speed, &active_trajectory,
                         nearest_index_rear, nearest_index_tracking, target_index, target_speed, lookahead, 1, steer_command,
                         0, speed_decision.raw_target_speed, speed_decision.reason,
-                        preview_index, curvature_preview_distance_, preview_curvature);
+                        preview_index, cur_curvature_preview_dist, preview_curvature);
   publishControl(active_trajectory.direction(), steer_command, accel_command);
 }
 
@@ -859,10 +919,14 @@ double ControlNode::computePreviewCurvature(const ActiveTrajectory& trajectory,
     return 0.0;
   }
 
-  const double preview_distance = std::max(0.0, curvature_preview_distance_);
+  const int direction = trajectory.direction();
+  const double preview_dist = (direction >= 0) ? forward_curvature_preview_distance_ : reverse_curvature_preview_distance_;
+  const double preview_window = (direction >= 0) ? forward_curvature_preview_window_ : reverse_curvature_preview_window_;
+
+  const double preview_distance = std::max(0.0, preview_dist);
   preview_index = findLookaheadIndex(trajectory, nearest_index, preview_distance);
 
-  const double half_window = 0.5 * std::max(0.0, curvature_preview_window_);
+  const double half_window = 0.5 * std::max(0.0, preview_window);
   const std::size_t start_index = findLookaheadIndex(trajectory, nearest_index, std::max(0.0, preview_distance - half_window));
   const std::size_t end_index = findLookaheadIndex(trajectory, nearest_index, preview_distance + half_window);
 
@@ -889,7 +953,7 @@ double ControlNode::computePreviewCurvature(const ActiveTrajectory& trajectory,
   return std::isfinite(fallback_curvature) ? fallback_curvature : 0.0;
 }
 
-double ControlNode::computeCurvatureFeedforward(double preview_curvature, int direction) const
+double ControlNode::computeCurvatureFeedforward(double preview_curvature, int direction, double ff_gain) const
 {
   if (!std::isfinite(preview_curvature)) {
     return 0.0;
@@ -897,7 +961,7 @@ double ControlNode::computeCurvatureFeedforward(double preview_curvature, int di
 
   const double ff_direction_sign =
       direction < 0 ? reverse_curvature_ff_sign_ : 1.0;
-  return curvature_ff_gain_ * ff_direction_sign *
+  return ff_gain * ff_direction_sign *
          std::atan(wheelbase_ * preview_curvature);
 }
 
@@ -917,8 +981,17 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                      std::cos(feedback_reference.yaw) * dy;
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
 
-  const double tire_steer = stanley_.calculate(cte, heading_error, speed, direction, reverse_steering_scale_);
-  const double curvature_ff = computeCurvatureFeedforward(preview_curvature, direction);
+  double tire_steer = 0.0;
+  double curvature_ff = 0.0;
+
+  if (direction >= 0) {
+    tire_steer = forward_stanley_.calculate(cte, heading_error, speed, 1, 1.0);
+    curvature_ff = computeCurvatureFeedforward(preview_curvature, direction, forward_curvature_ff_gain_);
+  } else {
+    tire_steer = reverse_stanley_.calculate(cte, heading_error, speed, -1, 1.0);
+    curvature_ff = computeCurvatureFeedforward(preview_curvature, direction, reverse_curvature_ff_gain_);
+  }
+
   const double steer_command = steering_command_sign_ * (tire_steer + curvature_ff) * steering_ratio_;
 
   return clamp(steer_command, -max_steer_command_, max_steer_command_);
@@ -950,10 +1023,7 @@ double ControlNode::computeRemainingDistance(const std::vector<PathPoint>& path,
     return 0.0;
   }
   const std::size_t idx = std::min(nearest_index, path.size() - 1);
-  double dist_to_end = distance2D(pose, path[idx]);
-  for (std::size_t i = idx; i + 1 < path.size(); ++i) {
-    dist_to_end += distance2D(path[i], path[i + 1]);
-  }
+  double dist_to_end = distance2D(pose, path[idx]) + (path.back().s - path[idx].s);
   if (direction > 0) {
     dist_to_end = std::max(0.0, dist_to_end - wheelbase_);
   }
@@ -1186,7 +1256,8 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     cte = std::sin(nearest_tracking_point.yaw) * dx -
           std::cos(nearest_tracking_point.yaw) * dy;
     heading_error = normalizeAngle(nearest_tracking_point.yaw - tracking_pose.yaw);
-    curvature_ff = steering_command_sign_ * steering_ratio_ * computeCurvatureFeedforward(preview_curvature, direction);
+    const double ff_gain = (direction >= 0) ? forward_curvature_ff_gain_ : reverse_curvature_ff_gain_;
+    curvature_ff = steering_command_sign_ * steering_ratio_ * computeCurvatureFeedforward(preview_curvature, direction, ff_gain);
     steer_saturated = std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
 
     const bool should_publish_path = last_debug_path_time_.isZero() ||
