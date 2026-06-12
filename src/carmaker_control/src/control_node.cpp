@@ -846,7 +846,9 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     }
   }
   publishPoseDebug(debug_pubs_.rear_axle_pose, pose.x, pose.y, pose.yaw, stamp);
-  publishPoseDebug(debug_pubs_.front_axle_pose, tracking_pose.x, tracking_pose.y, tracking_pose.yaw, stamp);
+  const double front_x = pose.x + wheelbase_ * std::cos(pose.yaw);
+  const double front_y = pose.y + wheelbase_ * std::sin(pose.yaw);
+  publishPoseDebug(debug_pubs_.front_axle_pose, front_x, front_y, pose.yaw, stamp);
 
   if (trajectory && !trajectory->empty()) {
     const auto& path = trajectory->points;
