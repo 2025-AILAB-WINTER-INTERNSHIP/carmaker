@@ -23,6 +23,7 @@
 #include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/TrajectoryPath.h>
 #include <carmaker_msgs/TrajectoryPoint.h>
+#include <boost/bind/bind.hpp>
 
 #include "carmaker_control/pid.h"
 #include "carmaker_control/stanley.h"
@@ -109,6 +110,12 @@ ControlNode::ControlNode()
   control_pub_ = nh_.advertise<carmaker_msgs::Control_Signal>(control_topic_, 10);
   advertiseDebugTopics();
 
+  // Initialize Dynamic Reconfigure Server
+  reconfigure_server_ = std::make_unique<dynamic_reconfigure::Server<carmaker_control::CarmakerControlConfig>>(pnh_);
+  dynamic_reconfigure::Server<carmaker_control::CarmakerControlConfig>::CallbackType cb =
+      boost::bind(&ControlNode::reconfigureCallback, this, _1, _2);
+  reconfigure_server_->setCallback(cb);
+
   control_timer_ = nh_.createTimer(ros::Duration(1.0 / std::max(1.0, control_rate_)),
                                    &ControlNode::controlTimerCallback, this);
 
@@ -180,7 +187,7 @@ void ControlNode::loadParameters()
     max_tire_steer_deg = rad2deg(std::atan(wheelbase_ / min_turning_radius));
   }
   pnh_.param("stanley/max_steer_angle_deg", max_tire_steer_deg, max_tire_steer_deg);
-  const double max_tire_steer = deg2rad(max_tire_steer_deg);
+  max_tire_steer_ = deg2rad(max_tire_steer_deg);
 
   // Load structured Stanley parameters
   StanleyParams f_defaults{3.0, 0.3, 2.0, 1.4, 1.0};
@@ -190,10 +197,10 @@ void ControlNode::loadParameters()
   pnh_.param("stanley/reverse/reverse_curvature_ff_sign", reverse_curvature_ff_sign_, -1.0);
   reverse_curvature_ff_sign_ = reverse_curvature_ff_sign_ < 0.0 ? -1.0 : 1.0;
 
-  forward_stanley_.configure(forward_stanley_params_.k, forward_stanley_params_.k_soft, max_tire_steer,
+  forward_stanley_.configure(forward_stanley_params_.k, forward_stanley_params_.k_soft, max_tire_steer_,
                              forward_stanley_params_.cte_gain, forward_stanley_params_.heading_gain);
 
-  reverse_stanley_.configure(reverse_stanley_params_.k, reverse_stanley_params_.k_soft, max_tire_steer,
+  reverse_stanley_.configure(reverse_stanley_params_.k, reverse_stanley_params_.k_soft, max_tire_steer_,
                              reverse_stanley_params_.cte_gain, reverse_stanley_params_.heading_gain);
 
   double speed_kp = 1.0, speed_ki = 0.0, speed_kd = 0.05;
@@ -203,7 +210,7 @@ void ControlNode::loadParameters()
   speed_pid_.configure(speed_kp, speed_ki, speed_kd, -max_decel_, max_accel_);
 
   pnh_.param("vehicle/steering_ratio", steering_ratio_, 9.0);
-  max_steer_command_ = max_tire_steer * steering_ratio_;
+  max_steer_command_ = max_tire_steer_ * steering_ratio_;
   pnh_.param("vehicle/max_steer_command", max_steer_command_, max_steer_command_);
   pnh_.param("vehicle/steering_command_sign", steering_command_sign_, 1.0);
   steering_command_sign_ = steering_command_sign_ < 0.0 ? -1.0 : 1.0;
@@ -1074,6 +1081,52 @@ double ControlNode::distance2D(const Pose2D& pose, const PathPoint& point)
 double ControlNode::distance2D(const PathPoint& a, const PathPoint& b)
 {
   return std::hypot(a.x - b.x, a.y - b.y);
+}
+
+void ControlNode::reconfigureCallback(carmaker_control::CarmakerControlConfig& config, uint32_t level)
+{
+  (void)level;
+
+  // Update PID Configuration
+  speed_pid_.configure(config.pid_kp, config.pid_ki, config.pid_kd, -max_decel_, max_accel_);
+
+  // Update Stanley Forward Configuration
+  forward_stanley_params_.k = config.stanley_forward_k;
+  forward_stanley_params_.k_soft = config.stanley_forward_k_soft;
+  forward_stanley_params_.cte_gain = config.stanley_forward_cte_gain;
+  forward_stanley_params_.heading_gain = config.stanley_forward_heading_gain;
+  forward_stanley_params_.curvature_ff_gain = config.stanley_forward_curvature_ff_gain;
+
+  forward_stanley_.configure(forward_stanley_params_.k, forward_stanley_params_.k_soft, max_tire_steer_,
+                             forward_stanley_params_.cte_gain, forward_stanley_params_.heading_gain);
+
+  // Update Stanley Reverse Configuration
+  reverse_stanley_params_.k = config.stanley_reverse_k;
+  reverse_stanley_params_.k_soft = config.stanley_reverse_k_soft;
+  reverse_stanley_params_.cte_gain = config.stanley_reverse_cte_gain;
+  reverse_stanley_params_.heading_gain = config.stanley_reverse_heading_gain;
+  reverse_stanley_params_.curvature_ff_gain = config.stanley_reverse_curvature_ff_gain;
+
+  reverse_stanley_.configure(reverse_stanley_params_.k, reverse_stanley_params_.k_soft, max_tire_steer_,
+                             reverse_stanley_params_.cte_gain, reverse_stanley_params_.heading_gain);
+
+  // Update Forward Lookahead parameters
+  forward_lookahead_.distance = config.forward_lookahead_distance;
+  forward_lookahead_.time = config.forward_lookahead_time;
+  forward_lookahead_.min_distance = config.forward_min_lookahead_distance;
+  forward_lookahead_.max_distance = config.forward_max_lookahead_distance;
+  forward_lookahead_.curvature_preview_distance = config.forward_curvature_preview_distance;
+  forward_lookahead_.curvature_preview_window = config.forward_curvature_preview_window;
+
+  // Update Reverse Lookahead parameters
+  reverse_lookahead_.distance = config.reverse_lookahead_distance;
+  reverse_lookahead_.time = config.reverse_lookahead_time;
+  reverse_lookahead_.min_distance = config.reverse_min_lookahead_distance;
+  reverse_lookahead_.max_distance = config.reverse_max_lookahead_distance;
+  reverse_lookahead_.curvature_preview_distance = config.reverse_curvature_preview_distance;
+  reverse_lookahead_.curvature_preview_window = config.reverse_curvature_preview_window;
+
+  ROS_INFO("CarmakerControl dynamic parameters updated.");
 }
 
 }  // namespace carmaker_control

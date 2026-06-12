@@ -11,11 +11,16 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   nav_msgs
   carmaker_msgs
+  dynamic_reconfigure
+)
+
+generate_dynamic_reconfigure_options(
+  cfg/CarmakerControl.cfg
 )
 
 catkin_package(
   INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp std_msgs geometry_msgs nav_msgs carmaker_msgs
+  CATKIN_DEPENDS roscpp std_msgs geometry_msgs nav_msgs carmaker_msgs dynamic_reconfigure
 )
 
 include_directories(
@@ -29,7 +34,7 @@ add_executable(carmaker_control_node
   src/stanley.cpp
 )
 
-add_dependencies(carmaker_control_node ${catkin_EXPORTED_TARGETS})
+add_dependencies(carmaker_control_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 target_link_libraries(carmaker_control_node
   ${catkin_LIBRARIES}

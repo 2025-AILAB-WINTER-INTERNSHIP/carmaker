@@ -25,6 +25,9 @@
 #include "carmaker_control/pid.h"
 #include "carmaker_control/stanley.h"
 
+#include <dynamic_reconfigure/server.h>
+#include <carmaker_control/CarmakerControlConfig.h>
+
 namespace carmaker_control {
 
 enum SpeedSelectionReason {
@@ -291,6 +294,7 @@ private:
   double steering_ratio_{9.0};
   double max_steer_command_{4.5};
   double steering_command_sign_{1.0};
+  double max_tire_steer_{0.6};
 
   StanleyParams forward_stanley_params_;
   StanleyParams reverse_stanley_params_;
@@ -307,6 +311,10 @@ private:
   ros::Time last_control_time_;
   ros::Time last_debug_path_time_;
   double debug_path_period_{1.0};
+
+  // Dynamic Reconfigure
+  std::unique_ptr<dynamic_reconfigure::Server<carmaker_control::CarmakerControlConfig>> reconfigure_server_;
+  void reconfigureCallback(carmaker_control::CarmakerControlConfig& config, uint32_t level);
 };
 
 }  // namespace carmaker_control
