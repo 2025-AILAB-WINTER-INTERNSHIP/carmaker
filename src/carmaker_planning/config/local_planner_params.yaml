@@ -80,7 +80,7 @@ local_post_processing:
     goal_vel: 0.0
     gear_shift_duration: 1.5
     min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
-    jerk_filter_passes: 5
+    jerk_filter_passes: 2
   validator:
     enabled: false
     cusp_exclusion_margin: 0.2

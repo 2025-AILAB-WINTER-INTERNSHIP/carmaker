@@ -330,6 +330,10 @@ PlanningStatus HybridAStar::plan(const State & start, const State & goal, Global
     search_iterations_ = iter;
   }
 
+  if (path_.size() >= 2) {
+    path_.front().direction = path_[1].direction;
+  }
+
   return status;
 }
 

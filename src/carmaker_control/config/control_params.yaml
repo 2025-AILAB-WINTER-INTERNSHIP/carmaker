@@ -95,19 +95,19 @@ stanley:
 
   # 전진용 Stanley 제어 파라미터 (안정성 및 밀림 방지 위주)
   forward:
-    k: 2.5 # 횡오차 복귀 강도
-    k_soft: 0.15 # 저속 분모 보정
-    cte_gain: 2.0 # 횡오차 gain
-    heading_gain: 1.8 # 헤딩 오차 gain
+    k: 3.5 # 횡오차 복귀 강도
+    k_soft: 0.1 # 저속 분모 보정
+    cte_gain: 2.75 # 횡오차 gain
+    heading_gain: 2.5 # 헤딩 오차 gain
     curvature_ff_gain: 0 # 곡률 feedforward gain
 
   # 후진용 Stanley 제어 파라미터 (후진 민감성/조향 댐핑 위주)
   reverse:
-    k: 2
-    k_soft: 0.15
-    cte_gain: 1.5
-    heading_gain: 1.4
-    curvature_ff_gain: 0
+    k: 4.0
+    k_soft: 0.3
+    cte_gain: 3.0
+    heading_gain: 2.75
+    curvature_ff_gain: 0.0
     reverse_curvature_ff_sign: -1.0
 
 vehicle:

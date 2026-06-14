@@ -71,7 +71,7 @@ global_planner:
   heuristic_scale: 2
   step_size: 0.5
   next_node_num: 7
-  analytic_expansion_ratio: 300 # Reeds-Shepp 시도 주기
+  analytic_expansion_ratio: 1 # Reeds-Shepp 시도 주기
   weights:
     turn: 2.0
     reverse: 5.0 # Enable reverse paths by lowering penalty
@@ -81,7 +81,7 @@ global_planner:
 # Post processing pipeline parameters
 global_post_processing:
   smoother:
-    enabled: true
+    enabled: false
     collision_check_enabled: true
     # [수식적 배경]
     # Gradient Descent 기반의 경로 평활화(Smoothing) 업데이트 식은 다음과 같습니다:
@@ -117,6 +117,6 @@ global_post_processing:
     goal_vel: 0.0
     gear_shift_duration: 1.5 # seconds (delay at forward/reverse transitions)
     min_velocity_denominator: 0.02 # Lower limit of velocity denominator for dt calculations to prevent division by zero
-    jerk_filter_passes: 5 # iterations of velocity moving average
+    jerk_filter_passes: 2 # iterations of velocity moving average
   visualization:
     arrow_spacing_meters: 0.2 # Spacing in meters for PoseArray Yaw Arrows

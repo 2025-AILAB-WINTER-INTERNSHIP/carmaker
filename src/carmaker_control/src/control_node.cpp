@@ -635,9 +635,16 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
   const double dy = pose.y - feedback_reference.y;
   double cte = std::sin(feedback_reference.yaw) * dx - std::cos(feedback_reference.yaw) * dy;
 
-  // Apply geometric off-tracking compensation for forward driving (Method 2)
+  // Apply geometric off-tracking compensation for forward driving.
+  // Use min(|κ_rear|, |κ_front|) to prevent over-compensation at curve transitions:
+  //   - Corner entry  (κ_rear≈0, κ_front>0): min→0, no premature offset
+  //   - Steady curve  (κ_rear≈κ_front):      min→κ, full compensation
+  //   - Corner exit   (κ_rear>0, κ_front≈0): min→0, no lingering offset
   if (direction >= 0) {
-    const double off_tracking_offset = (wheelbase_ * wheelbase_ * rear_curvature) / 2.0;
+    const double front_path_curvature = feedback_reference.curvature;
+    const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
+    const double effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
+    const double off_tracking_offset = (wheelbase_ * wheelbase_ * effective_curvature) / 2.0;
     cte -= off_tracking_offset;
   }
 
