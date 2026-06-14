@@ -157,6 +157,7 @@ private:
                                  std::size_t nearest_index,
                                  std::size_t& preview_index) const;
   double computeCurvatureFeedforward(double preview_curvature, int direction, double ff_gain) const;
+  double computeOffTrackingOffset(double wheelbase, double effective_curvature) const;
   double computeSteeringCommand(const Pose2D& pose,
                                 const PathPoint& feedback_reference,
                                 double preview_curvature,

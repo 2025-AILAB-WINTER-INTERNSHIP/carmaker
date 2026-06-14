@@ -99,7 +99,7 @@ ControlNode::ControlNode()
   loadParameters();
 
   trajectory_sub_ = nh_.subscribe(trajectory_topic_, 1, &ControlNode::trajectoryCallback, this);
-  
+
   ros::TransportHints hints;
   hints.tcpNoDelay();
   if (state_source_ == "dynamics") {
@@ -168,7 +168,7 @@ void ControlNode::loadParameters()
   pnh_.param("control/max_gas", max_gas_, 0.35);
   pnh_.param("control/max_brake", max_brake_, 1.0);
   pnh_.param("control/stop_brake", stop_brake_, 0.4);
-  
+
   bool release_steer = false;
   pnh_.param("control/steer_release_after_idle", release_steer, false);
   steer_release_after_idle_ = release_steer;
@@ -193,7 +193,7 @@ void ControlNode::loadParameters()
   StanleyParams f_defaults{3.0, 0.3, 2.0, 1.4, 1.0};
   forward_stanley_params_ = loadStanleyParams("forward", f_defaults);
   reverse_stanley_params_ = loadStanleyParams("reverse", forward_stanley_params_);
-  
+
   pnh_.param("stanley/reverse/reverse_curvature_ff_sign", reverse_curvature_ff_sign_, -1.0);
   reverse_curvature_ff_sign_ = reverse_curvature_ff_sign_ < 0.0 ? -1.0 : 1.0;
 
@@ -484,12 +484,12 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
     tracking_pose.y = state.pose.y + wheelbase_ * std::sin(state.pose.yaw);
   }
 
-  
+
   const double distance_to_end = computeRemainingDistance(active_trajectory_.points, nearest_index_, state.pose, active_trajectory_.direction());
-  
+
   const int dir = active_trajectory_.direction();
   const LookaheadParams& lp = (dir >= 0) ? forward_lookahead_ : reverse_lookahead_;
-  
+
   const double lookahead = clamp(lp.distance + lp.time * current_speed, lp.min_distance, lp.max_distance);
 
   const std::size_t nearest_index_tracking = findNearestIndex(active_trajectory_, tracking_pose, nearest_index_);
@@ -624,6 +624,21 @@ double ControlNode::computeCurvatureFeedforward(double preview_curvature, int di
   return ff_gain * ff_direction_sign * std::atan(wheelbase_ * preview_curvature);
 }
 
+double ControlNode::computeOffTrackingOffset(double wheelbase, double effective_curvature) const
+{
+  double off_tracking_offset = 0.0;
+  const double abs_kappa = std::abs(effective_curvature);
+  const double L2 = wheelbase * wheelbase;
+  if (abs_kappa >= 1e-4) {
+    off_tracking_offset = std::copysign(std::sqrt(1.0 / (abs_kappa * abs_kappa) + L2) - 1.0 / abs_kappa, effective_curvature);
+  } else {
+    const double term1 = L2 * effective_curvature / 2.0;
+    const double term3 = L2 * L2 * effective_curvature * effective_curvature * effective_curvature / 8.0;
+    off_tracking_offset = term1 - term3;
+  }
+  return off_tracking_offset;
+}
+
 double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            const PathPoint& feedback_reference,
                                            double preview_curvature,
@@ -644,8 +659,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
     const double front_path_curvature = feedback_reference.curvature;
     const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
     const double effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
-    const double off_tracking_offset = (wheelbase_ * wheelbase_ * effective_curvature) / 2.0;
-    cte -= off_tracking_offset;
+    cte -= computeOffTrackingOffset(wheelbase_, effective_curvature);
   }
 
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);

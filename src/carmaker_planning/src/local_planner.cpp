@@ -149,27 +149,63 @@ Path QuinticPathFitter::fit(const State& ego, double start_kappa,
                              target.y, sinF,  target.kappa * cosF, L);
 
   // Uniform arc-length sampling:
-  //   n_steps = ceil(L / resolution) → each step is exactly ds = L/n_steps
-  //   The last sample (i == n_steps) always equals s = L (endpoint).
+  //   n_steps = ceil(L / resolution)
   const int    n_steps  = std::max(1, static_cast<int>(std::ceil(L / resolution)));
-  const double ds       = L / n_steps;
+
+  // 1. Density-over-sampled evaluation to map pseudo-parameter s to geometric arc-length
+  const int M = n_steps * 3;
+  const double ds_temp = L / M;
+  std::vector<double> s_values(M + 1);
+  std::vector<double> S_geom(M + 1);
+  std::vector<double> x_temp(M + 1);
+  std::vector<double> y_temp(M + 1);
+
+  for (int i = 0; i <= M; ++i) {
+    s_values[i] = i * ds_temp;
+    x_temp[i] = eval(cx, s_values[i]);
+    y_temp[i] = eval(cy, s_values[i]);
+  }
+
+  S_geom[0] = 0.0;
+  for (int i = 1; i <= M; ++i) {
+    const double dx = x_temp[i] - x_temp[i-1];
+    const double dy = y_temp[i] - y_temp[i-1];
+    S_geom[i] = S_geom[i-1] + std::hypot(dx, dy);
+  }
+
+  const double S_total = S_geom.back();
+  const double dS_final = S_total / n_steps;
 
   Path local_path;
   local_path.reserve(static_cast<size_t>(n_steps) + 1);
 
-  for (int i = 0; i <= n_steps; ++i) {
-    const double s = i * ds;
+  size_t k = 0;
+  for (int j = 0; j <= n_steps; ++j) {
+    const double S_target = j * dS_final;
+    
+    // Find segment [k, k+1] enclosing S_target
+    while (k + 1 < S_geom.size() && S_geom[k + 1] < S_target) {
+      ++k;
+    }
+    
+    double s_target = L;
+    if (k + 1 < S_geom.size()) {
+      const double denominator = S_geom[k + 1] - S_geom[k];
+      const double ratio = (denominator > 1e-6) ? (S_target - S_geom[k]) / denominator : 0.0;
+      s_target = s_values[k] + ratio * (s_values[k + 1] - s_values[k]);
+    }
+
     PathPoint pt;
-    pt.x         = eval(cx, s);
-    pt.y         = eval(cy, s);
-    pt.s         = s;
+    pt.x         = eval(cx, s_target);
+    pt.y         = eval(cy, s_target);
+    pt.s         = S_target;
     pt.direction = direction;
 
-    const double xp = deriv1(cx, s);
-    const double yp = deriv1(cy, s);
+    const double xp = deriv1(cx, s_target);
+    const double yp = deriv1(cy, s_target);
     pt.theta = (direction == 1) ? std::atan2(yp, xp)
                                 : wrap_to_pi(std::atan2(yp, xp) + PI);
-    pt.kappa = curvature(cx, cy, s);
+    pt.kappa = curvature(cx, cy, s_target);
     local_path.push_back(pt);
   }
   return local_path;
