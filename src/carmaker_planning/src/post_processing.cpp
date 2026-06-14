@@ -605,18 +605,18 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
 
   // 2. Re-calculate acceleration and timestamps to maintain 100% physical consistency (a = dv/dt, dt = ds/v)
   for (int i = 0; i < n; ++i) {
+    path[i].v = v_final[i];
     if (i == 0) {
-      path[i].v = v_final[0];
       path[i].a = a_fwd[0];
       path[i].t = 0.0;
     } else {
       const double ds = dist(path[i-1], path[i]);
-      const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i-1].v + v_final[i]) / 2.0) : limits.min_vel_denom;
+      const double dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i].v + path[i-1].v) / 2.0) : limits.min_vel_denom;
       // Apply 0.01s denominator guard to prevent division by extremely small dt (which causes acceleration to spike)
       const double acc_dt = std::max(0.01, dt);
 
-      // Calculate raw acceleration from speed difference using the previous consistent velocity
-      double raw_a = (v_final[i] - path[i-1].v) / acc_dt;
+      // Calculate raw acceleration from speed difference
+      double raw_a = (path[i].v - path[i-1].v) / acc_dt;
       raw_a = std::clamp(raw_a, max_decel, max_accel);
 
       // Enforce the maximum Jerk constraint directly on the calculated acceleration profile
@@ -625,14 +625,8 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
         raw_a = std::clamp(raw_a, path[i-1].a - max_a_change, path[i-1].a + max_a_change);
       }
 
-      // Re-calculate the velocity to be perfectly consistent with the clamped acceleration
-      const double v_next_sq = path[i-1].v * path[i-1].v + 2.0 * raw_a * ds;
-      path[i].v = std::sqrt(std::max(0.0, v_next_sq));
       path[i].a = raw_a;
-
-      // Re-evaluate actual dt using the new consistent velocities
-      const double actual_dt = (ds > 1e-6) ? ds / std::max(limits.min_vel_denom, (path[i-1].v + path[i].v) / 2.0) : limits.min_vel_denom;
-      path[i].t = path[i-1].t + actual_dt;
+      path[i].t = path[i-1].t + dt;
     }
   }
 }
