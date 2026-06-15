@@ -1054,7 +1054,7 @@ void ControlNode::publishStop(int direction, double steer_command)
   msg.gas = 0.0F;
   msg.steerangle = static_cast<float>(last_steer_command_);
   if (direction == 0) {
-    msg.brake = 0.0F;
+    msg.brake = static_cast<float>(clamp(stop_brake_, 0.0, max_brake_));
     msg.gear = neutral_gear_;
     msg.accel = 0.0F;
   } else {
@@ -1088,6 +1088,10 @@ bool ControlNode::publishIdleStopUntilRelease(const ros::Time& now)
   if (elapsed >= release_duration_) {
     if (steer_release_after_idle_) {
       last_steer_command_ = 0.0;
+    }
+    if (publish_stop_without_path_) {
+      publishStop(0);
+      return true;
     }
     idle_control_released_ = true;
     ROS_INFO_THROTTLE(1.0, "No active trajectory: released control_signal publisher.");
