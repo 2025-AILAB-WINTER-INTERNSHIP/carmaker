@@ -133,7 +133,8 @@ RegistrationResult IcpRegistration::align(
             std::vector<nanoflann::ResultItem<uint32_t, double>> ret_matches;
             nanoflann::SearchParameters params;
             params.sorted = false;  // 순서 불필요 → 약간의 추가 절약
-            kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
+            const auto num_matches = kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
+            if (num_matches == 0) continue;
 
             // 3. 반경 내 후보들 중 최소 마할라노비스 거리 선택
             double min_dist_sq = 9.0;  // χ² threshold
@@ -252,7 +253,8 @@ RegistrationResult IcpRegistration::align(
         std::vector<nanoflann::ResultItem<uint32_t, double>> ret_matches;
         nanoflann::SearchParameters params;
         params.sorted = false;
-        kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
+        const auto num_matches = kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
+        if (num_matches == 0) continue;
 
         for (const auto& m : ret_matches) {
             const auto& ref = ref_by_class[obs.class_id][m.first];
@@ -287,8 +289,7 @@ RegistrationResult IcpRegistration::align(
         result.transform = transform;
 
         // 정합 스코어에 의한 공분산 인플레이션 계수 계산 (이중 스케일링 방지)
-        double confidence = static_cast<double>(inliers) * result.fitness_score;
-        double scale      = 1.0 / std::max(confidence, 1.0);
+        double scale      = 1.0 / std::max(result.fitness_score, 1e-3);
 
         H += Eigen::Matrix3d::Identity() * 1e-6;
 
