@@ -163,7 +163,8 @@ private:
                                 double preview_curvature,
                                 double speed,
                                 int direction,
-                                double rear_curvature = 0.0) const;
+                                double rear_curvature = 0.0,
+                                double distance_to_end = 999.0) const;
   TargetSpeedDecision selectTargetSpeed(const ActiveTrajectory& trajectory,
                                         std::size_t nearest_index,
                                         std::size_t target_index,
@@ -274,6 +275,7 @@ private:
   double min_tracking_speed_{0.2};
   double min_creep_speed_{0.1};
   double arrival_slow_distance_{0.5};
+  double alignment_fade_distance_{2.0};
   double max_target_speed_{0.7};
 
   LookaheadParams forward_lookahead_;

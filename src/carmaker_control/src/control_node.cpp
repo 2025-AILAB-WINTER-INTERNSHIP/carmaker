@@ -150,10 +150,12 @@ void ControlNode::loadParameters()
   pnh_.param("control/min_tracking_speed", min_tracking_speed_, 0.2);
   pnh_.param("control/min_creep_speed", min_creep_speed_, 0.1);
   pnh_.param("control/arrival_slow_distance", arrival_slow_distance_, 0.5);
+  pnh_.param("control/alignment_fade_distance", alignment_fade_distance_, 2.0);
   pnh_.param("control/max_target_speed", max_target_speed_, 0.7);
   min_tracking_speed_ = std::max(0.0, min_tracking_speed_);
   min_creep_speed_ = std::max(0.0, min_creep_speed_);
   arrival_slow_distance_ = std::max(0.0, arrival_slow_distance_);
+  alignment_fade_distance_ = std::max(0.1, alignment_fade_distance_);
   max_target_speed_ = std::max(0.0, max_target_speed_);
 
   // Load structured lookahead parameters
@@ -504,7 +506,8 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
                                 preview_curvature,
                                 std::max(current_speed, target_speed),
                                 active_trajectory_.direction(),
-                                active_trajectory_.points[nearest_index_].curvature);
+                                active_trajectory_.points[nearest_index_].curvature,
+                                distance_to_end);
 
   if (isStopTrajectory(active_trajectory_.points)) {
     publishDebugTelemetry(state.pose, tracking_pose, state.signed_speed, &active_trajectory_,
@@ -644,7 +647,8 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
                                            double preview_curvature,
                                            double speed,
                                            int direction,
-                                           double rear_curvature) const
+                                           double rear_curvature,
+                                           double distance_to_end) const
 {
   const double dx = pose.x - feedback_reference.x;
   const double dy = pose.y - feedback_reference.y;
@@ -665,7 +669,14 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
 
     const double front_path_curvature = feedback_reference.curvature;
     const double effective_curvature = 0.5 * (rear_curvature + front_path_curvature);
-    cte -= computeOffTrackingOffset(wheelbase_, effective_curvature);
+    const double off_tracking_offset = computeOffTrackingOffset(wheelbase_, effective_curvature);
+
+    // 최종 지점 정렬을 위해 남은 거리에 비례하여 오프셋 선형 감쇄(Fade-out)
+    double fade_factor = 1.0;
+    if (alignment_fade_distance_ > 0.0) {
+      fade_factor = clamp(distance_to_end / alignment_fade_distance_, 0.0, 1.0);
+    }
+    cte -= off_tracking_offset * fade_factor;
   }
 
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
@@ -1168,6 +1179,9 @@ void ControlNode::reconfigureCallback(carmaker_control::CarmakerControlConfig& c
   reverse_lookahead_.max_distance = config.reverse_max_lookahead_distance;
   reverse_lookahead_.curvature_preview_distance = config.reverse_curvature_preview_distance;
   reverse_lookahead_.curvature_preview_window = config.reverse_curvature_preview_window;
+
+  // Update Alignment Fade-out Parameter
+  alignment_fade_distance_ = config.alignment_fade_distance;
 
   ROS_INFO("CarmakerControl dynamic parameters updated.");
 }
