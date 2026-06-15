@@ -656,10 +656,11 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
   //   - Steady curve  (κ_rear≈κ_front):      min→κ, full compensation
   //   - Corner exit   (κ_rear>0, κ_front≈0): min→0, no lingering offset
   if (direction >= 0) {
-    const double front_path_curvature = feedback_reference.curvature;
-    const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
-    const double effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
-    cte -= computeOffTrackingOffset(wheelbase_, effective_curvature);
+    // const double front_path_curvature = feedback_reference.curvature;
+    // const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
+    // const double effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
+    // cte -= computeOffTrackingOffset(wheelbase_, effective_curvature);
+    cte -= computeOffTrackingOffset(wheelbase_, rear_curvature);
   }
 
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
