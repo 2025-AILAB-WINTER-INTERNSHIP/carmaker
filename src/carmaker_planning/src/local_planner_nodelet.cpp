@@ -18,6 +18,26 @@
 
 namespace carmaker_planning {
 
+namespace {
+
+size_t findSegmentEndpointIndex(const Path& path, size_t target_seg_idx) {
+  if (path.empty()) return 0;
+  size_t current_seg_idx = 0;
+  size_t start = 0;
+  for (size_t i = 1; i < path.size(); ++i) {
+    if (path[i].direction != path[start].direction) {
+      if (current_seg_idx == target_seg_idx) {
+        return i - 1;
+      }
+      current_seg_idx++;
+      start = i;
+    }
+  }
+  return path.size() - 1;
+}
+
+} // namespace
+
 // ── Initialization ────────────────────────────────────────────────────────────
 
 void LocalPlannerNodelet::onInit() {
@@ -493,48 +513,65 @@ void LocalPlannerNodelet::logDecisionTransition(
       decision.path_source != TrajectoryStateMachine::TrajectorySource::kNone;
 
   if (segment_changed && has_active_endpoint) {
-    if (decision.failed) {
-      NODELET_WARN("[LocalPlanner] ARRIVAL FAILED on segment transition %zu -> %zu (precise tolerances not met)!",
-                   last_logged_segment_index_, decision.active_segment_index);
-    }
-    NODELET_INFO("[LocalPlanner] Segment transition: %zu -> %zu, state=%s, intent=%s, "
-                 "dir=%d, ego=(%.2f, %.2f, %.2f), endpoint=(%.2f, %.2f, %.2f)",
-                 last_logged_segment_index_,
-                 decision.active_segment_index,
-                 trajectoryStateString(decision.state),
-                 trajectoryIntentString(decision.intent),
-                 decision.active_direction,
-                 ego.x,
-                 ego.y,
-                 ego.theta,
-                 decision.endpoint.x,
-                 decision.endpoint.y,
-                 decision.endpoint.theta);
-  } else if (segment_changed && decision.finished) {
     double err_xy = 0.0;
     double err_yaw = 0.0;
     double err_v = std::abs(ego.v);
-    if (!trajectory_state_machine_.globalPath().empty()) {
-      const auto& target = trajectory_state_machine_.globalPath().back();
-      err_xy = dist(ego.x, ego.y, target.x, target.y);
-      err_yaw = std::abs(wrap_to_pi(ego.theta - target.theta));
+    PathPoint prev_endpoint;
+    const auto& gp = trajectory_state_machine_.globalPath();
+    if (!gp.empty()) {
+      size_t ep_idx = findSegmentEndpointIndex(gp, last_logged_segment_index_);
+      prev_endpoint = gp[ep_idx];
+      err_xy = dist(ego.x, ego.y, prev_endpoint.x, prev_endpoint.y);
+      err_yaw = std::abs(wrap_to_pi(ego.theta - prev_endpoint.theta));
     }
     if (decision.failed) {
-      NODELET_WARN("[LocalPlanner] Active path finished (ARRIVAL FAILED at final destination, precise tolerances not met): last_segment=%zu, state=%s, intent=%s\n"
+      NODELET_WARN("[LocalPlanner] Segment transition %zu -> %zu (ARRIVAL FAILED on transition, precise tolerances not met): state=%s, intent=%s, dir=%d\n"
+                   "Ego: (%.2f, %.2f, %.2f) | Completed Endpoint: (%.2f, %.2f, %.2f) | Target Endpoint: (%.2f, %.2f, %.2f)\n"
                    "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
                    last_logged_segment_index_,
+                   decision.active_segment_index,
                    trajectoryStateString(decision.state),
                    trajectoryIntentString(decision.intent),
-                   cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
-                   err_xy, rad2deg(err_yaw), err_v);
+                   decision.active_direction,
+                   ego.x,
+                   ego.y,
+                   ego.theta,
+                   prev_endpoint.x,
+                   prev_endpoint.y,
+                   prev_endpoint.theta,
+                   decision.endpoint.x,
+                   decision.endpoint.y,
+                   decision.endpoint.theta,
+                   cfg_.segment_transition_xy_tol,
+                   rad2deg(cfg_.segment_transition_yaw_tol),
+                   cfg_.stop_vel_tol,
+                   err_xy,
+                   rad2deg(err_yaw),
+                   err_v);
     } else {
-      NODELET_INFO("[LocalPlanner] Active path finished: last_segment=%zu, state=%s, intent=%s\n"
+      NODELET_INFO("[LocalPlanner] Segment transition: %zu -> %zu, state=%s, intent=%s, dir=%d\n"
+                   "Ego: (%.2f, %.2f, %.2f) | Completed Endpoint: (%.2f, %.2f, %.2f) | Target Endpoint: (%.2f, %.2f, %.2f)\n"
                    "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
                    last_logged_segment_index_,
+                   decision.active_segment_index,
                    trajectoryStateString(decision.state),
                    trajectoryIntentString(decision.intent),
-                   cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
-                   err_xy, rad2deg(err_yaw), err_v);
+                   decision.active_direction,
+                   ego.x,
+                   ego.y,
+                   ego.theta,
+                   prev_endpoint.x,
+                   prev_endpoint.y,
+                   prev_endpoint.theta,
+                   decision.endpoint.x,
+                   decision.endpoint.y,
+                   decision.endpoint.theta,
+                   cfg_.segment_transition_xy_tol,
+                   rad2deg(cfg_.segment_transition_yaw_tol),
+                   cfg_.stop_vel_tol,
+                   err_xy,
+                   rad2deg(err_yaw),
+                   err_v);
     }
   } else if (state_changed) {
     NODELET_DEBUG("[LocalPlanner] State transition: state=%s, intent=%s, segment=%zu",
@@ -547,19 +584,40 @@ void LocalPlannerNodelet::logDecisionTransition(
     double err_xy = 0.0;
     double err_yaw = 0.0;
     double err_v = std::abs(ego.v);
+    PathPoint target;
     if (!trajectory_state_machine_.globalPath().empty()) {
-      const auto& target = trajectory_state_machine_.globalPath().back();
+      target = trajectory_state_machine_.globalPath().back();
       err_xy = dist(ego.x, ego.y, target.x, target.y);
       err_yaw = std::abs(wrap_to_pi(ego.theta - target.theta));
     }
     if (decision.failed) {
-      NODELET_WARN("[LocalPlanner] Final goal reached, but ARRIVAL FAILED (precise tolerances not met)!\n"
+      NODELET_WARN("[LocalPlanner] Final goal reached (ARRIVAL FAILED at final destination, precise tolerances not met): last_segment=%zu, state=%s, intent=%s\n"
+                   "Ego: (%.2f, %.2f, %.2f) | Target Endpoint: (%.2f, %.2f, %.2f)\n"
                    "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
+                   last_logged_segment_index_,
+                   trajectoryStateString(decision.state),
+                   trajectoryIntentString(decision.intent),
+                   ego.x,
+                   ego.y,
+                   ego.theta,
+                   target.x,
+                   target.y,
+                   target.theta,
                    cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
                    err_xy, rad2deg(err_yaw), err_v);
     } else {
-      NODELET_INFO("[LocalPlanner] Final goal reached.\n"
+      NODELET_INFO("[LocalPlanner] Final goal reached (Active path finished): last_segment=%zu, state=%s, intent=%s\n"
+                   "Ego: (%.2f, %.2f, %.2f) | Target Endpoint: (%.2f, %.2f, %.2f)\n"
                    "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
+                   last_logged_segment_index_,
+                   trajectoryStateString(decision.state),
+                   trajectoryIntentString(decision.intent),
+                   ego.x,
+                   ego.y,
+                   ego.theta,
+                   target.x,
+                   target.y,
+                   target.theta,
                    cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
                    err_xy, rad2deg(err_yaw), err_v);
     }
