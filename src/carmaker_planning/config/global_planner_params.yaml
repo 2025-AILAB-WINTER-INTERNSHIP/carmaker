@@ -3,14 +3,14 @@ services:
 
 topics:
   publish:
-    trajectory: "/planning/trajectory"
+    trajectory: "/planning/global/trajectory"
     debug:
-      map: "/planning/debug/occupancy_grid"
-      path: "/planning/debug/global_path"
-      pose: "/planning/debug/global_pose"
-      curvature: "/planning/debug/curvature_path"
-      tree: "/planning/debug/search_tree"
-      velocity: "/planning/debug/velocity_profile"
+      map: "/planning/debug/global/map"
+      path: "/planning/debug/global/path"
+      pose: "/planning/debug/global/pose"
+      curvature: "/planning/debug/global/curvature"
+      tree: "/planning/debug/global/tree"
+      velocity: "/planning/debug/global/velocity"
   subscribe:
     goal: "/planning/goal"
     dynamics: "/carmaker/dynamic_info"
@@ -36,9 +36,9 @@ vehicle:
   length: 4.635 # meters
   wheelbase: 2.97 # meters
   rear_axle_offset: 0.82 # meters (Rear Bumper to Rear Axle)
-  min_turning_radius: 8.5 # meters
-  # Ioniq 5 wheelbase/min_turning_radius 기준: atan(2.97 / 5.5) = 28.4 deg
-  max_steer_angle_deg: 28.4 # degrees
+  min_turning_radius: 5.5 # meters — 유효 회전 반경
+  # 실측 측정값: Vhcl_FL_rz ±0.580 rad (33.2°), Steer_WhlAng ±8.38 rad
+  max_steer_angle_deg: 33.2 # degrees — 실측 물리 타이어 최대각 (28.4 → 33.2)
 
   limits:
     max_vel: 10.0 # m/s
@@ -65,13 +65,13 @@ global_planner:
   max_iterations: 500000
   max_planning_time: 5.0
   xy_resolution: 0.05
-  theta_resolution_deg: 5.0
-  goal_tolerance_xy: 0.5
-  goal_tolerance_theta_deg: 5.0
+  theta_resolution_deg: 3.0 # 탐색 격자 yaw 해상도
+  goal_tolerance_xy: 0.2 # 탐색 종료 XY 허용오차
+  goal_tolerance_theta_deg: 3.0 # 탐색 종료 yaw 허용오차
   heuristic_scale: 2
   step_size: 0.5
   next_node_num: 7
-  analytic_expansion_ratio: 1000 # Check Reeds-Shepp shot every 1000 iterations
+  analytic_expansion_ratio: 1 # Reeds-Shepp 시도 주기
   weights:
     turn: 2.0
     reverse: 5.0 # Enable reverse paths by lowering penalty
@@ -81,6 +81,8 @@ global_planner:
 # Post processing pipeline parameters
 global_post_processing:
   smoother:
+    enabled: false
+    collision_check_enabled: true
     # [수식적 배경]
     # Gradient Descent 기반의 경로 평활화(Smoothing) 업데이트 식은 다음과 같습니다:
     #   x_i <- x_i + w_data * (x_orig_i - x_i) + w_smooth * (x_{i+1} + x_{i-1} - 2*x_i)
@@ -97,20 +99,24 @@ global_post_processing:
     tolerance: 0.001
     max_iterations: 500
   resampler:
+    enabled: true
     resolution: 0.1
   validator:
+    enabled: true
     time_tolerance_ms: 1.0 # ms
     yaw_tolerance_deg: 5.0 # deg
+    cusp_exclusion_margin: 0.2 # meters (exclusion zone around cusp for validation)
   profiler:
-    max_vel: 2.0 # m/s 7.2 km/h
-    max_accel: 0.8 # m/s^2
-    max_decel: 0.8 # m/s^2
+    enabled: true
+    max_vel: 0.5 # m/s 7.2 km/h
+    max_accel: 0.25 # m/s^2
+    max_decel: 0.25 # m/s^2
     max_jerk: 1.5 # m/s^3
     max_steer_vel: 0.6108 # rad/s (approx 35 deg/s)
     max_lat_acc: 0.8 # m/s^2
     goal_vel: 0.0
-    gear_shift_duration: 1.0 # seconds (delay at forward/reverse transitions)
+    gear_shift_duration: 1.5 # seconds (delay at forward/reverse transitions)
     min_velocity_denominator: 0.02 # Lower limit of velocity denominator for dt calculations to prevent division by zero
+    jerk_filter_passes: 2 # iterations of velocity moving average
   visualization:
     arrow_spacing_meters: 0.2 # Spacing in meters for PoseArray Yaw Arrows
-

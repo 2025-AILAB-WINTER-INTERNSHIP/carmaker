@@ -1,0 +1,88 @@
+# ── Local Planner Configuration ───────────────────────────────────────────────
+# Quintic polynomial path tracking with cusp-segment management.
+# Loaded by LocalPlannerNodelet via private NodeHandle (rosparam namespace).
+
+topics:
+  subscribe:
+    trajectory: "/planning/global/trajectory"
+    dynamics: "/carmaker/dynamic_info" # GT
+    odom: "/localization/odom" # EKF
+  publish:
+    trajectory: "/planning/trajectory"
+    debug:
+      path: "/planning/debug/local/path"
+      pose: "/planning/debug/local/pose"
+      curvature: "/planning/debug/local/curvature"
+      velocity: "/planning/debug/local/velocity"
+
+# Frame / pose-source (must match global_planner_params.yaml)
+frames:
+  global: "Fr0"
+  rear_axle: "Fr1A_Rear_Axle_Pred"
+
+setting:
+  use_gt_pose: true # true → /carmaker/dynamic_info (GT), false → /localization/odom (EKF)
+  test_pose:
+    enabled: false # true → /planning/start for offline quintic path fitting test
+    topic: "/planning/start"
+
+# Vehicle geometry (copied from global_planner_params.yaml for self-containment)
+vehicle:
+  wheelbase: 2.97
+  min_turning_radius: 5.5 # 유효 회전 반경
+  limits:
+    max_steer_vel: 0.6108 # [rad/s]
+
+# Local planner parameters
+local_planner:
+  mode: "global" # "local" -> quintic fitting, "global" -> active global segment
+  pose_timeout: 0.5 # [s] stop updating trajectory when GT/EKF pose is stale
+  fitting_lookahead: 3.125 # [m] local dynamic lookahead distance for polynomial fitting and stitching
+  trajectory_lock_distance: 1.0 # [m] lock local trajectory when distance to endpoint is below this
+
+  replanning:
+    rate_hz: 10.0 # [Hz]  local path refresh rate
+
+  arrival:
+    endpoint_xy_tol: 0.1 # [m] final parking XY threshold
+    endpoint_yaw_tol: 0.1 # [rad] final parking heading threshold
+    segment_transition_xy_tol: 0.1 # [m] relaxed non-final cusp transition threshold
+    segment_transition_yaw_tol: 0.1 # [rad] relaxed non-final cusp heading threshold
+    stop_vel_tol: 0.35 # [m/s] velocity threshold before segment transition/final hold
+
+  velocity:
+    min_creep_speed: 0.2 # [m/s] keep moving before planner declares arrival
+    creep_distance: 0.4 # [m] endpoint window where zero profile is lifted to creep speed
+
+  transition:
+    stop_duration: 0.5 # [s] hold zero-speed current segment after cusp/final arrival
+    presteer_duration: 1.0 # [s] publish zero-speed next segment before tracking
+
+local_post_processing:
+  smoother:
+    enabled: false
+    collision_check_enabled: false
+    weight_data: 0.2
+    weight_smooth: 0.35
+    tolerance: 0.001
+    max_iterations: 500
+  resampler:
+    enabled: true
+    resolution: 0.1 # [m] common local/global path resampling interval
+  profiler:
+    enabled: true
+    max_vel: 2.0 # [m/s]
+    max_accel: 0.8 # [m/s^2]
+    max_decel: 0.8 # [m/s^2]
+    max_jerk: 1.5 # [m/s^3]
+    max_steer_vel: 0.6108 # [rad/s]
+    max_lat_acc: 0.8 # [m/s^2]
+    goal_vel: 0.0
+    gear_shift_duration: 1.5
+    min_velocity_denominator: 0.02 # Guard against division by zero in dt calc
+    jerk_filter_passes: 2
+  validator:
+    enabled: false
+    cusp_exclusion_margin: 0.2
+  visualization:
+    arrow_spacing_meters: 0.2

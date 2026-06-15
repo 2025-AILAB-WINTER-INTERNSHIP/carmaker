@@ -11,54 +11,53 @@ setting:
   publish_stop_without_path: true
 
 control:
-  rate: 30.0
-  # 현재 차량 상태 입력 선택.
+  # Loop and state source ------------------------------------------------------
+  rate: 100.0
   # odom: localization이 publish하는 /localization/odom 사용
   # dynamics: CarMaker GT /carmaker/dynamic_info 사용
   state_source: "dynamics"
 
-  # localization odometry가 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
+  # Input freshness -----------------------------------------------------------
+  # 각 입력이 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
   odom_timeout: 0.5
-  # dynamics GT 입력이 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
   dynamics_timeout: 0.5
-  # Parking trajectory can take longer at 0.7 m/s, so keep the latched plan valid long enough.
-  trajectory_timeout: 300.0
+  # Local planner active trajectory가 이 시간 이상 갱신되지 않으면 no-trajectory 상태로 본다.
+  active_trajectory_timeout: 1.0
+  stop_trajectory_velocity_epsilon: 0.000001
 
-  # /planning/trajectory의 longitudinal_velocity 부호로 전진/후진 segment를 나눈다.
-  # 이 값보다 작은 속도는 정지점으로 보고 이전 direction에 붙인다.
-  direction_velocity_epsilon: 0.02
+  # Target speed selection ----------------------------------------------------
+  # segment 완료 판정 전에는 target velocity가 0이어도 이 속도 이상으로 추종한다.
+  # planner가 publish한 all-zero trajectory는 정지/선제 조향 단계로 보고 0속도를 유지한다.
+  min_tracking_speed: 0.25
+  min_creep_speed: 0.20
+  arrival_slow_distance: 1.0
+  # Parking speed cap.
+  max_target_speed: 0.5
 
-  # segment 완료 판정이 나기 전까지 target velocity가 0이어도 멈춰 서지 않게 하는 최소 추종 속도.
-  # 완료 판정 후에는 별도 stop/gear switch 로직이 brake와 다음 gear 전환을 처리한다.
-  min_tracking_speed: 0.20
-  # Tight parking speed cap. Planning profiler도 같은 0.7 m/s 상한을 사용한다.
-  max_target_speed: 10
+  # 전진용 Lookahead
+  forward:
+    lookahead_distance: 0
+    lookahead_time: 0
+    min_lookahead_distance: 0
+    max_lookahead_distance: 0
+    curvature_preview_distance: 0
+    curvature_preview_window: 0
 
-  # nearest point 기준으로 일정 거리 앞의 point에서 target speed를 읽는다.
-  # 실제 lookahead = lookahead_distance + lookahead_time * current_speed 이며 min/max로 제한된다.
-  lookahead_distance: 0.35
-  lookahead_time: 0.2
-  min_lookahead_distance: 0.2
-  max_lookahead_distance: 0.8
-  # Stanley feedback은 nearest 기준으로 두고, 곡률 feedforward만 더 앞을 본다.
-  # preview_distance 지점 주변 preview_window 구간의 평균 곡률로 선제 조향을 만든다.
-  curvature_preview_distance: 0.8
-  curvature_preview_window: 0.4
+  # 후진용 Lookahead
+  reverse:
+    lookahead_distance: 0
+    lookahead_time: 0
+    min_lookahead_distance: 0
+    max_lookahead_distance: 0
+    curvature_preview_distance: 0.82
+    curvature_preview_window: 0.1
 
+  # Path index tracking -------------------------------------------------------
   # nearest index가 경로 위에서 크게 튀지 않도록 이전 index 주변만 검색한다.
   nearest_search_back: 20
   nearest_search_ahead: 120
 
-  # segment 완료 판정. 끝 index 근처이면서 끝점 위치와도 가까워야 다음 gear segment로 넘어간다.
-  segment_finish_distance: 0.5
-  segment_finish_index_margin: 3
-
-  # 전진/후진 segment 전환 전 차량 속도가 이 값 이하가 될 때까지 brake를 유지한다.
-  gear_switch_speed: 0.08
-  # 다음 segment로 넘어갈 때 정지 상태에서 먼저 다음 segment 조향각을 보낸 뒤 출발한다.
-  presteer_enabled: true
-  presteer_duration: 0.6
-
+  # Longitudinal output limits ------------------------------------------------
   # PID 출력 가속도 명령을 gas/brake/accel 필드로 변환할 때 쓰는 한계값.
   max_accel: 0.8
   max_decel: 1.5
@@ -66,6 +65,13 @@ control:
   max_brake: 1.0
   stop_brake: 0.4
 
+  # No-trajectory release -----------------------------------------------------
+  # planner가 idle/no-trajectory 상태가 되면 release_duration 동안만 stop command를 발행한다.
+  # true이면 그 시간 동안 조향각을 0으로 ramp-down한 뒤 control_signal 발행을 멈춘다.
+  steer_release_after_idle: true
+  release_duration: 1.0
+
+  # Gear mapping --------------------------------------------------------------
   drive_gear: 1
   neutral_gear: 0
   reverse_gear: -1
@@ -78,27 +84,40 @@ pid:
 
 stanley:
   # Stanley 조향 파라미터. max_steer_angle_deg는 타이어 조향각 기준이다.
-  # Ioniq 5 설정값(wheelbase 2.97m, min_turning_radius 5.5m)으로 계산하면 약 28.4deg다.
-  # 후진에서는 heading 항만 후진 yaw dynamics에 맞게 반대로 적용하고,
-  # lateral error 항은 path 좌우 기준을 유지한다.
-  k: 2.5
-  k_soft: 0.15
-  cte_gain: 2.0
-  heading_gain: 1.8
-  max_steer_angle_deg: 28.4
-  reverse_steering_scale: 1.3
-  # Trajectory curvature 기반 feedforward. 큰 주차 곡률에서 feedback보다 먼저 조향한다.
-  curvature_ff_gain: 1.0
-  # 후진에서는 같은 조향각이 yaw를 반대로 변화시키므로 curvature feedforward 부호도 반대로 둔다.
-  reverse_curvature_ff_sign: -1.0
+  # [실측 기반 계산]
+  #   Vhcl_FL_rz 물리 최대각: ±0.580 rad (33.2°)
+  #   Steer_WhlAng 핸들 최대각: ±8.38 rad
+  #   → steering_ratio = 8.38 / 0.580 = 14.45
+  #   → 이론 min_turning_radius = 2.97 / tan(0.580) ≈ 4.57 m
+  #   → 실측 유효 회전 반경: ~10 m (타이어 슬립 / CarMaker 모델 특성)
+  #   → max_steer_angle_deg = 33.2° (실측 물리 한계)
+  max_steer_angle_deg: 33.2 # 실측 물리 최대 타이어각
+
+  # 전진용 Stanley 제어 파라미터 (안정성 및 밀림 방지 위주)
+  forward:
+    k: 4.0 # 횡오차 복귀 강도
+    k_soft: 0.3 # 저속 분모 보정
+    cte_gain: 3.5 # 횡오차 gain
+    heading_gain: 2.5 # 헤딩 오차 gain
+    curvature_ff_gain: 0 # 곡률 feedforward gain
+
+  # 후진용 Stanley 제어 파라미터 (후진 민감성/조향 댐핑 위주)
+  reverse:
+    k: 4.5
+    k_soft: 0.3
+    cte_gain: 3.5
+    heading_gain: 2.5
+    curvature_ff_gain: 0.5
+    reverse_curvature_ff_sign: -1.0
 
 vehicle:
   wheelbase: 2.97
-  min_turning_radius: 5.5
-  # Stanley는 타이어 조향각을 계산한다. CarMaker control_signal/steerangle은
-  # steering wheel command 범위로 보고 tight parking에서는 4.5까지 허용한다.
-  steering_ratio: 14.0
-  max_steer_command: 8.5
+  min_turning_radius: 5.5 # 유효 회전 반경
+  # Stanley는 타이어 조향각을 계산한다.
+  # steering_ratio = Steer_WhlAng / Vhcl_FL_rz = 8.38 / 0.580 = 14.45
+  steering_ratio: 14.45 # 실측 역산값
+  # max_steer_command = 핸들 물리 최대각 = 8.38 rad
+  max_steer_command: 8.38 # 실측 핸들 최대각
   # 조향 부호가 반대로 보이면 -1.0으로 바꿔서 테스트한다.
   steering_command_sign: 1.0
 
@@ -107,5 +126,5 @@ debug:
   publish: true
   topic_prefix: "/control/debug"
   frame_id: "Fr0"
-  # active_segment_path는 너무 자주 내보내지 않도록 별도 주기를 둔다. 0 이하면 매 tick publish.
+  # active_path는 너무 자주 내보내지 않도록 별도 주기를 둔다. 0 이하면 매 tick publish.
   path_publish_period: 1.0

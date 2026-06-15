@@ -101,6 +101,7 @@ bool FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     std::cout << "[1. Intrinsic Check]\n";
     std::cout << "  - fx: " << K_vec[0] << " (기대값: 약 236.09)\n";
     std::cout << "  - fy: " << K_vec[4] << " (기대값: 약 236.09)\n";
+    std::cout << "  - covariance_k: " << cov_k_ << "\n";
 
     // 역행렬 사전 계산 (Base 기준 카메라 위치 및 방향 도출용)
     cv::Mat R_cam_base_test = R_base_cam.t();
@@ -538,11 +539,11 @@ std::vector<LocalFeature> FeatureExtractor::process(
 
         float base_sigma_m_per_px = bev_cfg_.resolution;
 
-        // 방사형 오차(sigma_r, 깊이 방향): 카메라 원근법에 의해 거리의 제곱(Z^2)에 비례하여 오차가 급증함
+        // 방사형 오차(sigma_r, 깊이 방향): 카메라 원근법에 따른 거리 제곱 비례 반영
         float sigma_r = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt_sq);
         float sigma_r_sq = sigma_r * sigma_r;
 
-        // 접선형 오차(sigma_t, 좌우 각도 방향): 픽셀의 각도(FOV)에 의해 거리에 선형적(Z)으로 비례하여 오차가 증가함
+        // 접선형 오차(sigma_t, 좌우 각도 방향): 거리 선형 비례 반영
         float dist_opt = std::sqrt(dist_opt_sq);
         float sigma_t = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt);
         float sigma_t_sq = sigma_t * sigma_t;

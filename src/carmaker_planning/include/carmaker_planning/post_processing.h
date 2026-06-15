@@ -5,24 +5,29 @@
 #ifndef CARMAKER_PLANNING_POST_PROCESSING_H
 #define CARMAKER_PLANNING_POST_PROCESSING_H
 
+#include <utility>
+
 #include "carmaker_planning/types.h"
 #include "carmaker_planning/global_map.h"
 
 namespace carmaker_planning {
 
 struct KinematicLimits {
-  double max_vel;
-  double max_accel;
-  double max_decel;
-  double max_jerk;
-  double max_steer_vel;
-  double max_lat_acc;
-  double min_vel_denom;
+  double max_vel = 2.0;
+  double max_accel = 0.8;
+  double max_decel = 0.8;
+  double max_jerk = 1.5;
+  double max_steer_vel = 0.6108;
+  double max_lat_acc = 0.8;
+  double min_vel_denom = 0.02;
 };
 
 class PostProcessor {
 public:
   explicit PostProcessor(const GlobalMainConfig& config);
+  PostProcessor(const PostProcessConfig& config,
+                double wheelbase,
+                double min_turning_radius);
   ~PostProcessor() = default;
   PostProcessor(const PostProcessor&) = delete;
   PostProcessor& operator=(const PostProcessor&) = delete;
@@ -30,12 +35,24 @@ public:
   bool process(GlobalPlanningResult& result,
                const GlobalMap& map,
                double start_vel,
-               bool enable_smoothing,
-               bool enable_resampling,
-               bool enable_profiling);
+               bool request_smoothing,
+               bool request_resampling,
+               bool request_profiling);
+  bool process(LocalPlanningResult& result,
+               double start_vel,
+               bool request_smoothing,
+               bool request_resampling,
+               bool request_profiling);
 
 private:
-  bool smooth(Path& path, const GlobalMap& map, std::vector<std::pair<std::string, std::string>>& logs);
+  template <typename ResultT>
+  bool runPipeline(ResultT& result,
+                   const GlobalMap* map,
+                   double start_vel,
+                   bool request_smoothing,
+                   bool request_resampling,
+                   bool request_profiling);
+  bool smooth(Path& path, const GlobalMap* map, std::vector<std::pair<std::string, std::string>>& logs);
   bool resample(const Path& path, Path& resampled_path, std::vector<std::pair<std::string, std::string>>& logs);
   bool resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs);
   bool profile(Path& path, double start_vel, std::vector<std::pair<std::string, std::string>>& logs);
@@ -46,14 +63,14 @@ private:
   std::vector<std::pair<size_t, size_t>> splitIntoSegments(const Path& path) const;
   void updateGeometryProperties(Path& path) const;
 
-  GlobalPostProcessConfig config_;
+  PostProcessConfig config_;
   double max_kappa_ = 0.2;
   double wheelbase_ = 2.97;
 };
 
 class TrajectoryValidator {
 public:
-  TrajectoryValidator(const GlobalPostProcessConfig& config, double max_kappa, double wheelbase);
+  TrajectoryValidator(const PostProcessConfig& config, double max_kappa, double wheelbase);
   ~TrajectoryValidator() = default;
   TrajectoryValidator(const TrajectoryValidator&) = delete;
   TrajectoryValidator& operator=(const TrajectoryValidator&) = delete;
@@ -70,7 +87,7 @@ private:
   void validateSteeringVelocity(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const;
   bool isNearCusp(const Path& path, size_t index, double radius_threshold = 0.2) const;
 
-  GlobalPostProcessConfig config_;
+  PostProcessConfig config_;
   double max_kappa_;
   double wheelbase_;
 };

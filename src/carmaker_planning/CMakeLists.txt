@@ -24,6 +24,7 @@ find_package(Eigen3 REQUIRED)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${PROJECT_NAME}_global carmaker_planning_nodelet
+            ${PROJECT_NAME}_local  carmaker_planning_local_nodelet
   CATKIN_DEPENDS roscpp nodelet diagnostic_updater nav_msgs geometry_msgs visualization_msgs tf2 tf2_ros tf2_geometry_msgs std_msgs carmaker_msgs
   DEPENDS EIGEN3
 )
@@ -41,11 +42,12 @@ add_library(${PROJECT_NAME}_global
   src/hybrid_astar.cpp
   src/reeds_shepp.cpp
   src/post_processing.cpp
+  src/ros_utils.cpp
   src/visualizer.cpp
 )
 target_link_libraries(${PROJECT_NAME}_global ${catkin_LIBRARIES})
 
-# ── Nodelet Library ──────────────────────────────────────────────────
+# ── Global Planner Nodelet ───────────────────────────────────────────
 add_library(carmaker_planning_nodelet
   src/global_planner_nodelet.cpp
 )
@@ -54,11 +56,50 @@ target_link_libraries(carmaker_planning_nodelet
   ${catkin_LIBRARIES}
 )
 
+# ── Local Planning Library ───────────────────────────────────────────
+add_library(${PROJECT_NAME}_local
+  src/local_planner.cpp
+  src/trajectory_state_machine.cpp
+)
+target_link_libraries(${PROJECT_NAME}_local
+  ${PROJECT_NAME}_global   # provides post_processing, types, math
+  ${catkin_LIBRARIES}
+)
+
+# ── Local Planner Nodelet ────────────────────────────────────────────
+add_library(carmaker_planning_local_nodelet
+  src/local_planner_nodelet.cpp
+)
+target_link_libraries(carmaker_planning_local_nodelet
+  ${PROJECT_NAME}_local
+  ${PROJECT_NAME}_global
+  ${catkin_LIBRARIES}
+)
+
 if(catkin_EXPORTED_TARGETS)
-  add_dependencies(carmaker_planning_nodelet ${catkin_EXPORTED_TARGETS})
+  add_dependencies(carmaker_planning_nodelet       ${catkin_EXPORTED_TARGETS})
+  add_dependencies(carmaker_planning_local_nodelet ${catkin_EXPORTED_TARGETS})
+endif()
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_trajectory_state_machine test/test_trajectory_state_machine.cpp)
+  if(TARGET test_trajectory_state_machine)
+    target_link_libraries(test_trajectory_state_machine
+      ${PROJECT_NAME}_local
+      ${catkin_LIBRARIES}
+    )
+  endif()
+  catkin_add_gtest(test_quintic_path_fitter test/test_quintic_path_fitter.cpp)
+  if(TARGET test_quintic_path_fitter)
+    target_link_libraries(test_quintic_path_fitter
+      ${PROJECT_NAME}_local
+      ${catkin_LIBRARIES}
+    )
+  endif()
 endif()
 
 install(TARGETS ${PROJECT_NAME}_global carmaker_planning_nodelet
+                ${PROJECT_NAME}_local  carmaker_planning_local_nodelet
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

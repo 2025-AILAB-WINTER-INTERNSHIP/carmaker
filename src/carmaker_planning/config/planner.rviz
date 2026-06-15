@@ -6,7 +6,6 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /Grid1
       Splitter Ratio: 0.5
     Tree Height: 555
   - Class: rviz/Selection
@@ -53,16 +52,6 @@ Visualization Manager:
       Plane Cell Count: 54
       Reference Frame: <Fixed Frame>
       Value: true
-    - Alpha: 0.699999988079071
-      Class: rviz/Map
-      Color Scheme: map
-      Draw Behind: false
-      Enabled: true
-      Name: Map
-      Topic: /planning/debug/occupancy_grid
-      Unreliable: false
-      Use Timestamp: false
-      Value: true
     - Class: rviz/MarkerArray
       Enabled: true
       Marker Topic: /localization/debug/map_features
@@ -71,6 +60,16 @@ Visualization Manager:
         map_landmarks: true
         map_lanes: true
       Queue Size: 100
+      Value: true
+    - Alpha: 0.699999988079071
+      Class: rviz/Map
+      Color Scheme: map
+      Draw Behind: false
+      Enabled: true
+      Name: Map
+      Topic: /planning/debug/global/map
+      Unreliable: false
+      Use Timestamp: false
       Value: true
     - Alpha: 1
       Buffer Length: 1
@@ -82,7 +81,7 @@ Visualization Manager:
       Length: 0.30000001192092896
       Line Style: Lines
       Line Width: 0.029999999329447746
-      Name: Path
+      Name: Path(Global)
       Offset:
         X: 0
         Y: 0
@@ -93,13 +92,13 @@ Visualization Manager:
       Radius: 0.029999999329447746
       Shaft Diameter: 0.10000000149011612
       Shaft Length: 0.10000000149011612
-      Topic: /planning/debug/global_path
+      Topic: /planning/debug/global/path
       Unreliable: false
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /planning/debug/curvature_path
-      Name: Curvatures
+      Marker Topic: /planning/debug/global/curvature
+      Name: Curvatures(Global)
       Namespaces:
         curvature: true
       Queue Size: 100
@@ -113,26 +112,26 @@ Visualization Manager:
       Enabled: true
       Head Length: 0.07000000029802322
       Head Radius: 0.029999999329447746
-      Name: Pose
+      Name: Pose(Global)
       Queue Size: 10
       Shaft Length: 0.23000000417232513
       Shaft Radius: 0.009999999776482582
       Shape: Arrow (Flat)
-      Topic: /planning/debug/global_pose
+      Topic: /planning/debug/global/pose
       Unreliable: false
       Value: true
     - Class: rviz/MarkerArray
       Enabled: true
-      Marker Topic: /planning/debug/velocity_profile
-      Name: velocity
+      Marker Topic: /planning/debug/global/velocity
+      Name: Velocity(Global)
       Namespaces:
         velocity: true
       Queue Size: 100
       Value: true
     - Class: rviz/MarkerArray
       Enabled: false
-      Marker Topic: /planning/debug/search_tree
-      Name: tree
+      Marker Topic: /planning/debug/global/tree
+      Name: SearchTree(Global)
       Namespaces:
         {}
       Queue Size: 100
@@ -142,9 +141,64 @@ Visualization Manager:
       Marker Topic: /carmaker/map/ego_marker
       Name: Ego(GT)
       Namespaces:
-        gt_ego: true
-        gt_label: true
-        velocity_cylinder: true
+        {}
+      Queue Size: 100
+      Value: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz/Path
+      Color: 25; 255; 0
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: Path(Local)
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Queue Size: 10
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
+      Topic: /planning/debug/local/path
+      Unreliable: false
+      Value: true
+    - Alpha: 1
+      Arrow Length: 0.30000001192092896
+      Axes Length: 0.30000001192092896
+      Axes Radius: 0.009999999776482582
+      Class: rviz/PoseArray
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.07000000029802322
+      Head Radius: 0.029999999329447746
+      Name: Pose(Local)
+      Queue Size: 10
+      Shaft Length: 0.23000000417232513
+      Shaft Radius: 0.009999999776482582
+      Shape: Arrow (Flat)
+      Topic: /planning/debug/local/pose
+      Unreliable: false
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /planning/debug/local/velocity
+      Name: Velocity(Local)
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /planning/debug/local/curvature
+      Name: Curvatures(Local)
+      Namespaces:
+        {}
       Queue Size: 100
       Value: true
     - Alpha: 1
@@ -168,7 +222,7 @@ Visualization Manager:
       Radius: 0.029999999329447746
       Shaft Diameter: 0.10000000149011612
       Shaft Length: 0.10000000149011612
-      Topic: /control/debug/active_segment_path
+      Topic: /control/debug/active_path
       Unreliable: false
       Value: true
     - Alpha: 1
@@ -215,7 +269,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 29.49322509765625
+      Distance: 26.447214126586914
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -223,17 +277,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -0.4112580120563507
-        Y: -1.98228120803833
-        Z: 0.04402463883161545
+        X: 0.0868212878704071
+        Y: -1.6894766092300415
+        Z: 0.03915092721581459
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 1.5497963428497314
       Target Frame: <Fixed Frame>
-      Yaw: 4.718580722808838
+      Yaw: 4.713580131530762
     Saved: ~
 Window Geometry:
   Displays:
@@ -251,5 +305,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1200
-  X: 72
-  Y: 64
+  X: 1322
+  Y: 144

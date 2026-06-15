@@ -1,7 +1,14 @@
 <library path="lib/libcarmaker_planning_nodelet">
-  <class name="carmaker_planning/GlobalPlannerNodelet" type="carmaker_planning::GlobalPlannerNodelet" base_class_type="nodelet::Nodelet">
-    <description>
-      CarMaker Global Planner: Kinodynamic search (Hybrid A*) with smoothing, resampling and velocity profiling.
-    </description>
+  <class name="carmaker_planning/GlobalPlannerNodelet"
+         type="carmaker_planning::GlobalPlannerNodelet"
+         base_class_type="nodelet::Nodelet">
+    <description>CarMaker Global Planner: Hybrid A* search with smoothing, resampling and velocity profiling.</description>
+  </class>
+</library>
+<library path="lib/libcarmaker_planning_local_nodelet">
+  <class name="carmaker_planning/LocalPlannerNodelet"
+         type="carmaker_planning::LocalPlannerNodelet"
+         base_class_type="nodelet::Nodelet">
+    <description>CarMaker Local Planner: Cusp-segment tracking with quintic polynomial path fitting.</description>
   </class>
 </library>

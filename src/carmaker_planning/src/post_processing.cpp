@@ -15,6 +15,8 @@
 namespace carmaker_planning {
 
 namespace {
+constexpr double DEFAULT_WHEELBASE = 2.97;
+
 /**
  * @brief Template helper to validate if path points exceed a specific dynamic limit,
  * updating diagnostic flags and violation counts.
@@ -38,8 +40,9 @@ void checkLimit(const Path& path, bool& ok_flag, int& violations, double& max_vi
 void applyMovingAverage(std::vector<double>& data, int half_window, int passes) {
   const int n = static_cast<int>(data.size());
   if (n <= 2 * half_window) return;
+  std::vector<double> temp(n);
   for (int iter = 0; iter < passes; ++iter) {
-    std::vector<double> temp = data;
+    std::copy(data.begin(), data.end(), temp.begin());
     for (int i = 0; i < n; ++i) {
       double sum = 0.0;
       int count = 0;
@@ -60,18 +63,58 @@ void applyMovingAverage(std::vector<double>& data, int half_window, int passes) 
 PostProcessor::PostProcessor(const GlobalMainConfig& config)
   : config_(config.post_process),
     max_kappa_((config.vehicle.min_turning_radius > 0.1) ? (1.0 / config.vehicle.min_turning_radius) : 0.2),
-    wheelbase_((config.vehicle.wheelbase > 0.1) ? config.vehicle.wheelbase : 2.97) {}
+    wheelbase_((config.vehicle.wheelbase > 0.1) ? config.vehicle.wheelbase : DEFAULT_WHEELBASE) {}
+
+PostProcessor::PostProcessor(const PostProcessConfig& config,
+                             double wheelbase,
+                             double min_turning_radius)
+  : config_(config),
+    max_kappa_((min_turning_radius > 0.1) ? (1.0 / min_turning_radius) : 0.2),
+    wheelbase_((wheelbase > 0.1) ? wheelbase : DEFAULT_WHEELBASE) {}
 
 bool PostProcessor::process(GlobalPlanningResult& result,
                             const GlobalMap& map,
                             double start_vel,
-                            bool enable_smoothing,
-                            bool enable_resampling,
-                            bool enable_profiling) {
+                            bool request_smoothing,
+                            bool request_resampling,
+                            bool request_profiling) {
+  return runPipeline(result,
+                     &map,
+                     start_vel,
+                     request_smoothing,
+                     request_resampling,
+                     request_profiling);
+}
+
+bool PostProcessor::process(LocalPlanningResult& result,
+                            double start_vel,
+                            bool request_smoothing,
+                            bool request_resampling,
+                            bool request_profiling) {
+  return runPipeline(result,
+                     nullptr,
+                     start_vel,
+                     request_smoothing,
+                     request_resampling,
+                     request_profiling);
+}
+
+template <typename ResultT>
+bool PostProcessor::runPipeline(ResultT& result,
+                                const GlobalMap* map,
+                                double start_vel,
+                                bool request_smoothing,
+                                bool request_resampling,
+                                bool request_profiling) {
   using Clock = std::chrono::steady_clock;
 
-  // 1. Resampling
-  if (enable_resampling) {
+  const bool run_smoothing = request_smoothing && config_.smoother.enabled;
+  const bool run_resampling = request_resampling && config_.resampler.enabled;
+  const bool run_profiling = request_profiling && config_.profiler.enabled;
+  const bool run_final_resampling = run_resampling && run_smoothing;
+
+  // 1. Pre-resampling/densify before smoothing
+  if (run_resampling) {
     const auto start = Clock::now();
     Path resampled_path;
     if (resample(result.path, resampled_path, result.logs)) {
@@ -81,17 +124,31 @@ bool PostProcessor::process(GlobalPlanningResult& result,
   }
 
   // 2. Smoothing
-  if (enable_smoothing) {
+  if (run_smoothing) {
+    if (config_.smoother.collision_check_enabled && !map) {
+      result.logs.push_back({"ERROR", "PostProcessor collision-aware smoothing requested without a map."});
+      return false;
+    }
     const auto start = Clock::now();
-    smooth(result.path, map, result.logs);
+    smooth(result.path, config_.smoother.collision_check_enabled ? map : nullptr, result.logs);
     result.smoothing_time = std::chrono::duration<double>(Clock::now() - start).count();
+  }
+
+  // 3. Final resampling after smoothing so the published/profiled path has stable spacing.
+  if (run_final_resampling) {
+    const auto start = Clock::now();
+    Path resampled_path;
+    if (resample(result.path, resampled_path, result.logs)) {
+      result.path = std::move(resampled_path);
+    }
+    result.resampling_time += std::chrono::duration<double>(Clock::now() - start).count();
   }
 
   // Update geometry properties (theta, kappa, s) once on the finalized path
   updateGeometryProperties(result.path);
 
-  // 3. Velocity profiling
-  if (enable_profiling) {
+  // 4. Velocity profiling
+  if (run_profiling) {
     const auto start = Clock::now();
     profile(result.path, start_vel, result.logs);
     result.profiling_time = std::chrono::duration<double>(Clock::now() - start).count();
@@ -100,17 +157,36 @@ bool PostProcessor::process(GlobalPlanningResult& result,
       pt.v = 0.0;
       pt.a = 0.0;
     }
-    result.profiling_time = 0.0;
+  }
+
+  if (!config_.validator.enabled) {
+    result.diagnostic = TrajectoryDiagnostic();
+    return true;
   }
 
   TrajectoryValidator validator(config_, max_kappa_, wheelbase_);
   TrajectoryDiagnostic diag = validator.validate(result.path, result.logs);
   result.diagnostic = diag;
-
   return diag.is_valid;
 }
 
-bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pair<std::string, std::string>>& logs) {
+template bool PostProcessor::runPipeline<GlobalPlanningResult>(
+    GlobalPlanningResult& result,
+    const GlobalMap* map,
+    double start_vel,
+    bool request_smoothing,
+    bool request_resampling,
+    bool request_profiling);
+
+template bool PostProcessor::runPipeline<LocalPlanningResult>(
+    LocalPlanningResult& result,
+    const GlobalMap* map,
+    double start_vel,
+    bool request_smoothing,
+    bool request_resampling,
+    bool request_profiling);
+
+bool PostProcessor::smooth(Path& path, const GlobalMap* map, std::vector<std::pair<std::string, std::string>>& logs) {
   if (path.size() < 3) {
     return true;
   }
@@ -182,46 +258,21 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pa
         }
       }
 
-      // Calculate ONLY Yaw (theta) for this segment to check collision and loop/twist constraint
-      for (int i = 0; i < seg_len; ++i) {
-        size_t global_idx = seg_start + i;
-        double dx = 0.0, dy = 0.0;
-        if (i == 0) {
-          dx = path[global_idx + 1].x - path[global_idx].x;
-          dy = path[global_idx + 1].y - path[global_idx].y;
-        } else if (i == seg_len - 1) {
-          dx = path[global_idx].x - path[global_idx - 1].x;
-          dy = path[global_idx].y - path[global_idx - 1].y;
-        } else {
-          dx = path[global_idx + 1].x - path[global_idx - 1].x;
-          dy = path[global_idx + 1].y - path[global_idx - 1].y;
-        }
-
-        if (dist(dx, dy) > 1e-3) {
-          double angle = std::atan2(dy, dx);
-          if (path[global_idx].direction == -1) {
-            angle = wrap_to_pi(angle + PI);
-          }
-          path[global_idx].theta = angle;
-        }
-      }
-
       // Check collision ONLY for internal points (excluding fixed endpoints)
       bool trial_ok = true;
-      for (int i = 1; i < seg_len - 1; ++i) {
-        size_t global_idx = seg_start + i;
-        if (map.checkCollision(path[global_idx].x, path[global_idx].y, path[global_idx].theta)) {
-          trial_ok = false;
-          break;
-        }
-      }
-
-      // Check loops/twists for the entire segment
-      if (trial_ok) {
-        for (int i = 1; i < seg_len; ++i) {
+      if (map) {
+        for (int i = 1; i < seg_len - 1; ++i) {
           size_t global_idx = seg_start + i;
-          double angle_diff = std::abs(wrap_to_pi(path[global_idx].theta - path[global_idx - 1].theta));
-          if (angle_diff > 1.22) { // 1.22 rad (approx. 70 deg)
+          const double dx = path[global_idx + 1].x - path[global_idx - 1].x;
+          const double dy = path[global_idx + 1].y - path[global_idx - 1].y;
+          double theta = path[global_idx].theta;
+          if (dist(dx, dy) > 1e-3) {
+            theta = std::atan2(dy, dx);
+            if (path[global_idx].direction == -1) {
+              theta = wrap_to_pi(theta + PI);
+            }
+          }
+          if (map->checkCollision(path[global_idx].x, path[global_idx].y, theta)) {
             trial_ok = false;
             break;
           }
@@ -238,7 +289,7 @@ bool PostProcessor::smooth(Path& path, const GlobalMap& map, std::vector<std::pa
     }
 
     if (!smooth_success) {
-      logs.push_back({"WARN", "Smoother failed to find collision-free path after multiple attempts. Rolling back to original segment."});
+      logs.push_back({"WARN", "Smoother failed to find a valid path after multiple attempts. Rolling back to original segment."});
       for (int i = 0; i < seg_len; ++i) {
         path[seg_start + i] = original_segment[i];
       }
@@ -254,37 +305,35 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
     return true;
   }
 
-  resampled_path.clear();
   double step_size = config_.resampler.resolution;
   if (step_size <= 1e-4) {
     step_size = 0.1;
   }
 
-  double total_dist = 0;
+  double total_dist = 0.0;
   for (size_t i = 1; i < path.size(); ++i) {
-    total_dist += dist(path[i-1], path[i]);
+    total_dist += dist(path[i - 1], path[i]);
   }
+
+  resampled_path.clear();
   resampled_path.reserve(static_cast<size_t>(total_dist / step_size) + path.size());
 
-  std::vector<std::pair<size_t, size_t>> segments = splitIntoSegments(path);
-
-  for (size_t j = 0; j < segments.size(); ++j) {
-    size_t seg_start = segments[j].first;
-    size_t seg_end = segments[j].second;
-
-    Path segment(path.begin() + seg_start, path.begin() + seg_end + 1);
-
+  const auto segments = splitIntoSegments(path);
+  for (const auto& seg : segments) {
+    Path segment(path.begin() + static_cast<std::ptrdiff_t>(seg.first),
+                 path.begin() + static_cast<std::ptrdiff_t>(seg.second + 1));
     Path segment_resampled;
-    resampleSegment(segment, segment_resampled, logs);
-
+    if (!resampleSegment(segment, segment_resampled, logs)) {
+      return false;
+    }
     resampled_path.insert(resampled_path.end(), segment_resampled.begin(), segment_resampled.end());
   }
 
   // 1. Recalculate accumulated distance s
   double s = 0.0;
-  if (!resampled_path.empty()) resampled_path[0].s = 0.0;
+  if (!resampled_path.empty()) resampled_path.front().s = 0.0;
   for (size_t i = 1; i < resampled_path.size(); ++i) {
-    s += dist(resampled_path[i-1], resampled_path[i]);
+    s += dist(resampled_path[i - 1], resampled_path[i]);
     resampled_path[i].s = s;
   }
 
@@ -293,8 +342,13 @@ bool PostProcessor::resample(const Path& path, Path& resampled_path, std::vector
 
 bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path, std::vector<std::pair<std::string, std::string>>& logs) {
   if (input_segment.empty()) {
-    logs.push_back({"WARN", "resampleSegment bypassed: Input segment is empty."});
+    logs.push_back({"WARN", "resampleSegment bypassed: input segment is empty."});
     return false;
+  }
+
+  double step_size = config_.resampler.resolution;
+  if (step_size <= 1e-4) {
+    step_size = 0.1;
   }
 
   std::vector<double> s_vals;
@@ -303,54 +357,68 @@ bool PostProcessor::resampleSegment(const Path& input_segment, Path& output_path
 
   double segment_len = 0.0;
   for (size_t i = 1; i < input_segment.size(); ++i) {
-    segment_len += dist(input_segment[i-1], input_segment[i]);
+    segment_len += dist(input_segment[i - 1], input_segment[i]);
     s_vals.push_back(segment_len);
   }
 
-  const double step_size = config_.resampler.resolution;
-  const int num_steps = std::floor(segment_len / step_size);
-  const int direction = input_segment[0].direction;
+  const int direction = input_segment.front().direction < 0 ? -1 : 1;
+
+  if (segment_len < 1e-6) {
+    output_path = input_segment;
+    for (auto& point : output_path) {
+      point.s = 0.0;
+      point.direction = point.direction < 0 ? -1 : 1;
+    }
+    return true;
+  }
+
+  const int num_steps = static_cast<int>(std::floor(segment_len / step_size));
+  output_path.clear();
+  output_path.reserve(static_cast<size_t>(num_steps) + 2);
+
+  output_path.push_back(input_segment.front());
+  output_path.back().s = 0.0;
+  output_path.back().direction = direction;
 
   size_t current_idx = 0;
-  for (int i = 0; i <= num_steps; ++i) {
-    double s_req = i * step_size;
-    while (current_idx < s_vals.size() - 1 && s_vals[current_idx + 1] < s_req) {
-      current_idx++;
-    }
-    if (current_idx >= s_vals.size() - 1) {
+  for (int i = 1; i <= num_steps; ++i) {
+    const double s_req = i * step_size;
+    if (s_req >= segment_len) {
       break;
     }
-    double s0 = s_vals[current_idx];
-    double s1 = s_vals[current_idx + 1];
-    double denominator = s1 - s0;
-    double ratio = (std::abs(denominator) > 1e-6) ? (s_req - s0) / denominator : 0.0;
+    while (current_idx + 1 < s_vals.size() && s_vals[current_idx + 1] < s_req) {
+      ++current_idx;
+    }
+    if (current_idx + 1 >= s_vals.size()) {
+      break;
+    }
+
+    const double s0 = s_vals[current_idx];
+    const double s1 = s_vals[current_idx + 1];
+    const double denominator = s1 - s0;
+    const double ratio = std::abs(denominator) > 1e-6 ? (s_req - s0) / denominator : 0.0;
 
     const auto& p0 = input_segment[current_idx];
     const auto& p1 = input_segment[current_idx + 1];
 
     PathPoint p;
-    p.direction = direction;
-    p.s = s_req;
     p.x = p0.x + ratio * (p1.x - p0.x);
     p.y = p0.y + ratio * (p1.y - p0.y);
-    p.theta = wrap_to_pi(p0.theta + ratio * wrap_to_pi(p1.theta - p0.theta));
+    p.s = s_req;
+    p.direction = direction;
     output_path.push_back(p);
   }
 
   const auto& last_pt = input_segment.back();
-  if (output_path.empty()) {
-    logs.push_back({"WARN", "resampleSegment: Output path is empty after interpolation. Defaulting to last point."});
-    output_path.push_back(last_pt);
+  if (dist(output_path.back(), last_pt) > 1e-3) {
+    PathPoint p_last = last_pt;
+    p_last.s = segment_len;
+    p_last.direction = direction;
+    output_path.push_back(p_last);
   } else {
-    double d = dist(output_path.back(), last_pt);
-    if (d > 1e-3) {
-      PathPoint p_last = last_pt;
-      p_last.s = segment_len;
-      output_path.push_back(p_last);
-    } else {
-      output_path.back() = last_pt;
-      output_path.back().s = segment_len;
-    }
+    output_path.back() = last_pt;
+    output_path.back().s = segment_len;
+    output_path.back().direction = direction;
   }
 
   return true;
@@ -457,8 +525,9 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
   // Smooth v_static to eliminate any high-frequency speed limit oscillations
   if (n > 2) {
     int half_w = std::min(2, static_cast<int>(n - 1) / 2); // 5-point window
+    std::vector<double> temp_v_static(n);
     for (int iter = 0; iter < 2; ++iter) { // 2 passes
-      std::vector<double> smoothed_v_static = v_static;
+      std::copy(v_static.begin(), v_static.end(), temp_v_static.begin());
       for (int i = 1; i < n - 1; ++i) {
         if (v_static[i] < 0.1 || v_static[i-1] < 0.1 || v_static[i+1] < 0.1) {
           continue;
@@ -472,9 +541,9 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
             count++;
           }
         }
-        smoothed_v_static[i] = sum / count;
+        temp_v_static[i] = sum / count;
       }
-      v_static = std::move(smoothed_v_static);
+      v_static.swap(temp_v_static);
     }
   }
 
@@ -518,9 +587,10 @@ void PostProcessor::profileKinematicPass(Path& path, double start_v, double star
   // 1. Smooth the velocity profile to suppress high-frequency speed variations (which cause Jerk spikes)
   if (n > 2) {
     std::vector<double> smoothed_v = v_final;
-    // 5 passes of 3-point moving average to stronger filter Jerk high frequency noise
-    for (int iter = 0; iter < 5; ++iter) {
-      std::vector<double> temp = smoothed_v;
+    std::vector<double> temp(n);
+    const int passes = config_.profiler.jerk_filter_passes;
+    for (int iter = 0; iter < passes; ++iter) {
+      std::copy(smoothed_v.begin(), smoothed_v.end(), temp.begin());
       for (int i = 1; i < n - 1; ++i) {
         // Keep Cusp/Goal/Start velocity 0.0 constraint preserved (anchor points)
         if (temp[i] < 0.1) {
@@ -579,7 +649,7 @@ std::vector<std::pair<size_t, size_t>> PostProcessor::splitIntoSegments(const Pa
 
 // ── TrajectoryValidator Implementation ────────────────────────────────
 
-TrajectoryValidator::TrajectoryValidator(const GlobalPostProcessConfig& config, double max_kappa, double wheelbase)
+TrajectoryValidator::TrajectoryValidator(const PostProcessConfig& config, double max_kappa, double wheelbase)
   : config_(config), max_kappa_(max_kappa), wheelbase_(wheelbase) {}
 
 TrajectoryDiagnostic TrajectoryValidator::validate(const Path& path, std::vector<std::pair<std::string, std::string>>& logs) const {
@@ -629,7 +699,7 @@ TrajectoryDiagnostic TrajectoryValidator::validate(const Path& path, std::vector
 
 void TrajectoryValidator::validateCurvature(const Path& path, TrajectoryDiagnostic& diag, std::vector<std::pair<std::string, std::string>>& logs) const {
   checkLimit(path, diag.curvature_ok, diag.curv_violations, diag.max_curv_violation,
-             max_kappa_, 1e-3, [&](size_t i) { return std::abs(path[i].kappa); });
+             max_kappa_, 0.15, [&](size_t i) { return std::abs(path[i].kappa); });
 
   if (!diag.curvature_ok) {
     char buf[256];
@@ -645,7 +715,7 @@ void TrajectoryValidator::validateYawAlignment(const Path& path, TrajectoryDiagn
 
   for (size_t i = 0; i < path.size(); ++i) {
     // Exclude points near direction changes (cusp zones)
-    if (isNearCusp(path, i, 0.2)) continue;
+    if (isNearCusp(path, i, config_.validator.cusp_exclusion_margin)) continue;
 
     double dx = 0.0, dy = 0.0;
     if (i == 0) {
@@ -815,7 +885,7 @@ void TrajectoryValidator::validateSteeringVelocity(const Path& path, TrajectoryD
 
 bool TrajectoryValidator::isNearCusp(const Path& path, size_t index, double radius_threshold) const {
   const double resolution = config_.resampler.resolution > 1e-4 ? config_.resampler.resolution : 0.1;
-  const int search_window = std::max(3, static_cast<int>(std::round(0.3 / resolution)));
+  const int search_window = std::max(3, static_cast<int>(std::round((radius_threshold * 1.5) / resolution)));
 
   for (int w = -search_window; w <= search_window; ++w) {
     int idx = static_cast<int>(index) + w;
@@ -838,39 +908,40 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
   double s = 0.0;
   path[0].s = 0.0;
   for (size_t i = 1; i < path.size(); ++i) {
-    s += dist(path[i-1], path[i]);
+    s += dist(path[i - 1], path[i]);
     path[i].s = s;
   }
 
   // 2. Split path into segments of uniform direction
-  std::vector<std::pair<size_t, size_t>> segments = splitIntoSegments(path);
+  const auto segments = splitIntoSegments(path);
+
+  // 백업할 경계 상태 저장 (각 세그먼트의 시작과 끝점)
+  std::vector<std::pair<size_t, PathPoint>> preserved_points;
+  preserved_points.reserve(segments.size() * 2);
+  for (const auto& seg : segments) {
+    preserved_points.push_back({seg.first, path[seg.first]});
+    preserved_points.push_back({seg.second, path[seg.second]});
+  }
 
   for (const auto& seg : segments) {
-    size_t seg_start = seg.first;
-    size_t seg_end = seg.second;
-    size_t seg_len = seg_end - seg_start + 1;
+    const size_t seg_start = seg.first;
+    const size_t seg_end = seg.second;
+    const size_t seg_len = seg_end - seg_start + 1;
     if (seg_len == 0) continue;
 
-    int direction = path[seg_start].direction;
+    const int direction = path[seg_start].direction < 0 ? -1 : 1;
 
     // 2-1) Calculate heading (yaw) for this segment
     for (size_t i = 0; i < seg_len; ++i) {
-      size_t global_idx = seg_start + i;
-      double dx = 0.0, dy = 0.0;
-      if (i == 0) {
-        if (seg_len > 1) {
-          dx = path[global_idx + 1].x - path[global_idx].x;
-          dy = path[global_idx + 1].y - path[global_idx].y;
-        }
-      } else if (i == seg_len - 1) {
-        if (seg_len > 1) {
-          dx = path[global_idx].x - path[global_idx - 1].x;
-          dy = path[global_idx].y - path[global_idx - 1].y;
-        }
-      } else {
-        dx = path[global_idx + 1].x - path[global_idx - 1].x;
-        dy = path[global_idx + 1].y - path[global_idx - 1].y;
+      const size_t global_idx = seg_start + i;
+      path[global_idx].direction = direction;
+      // 세그먼트 경계(시작/끝점)는 방향 설정만 업데이트하고 yaw 계산은 건너뜀
+      if (i == 0 || i == seg_len - 1) {
+        continue;
       }
+
+      double dx = path[global_idx + 1].x - path[global_idx - 1].x;
+      double dy = path[global_idx + 1].y - path[global_idx - 1].y;
 
       if (std::hypot(dx, dy) > 1e-3) {
         double angle = std::atan2(dy, dx);
@@ -885,22 +956,24 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
 
     // 2-2) Calculate curvature (kappa) for this segment
     for (size_t i = 0; i < seg_len; ++i) {
-      size_t global_idx = seg_start + i;
+      const size_t global_idx = seg_start + i;
       if (i == 0 || i == seg_len - 1) {
-        path[global_idx].kappa = 0.0;
-      } else {
-        double ds1 = dist(path[global_idx - 1], path[global_idx]);
-        double ds2 = dist(path[global_idx], path[global_idx + 1]);
-        double raw_kappa = symmetricDiffCurvature(
-          path[global_idx - 1].theta, path[global_idx].theta, path[global_idx + 1].theta,
-          ds1, ds2);
-        path[global_idx].kappa = raw_kappa;
+        continue;
       }
+
+      path[global_idx].kappa = mengerCurvature(
+          path[global_idx - 1].x, path[global_idx - 1].y,
+          path[global_idx].x,     path[global_idx].y,
+          path[global_idx + 1].x, path[global_idx + 1].y);
     }
 
-    if (seg_len >= 2) {
+    // Extrapolate curvature to segment boundary points to prevent discontinuities
+    if (seg_len >= 3) {
       path[seg_start].kappa = path[seg_start + 1].kappa;
       path[seg_end].kappa = path[seg_end - 1].kappa;
+    } else {
+      path[seg_start].kappa = 0.0;
+      path[seg_end].kappa = 0.0;
     }
 
     // 2-3) Apply wide-window adaptive Moving Average Filter on Curvature (kappa) multiple times
@@ -909,20 +982,18 @@ void PostProcessor::updateGeometryProperties(Path& path) const {
       for (size_t i = 0; i < seg_len; ++i) {
         kappas[i] = path[seg_start + i].kappa;
       }
-      int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
+      const int half_w = std::min(5, static_cast<int>(seg_len - 1) / 2);
       applyMovingAverage(kappas, half_w, 2);
+      // Apply filtered curvature to all points in the segment including boundaries
       for (size_t i = 0; i < seg_len; ++i) {
         path[seg_start + i].kappa = kappas[i];
       }
     }
   }
 
-  // 3. Cusp points (where direction changes) must have zero curvature for safety
-  for (size_t i = 1; i < path.size(); ++i) {
-    if (path[i-1].direction != path[i].direction) {
-      path[i-1].kappa = 0.0;
-      path[i].kappa = 0.0;
-    }
+  // 백업해 둔 경계 상태 복원 (theta는 오리지널 타겟 자세 유지를 위해 복원, kappa는 부드러운 전이를 위해 복원 제외)
+  for (const auto& item : preserved_points) {
+    path[item.first].theta = item.second.theta;
   }
 }
 

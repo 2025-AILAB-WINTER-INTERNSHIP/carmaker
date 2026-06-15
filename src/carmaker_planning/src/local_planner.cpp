@@ -1,0 +1,334 @@
+/**
+ * @file local_planner.cpp
+ * @brief Implementation of SegmentManager and QuinticPathFitter.
+ *
+ * RULE §1 — Pure C++ Core: No ROS headers included.
+ * RULE §3 — Static Eigen Matrices: All matrix operations use fixed-size types.
+ */
+
+#include "carmaker_planning/local_planner.h"
+#include "carmaker_planning/math.h"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+
+namespace carmaker_planning {
+
+// ── SegmentManager ────────────────────────────────────────────────────────────
+
+void SegmentManager::setGlobalPath(const Path& path) {
+  global_path_ = path;
+  segments_    = split(path);
+  active_idx_  = 0;
+  finished_    = segments_.empty();
+}
+
+std::vector<SegmentManager::Segment> SegmentManager::split(const Path& path) {
+  std::vector<Segment> segs;
+  if (path.empty()) return segs;
+
+  size_t start = 0;
+  for (size_t i = 1; i < path.size(); ++i) {
+    if (path[i].direction != path[start].direction) {
+      segs.push_back({start, i - 1, path[start].direction});
+      start = i;
+    }
+  }
+  segs.push_back({start, path.size() - 1, path[start].direction});
+  return segs;
+}
+
+const SegmentManager::Segment* SegmentManager::activeSegment() const {
+  if (finished_ || active_idx_ >= segments_.size()) return nullptr;
+  return &segments_[active_idx_];
+}
+
+const PathPoint* SegmentManager::activeEndpoint() const {
+  const Segment* seg = activeSegment();
+  if (!seg) return nullptr;
+  return &global_path_[seg->end_idx];
+}
+
+Path SegmentManager::activeSegmentPath() const {
+  const Segment* seg = activeSegment();
+  if (!seg) return {};
+  return Path(global_path_.begin() + static_cast<std::ptrdiff_t>(seg->start_idx),
+              global_path_.begin() + static_cast<std::ptrdiff_t>(seg->end_idx + 1));
+}
+
+bool SegmentManager::advanceToNextSegment() {
+  if (finished_) return true;
+  ++active_idx_;
+  finished_ = (active_idx_ >= segments_.size());
+  return finished_;
+}
+
+// ── QuinticPathFitter ─────────────────────────────────────────────────────────
+
+Eigen::Matrix<double,6,1> QuinticPathFitter::solveAxis(
+    double p0, double dp0, double ddp0,
+    double pL, double dpL, double ddpL, double L) {
+  // Boundary conditions:
+  //   f(0)   = p0,   f'(0)   = dp0,   f''(0)   = ddp0
+  //   f(L)   = pL,   f'(L)   = dpL,   f''(L)   = ddpL
+  //
+  // f(s) = a0 + a1*s + a2*s² + a3*s³ + a4*s⁴ + a5*s⁵
+  //
+  // s=0 conditions fix a0, a1, a2 directly:
+  //   a0 = p0,  a1 = dp0,  a2 = ddp0/2
+  //
+  // s=L conditions give a 3×3 system for [a3, a4, a5].
+
+  const double L2 = L*L, L3 = L2*L, L4 = L3*L, L5 = L4*L;
+  const double a0 = p0, a1 = dp0, a2 = 0.5 * ddp0;
+
+  // Residuals at s = L
+  const double r0 = pL   - (a0 + a1*L + a2*L2);
+  const double r1 = dpL  - (a1 + 2.0*a2*L);
+  const double r2 = ddpL - (2.0*a2);
+
+  // Fixed-size 3×3 system (RULE §3 — no dynamic MatrixXd)
+  //  [L3    L4     L5  ] [a3]   [r0]
+  //  [3L2   4L3    5L4 ] [a4] = [r1]
+  //  [6L    12L2   20L3] [a5]   [r2]
+  Eigen::Matrix3d A;
+  A << L3,      L4,       L5,
+       3.0*L2,  4.0*L3,   5.0*L4,
+       6.0*L,   12.0*L2,  20.0*L3;
+
+  const Eigen::Vector3d x = A.lu().solve(Eigen::Vector3d(r0, r1, r2));
+
+  Eigen::Matrix<double,6,1> coeff;
+  coeff << a0, a1, a2, x(0), x(1), x(2);
+  return coeff;
+}
+
+// Evaluate polynomial at arc-length s using Horner's method (numerically stable).
+double QuinticPathFitter::eval(const Eigen::Matrix<double,6,1>& c, double s) {
+  return c(0) + s*(c(1) + s*(c(2) + s*(c(3) + s*(c(4) + s*c(5)))));
+}
+
+// First derivative: f'(s)
+static inline double deriv1(const Eigen::Matrix<double,6,1>& c, double s) {
+  return c(1) + s*(2.0*c(2) + s*(3.0*c(3) + s*(4.0*c(4) + s*5.0*c(5))));
+}
+
+// Second derivative: f''(s)
+static inline double deriv2(const Eigen::Matrix<double,6,1>& c, double s) {
+  return 2.0*c(2) + s*(6.0*c(3) + s*(12.0*c(4) + s*20.0*c(5)));
+}
+
+double QuinticPathFitter::curvature(const Eigen::Matrix<double,6,1>& cx,
+                                    const Eigen::Matrix<double,6,1>& cy, double s) {
+  const double xp  = deriv1(cx, s), yp  = deriv1(cy, s);
+  const double xpp = deriv2(cx, s), ypp = deriv2(cy, s);
+  // κ = (x'y'' - y'x'') / (x'² + y'²)^(3/2)
+  const double speed_sq = xp*xp + yp*yp;
+  const double denom    = speed_sq * std::sqrt(speed_sq);  // avoids std::pow
+  return (denom > 1e-9) ? (xp*ypp - yp*xpp) / denom : 0.0;
+}
+
+Path QuinticPathFitter::fit(const State& ego, double start_kappa,
+                             const PathPoint& target, double resolution) const {
+  const double L = dist(ego.x, ego.y, target.x, target.y);
+  if (L < 1e-3) {
+    return makeShortDistanceFallback(ego, target, L);
+  }
+
+  const int direction = target.direction < 0 ? -1 : 1;
+  const double start_tangent = (direction == 1) ? ego.theta : wrap_to_pi(ego.theta + PI);
+  const double target_tangent = (direction == 1) ? target.theta : wrap_to_pi(target.theta + PI);
+  const double cos0 = std::cos(start_tangent), sin0 = std::sin(start_tangent);
+  const double cosF = std::cos(target_tangent), sinF = std::sin(target_tangent);
+
+  // Second derivatives from curvature (unit-speed parametrization):
+  //   x'' = -κ sinθ,   y'' = κ cosθ
+  const auto cx = solveAxis(ego.x,   cos0, -start_kappa    * sin0,
+                             target.x, cosF, -target.kappa * sinF, L);
+  const auto cy = solveAxis(ego.y,   sin0,  start_kappa    * cos0,
+                             target.y, sinF,  target.kappa * cosF, L);
+
+  // Uniform arc-length sampling:
+  //   n_steps = ceil(L / resolution)
+  const int    n_steps  = std::max(1, static_cast<int>(std::ceil(L / resolution)));
+
+  // 1. Density-over-sampled evaluation to map pseudo-parameter s to geometric arc-length
+  const int M = n_steps * 3;
+  const double ds_temp = L / M;
+  std::vector<double> s_values(M + 1);
+  std::vector<double> S_geom(M + 1);
+  std::vector<double> x_temp(M + 1);
+  std::vector<double> y_temp(M + 1);
+
+  for (int i = 0; i <= M; ++i) {
+    s_values[i] = i * ds_temp;
+    x_temp[i] = eval(cx, s_values[i]);
+    y_temp[i] = eval(cy, s_values[i]);
+  }
+
+  S_geom[0] = 0.0;
+  for (int i = 1; i <= M; ++i) {
+    const double dx = x_temp[i] - x_temp[i-1];
+    const double dy = y_temp[i] - y_temp[i-1];
+    S_geom[i] = S_geom[i-1] + std::hypot(dx, dy);
+  }
+
+  const double S_total = S_geom.back();
+  const double dS_final = S_total / n_steps;
+
+  Path local_path;
+  local_path.reserve(static_cast<size_t>(n_steps) + 1);
+
+  size_t k = 0;
+  for (int j = 0; j <= n_steps; ++j) {
+    const double S_target = j * dS_final;
+    
+    // Find segment [k, k+1] enclosing S_target
+    while (k + 1 < S_geom.size() && S_geom[k + 1] < S_target) {
+      ++k;
+    }
+    
+    double s_target = L;
+    if (k + 1 < S_geom.size()) {
+      const double denominator = S_geom[k + 1] - S_geom[k];
+      const double ratio = (denominator > 1e-6) ? (S_target - S_geom[k]) / denominator : 0.0;
+      s_target = s_values[k] + ratio * (s_values[k + 1] - s_values[k]);
+    }
+
+    PathPoint pt;
+    pt.x         = eval(cx, s_target);
+    pt.y         = eval(cy, s_target);
+    pt.s         = S_target;
+    pt.direction = direction;
+
+    const double xp = deriv1(cx, s_target);
+    const double yp = deriv1(cy, s_target);
+    pt.theta = (direction == 1) ? std::atan2(yp, xp)
+                                : wrap_to_pi(std::atan2(yp, xp) + PI);
+    pt.kappa = curvature(cx, cy, s_target);
+    local_path.push_back(pt);
+  }
+  return local_path;
+}
+
+Path QuinticPathFitter::makeShortDistanceFallback(
+    const State& ego,
+    const PathPoint& target,
+    double length) {
+  const int direction = target.direction < 0 ? -1 : 1;
+
+  Path path;
+  path.reserve(2);
+
+  PathPoint start;
+  start.x = ego.x;
+  start.y = ego.y;
+  start.theta = ego.theta;
+  start.kappa = 0.0;
+  start.s = 0.0;
+  start.direction = direction;
+  path.push_back(start);
+
+  PathPoint end;
+  end.x = target.x;
+  end.y = target.y;
+  end.theta = target.theta;
+  end.kappa = target.kappa;
+  end.s = std::max(0.0, length);
+  end.direction = direction;
+  path.push_back(end);
+
+  return path;
+}
+
+// ── LocalTrajectoryPlanner ───────────────────────────────────────────────────
+
+void LocalTrajectoryPlanner::configure(
+    const PostProcessConfig& post_process_config,
+    double wheelbase,
+    double min_turning_radius) {
+  post_process_config_ = post_process_config;
+  wheelbase_ = wheelbase > 0.1 ? wheelbase : 2.97;
+  min_turning_radius_ = min_turning_radius > 0.1 ? min_turning_radius : 5.2;
+  post_processor_ = std::make_unique<PostProcessor>(post_process_config_,
+                                                    wheelbase_,
+                                                    min_turning_radius_);
+  configured_ = true;
+}
+
+LocalPlanningResult LocalTrajectoryPlanner::planToEndpoint(
+    const PlanRequest& request) const {
+  using Clock = std::chrono::steady_clock;
+  const auto total_start = Clock::now();
+
+  LocalPlanningResult local_result;
+  if (!configured_ || !post_processor_) {
+    local_result.error("LocalTrajectoryPlanner: post processor is not configured.");
+    local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+    return local_result;
+  }
+
+  if (!validateRequest(request, local_result)) {
+    local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+    return local_result;
+  }
+
+  Path raw_path = fitter_.fit(request.ego,
+                              request.start_kappa,
+                              request.target,
+                              post_process_config_.resampler.resolution);
+  if (raw_path.empty()) {
+    local_result.warn("LocalTrajectoryPlanner: quintic fit returned an empty path.");
+    local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+    return local_result;
+  }
+
+  // 기하 결합 (Stitching): 다항식 피팅 경로 끝에 잔여 글로벌 경로를 단순 결합 (x,y 정보 위주로 후처리에서 재계산됨)
+  if (!request.stitching_path.empty()) {
+    raw_path.insert(raw_path.end(), request.stitching_path.begin(), request.stitching_path.end());
+  }
+
+  local_result.path = std::move(raw_path);
+
+  const bool ok = post_processor_->process(local_result,
+                                           std::abs(request.start_vel),
+                                           /*request_smoothing=*/true,
+                                           /*request_resampling=*/true,
+                                           /*request_profiling=*/true);
+  local_result.total_time = std::chrono::duration<double>(Clock::now() - total_start).count();
+  if (!ok) {
+    return local_result;
+  }
+
+  local_result.success = true;
+  return local_result;
+}
+
+bool LocalTrajectoryPlanner::validateRequest(
+    const PlanRequest& request,
+    LocalPlanningResult& result) const {
+  const auto finite = [](double value) { return std::isfinite(value); };
+  if (!finite(request.ego.x) || !finite(request.ego.y) ||
+      !finite(request.ego.theta) || !finite(request.ego.v) ||
+      !finite(request.start_kappa) ||
+      !finite(request.target.x) || !finite(request.target.y) ||
+      !finite(request.target.theta) || !finite(request.target.kappa) ||
+      !finite(request.start_vel)) {
+    result.error("LocalTrajectoryPlanner: request contains non-finite values.");
+    return false;
+  }
+
+  if (post_process_config_.resampler.resolution <= 1e-4) {
+    result.error("LocalTrajectoryPlanner: post-process resampling resolution must be positive.");
+    return false;
+  }
+
+  if (request.target.direction == 0) {
+    result.error("LocalTrajectoryPlanner: target direction must be non-zero.");
+    return false;
+  }
+
+  return true;
+}
+
+} // namespace carmaker_planning

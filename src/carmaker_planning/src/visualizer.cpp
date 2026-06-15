@@ -11,22 +11,28 @@
 
 namespace carmaker_planning {
 
-Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
-  ros::NodeHandle pnh("~");
+Visualizer::Visualizer(const ros::NodeHandle& advertise_nh,
+                       const ros::NodeHandle& param_nh,
+                       bool publish_tree)
+    : advertise_nh_(advertise_nh), param_nh_(param_nh), publish_tree_(publish_tree) {
+  path_topic_       = param_nh_.param("topics/publish/debug/path",      std::string("/planning/debug/global/path"));
+  velocity_topic_   = param_nh_.param("topics/publish/debug/velocity",  std::string("/planning/debug/global/velocity"));
+  pose_array_topic_ = param_nh_.param("topics/publish/debug/pose",      std::string("/planning/debug/global/pose"));
+  curvature_topic_  = param_nh_.param("topics/publish/debug/curvature", std::string("/planning/debug/global/curvature"));
+  if (publish_tree_) {
+    tree_topic_ = param_nh_.param("topics/publish/debug/tree", std::string("/planning/debug/global/tree"));
+  }
 
-  path_topic_ = pnh.param("topics/publish/debug/path", std::string("/planning/debug/global_path"));
-  tree_topic_ = pnh.param("topics/publish/debug/tree", std::string("/planning/debug/search_tree"));
-  velocity_topic_ = pnh.param("topics/publish/debug/velocity", std::string("/planning/debug/velocity_profile"));
-  pose_array_topic_ = pnh.param("topics/publish/debug/pose", std::string("/planning/debug/global_pose"));
-  curvature_topic_ = pnh.param("topics/publish/debug/curvature", std::string("/planning/debug/curvature_path"));
+  path_pub_ = advertise_nh_.advertise<nav_msgs::Path>(path_topic_, 1, true);
+  velocity_pub_ = advertise_nh_.advertise<visualization_msgs::MarkerArray>(velocity_topic_, 1, true);
+  pose_array_pub_ = advertise_nh_.advertise<geometry_msgs::PoseArray>(pose_array_topic_, 1, true);
+  curvature_pub_ = advertise_nh_.advertise<visualization_msgs::Marker>(curvature_topic_, 1, true);
+  if (publish_tree_) {
+    tree_pub_ = advertise_nh_.advertise<visualization_msgs::MarkerArray>(tree_topic_, 1, true);
+  }
 
-  path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 1, true);
-  tree_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(tree_topic_, 1, true);
-  velocity_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(velocity_topic_, 1, true);
-  pose_array_pub_ = nh_.advertise<geometry_msgs::PoseArray>(pose_array_topic_, 1, true);
-  curvature_pub_ = nh_.advertise<visualization_msgs::Marker>(curvature_topic_, 1, true);
-
-  pnh.param("global_post_processing/visualization/arrow_spacing_meters", arrow_spacing_meters_, 0.2);
+  param_nh_.param("global_post_processing/visualization/arrow_spacing_meters", arrow_spacing_meters_, 0.2);
+  param_nh_.param("local_post_processing/visualization/arrow_spacing_meters", arrow_spacing_meters_, arrow_spacing_meters_);
 }
 
 void Visualizer::visualize(const Path& path,
@@ -42,7 +48,9 @@ void Visualizer::visualize(const Path& path,
   velocity_pub_.publish(createVelocityMarkers(path, frame_id, now));
   pose_array_pub_.publish(createPoseArrayMsg(path, frame_id, now));
   curvature_pub_.publish(createCurvatureMarker(path, frame_id, min_turning_radius, now));
-  tree_pub_.publish(createTreeMarkers(tree, branches, frame_id, now));
+  if (publish_tree_) {
+    tree_pub_.publish(createTreeMarkers(tree, branches, frame_id, now));
+  }
 }
 
 nav_msgs::Path Visualizer::createPathMsg(const Path& path, const std::string& frame_id, const ros::Time& stamp) {
@@ -132,8 +140,9 @@ geometry_msgs::PoseArray Visualizer::createPoseArrayMsg(const Path& path, const 
     bool is_last = (i == path.size() - 1);
     bool is_cusp_start = (i > 0 && path[i].direction != path[i-1].direction);
     bool is_cusp_end = (i < path.size() - 1 && path[i].direction != path[i+1].direction);
+    bool is_original_endpoint = (i > 0 && std::abs(path[i].v) <= 1e-6 && std::abs(path[i-1].v) > 1e-6);
 
-    if (is_first || is_last || is_cusp_start || is_cusp_end || (pt.s - last_s >= arrow_spacing_meters_)) {
+    if (is_first || is_last || is_cusp_start || is_cusp_end || is_original_endpoint || (pt.s - last_s >= arrow_spacing_meters_)) {
       geometry_msgs::Pose pose;
 
       pose.position.x = pt.x;
@@ -258,35 +267,50 @@ visualization_msgs::MarkerArray Visualizer::createTreeMarkers(const std::vector<
   return markers;
 }
 
-void Visualizer::clear() {
+void Visualizer::clear(const std::string& frame_id) {
+  const ros::Time now = ros::Time::now();
+
+  nav_msgs::Path clear_path;
+  clear_path.header.frame_id = frame_id;
+  clear_path.header.stamp = now;
+  path_pub_.publish(clear_path);
+
   visualization_msgs::MarkerArray clear_msg;
 
   visualization_msgs::Marker clear_nodes;
+  clear_nodes.header.frame_id = frame_id;
+  clear_nodes.header.stamp = now;
   clear_nodes.action = visualization_msgs::Marker::DELETEALL;
   clear_nodes.ns = "nodes";
   clear_msg.markers.push_back(clear_nodes);
 
   visualization_msgs::Marker clear_branches;
+  clear_branches.header.frame_id = frame_id;
+  clear_branches.header.stamp = now;
   clear_branches.action = visualization_msgs::Marker::DELETEALL;
   clear_branches.ns = "branches";
   clear_msg.markers.push_back(clear_branches);
 
   visualization_msgs::Marker clear_vel;
+  clear_vel.header.frame_id = frame_id;
+  clear_vel.header.stamp = now;
   clear_vel.action = visualization_msgs::Marker::DELETEALL;
   clear_vel.ns = "velocity";
   clear_msg.markers.push_back(clear_vel);
 
-  tree_pub_.publish(clear_msg);
+  if (publish_tree_) {
+    tree_pub_.publish(clear_msg);
+  }
   velocity_pub_.publish(clear_msg);
 
   geometry_msgs::PoseArray clear_pose_array;
-  clear_pose_array.header.frame_id = "Fr0";
-  clear_pose_array.header.stamp = ros::Time::now();
+  clear_pose_array.header.frame_id = frame_id;
+  clear_pose_array.header.stamp = now;
   pose_array_pub_.publish(clear_pose_array);
 
   visualization_msgs::Marker clear_curv;
-  clear_curv.header.frame_id = "Fr0";
-  clear_curv.header.stamp = ros::Time::now();
+  clear_curv.header.frame_id = frame_id;
+  clear_curv.header.stamp = now;
   clear_curv.ns = "curvature";
   clear_curv.id = 0;
   clear_curv.action = visualization_msgs::Marker::DELETEALL;

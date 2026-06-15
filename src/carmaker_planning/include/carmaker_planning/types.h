@@ -10,6 +10,7 @@
 #include <cmath>
 #include <string>
 #include <limits>
+#include <utility>
 #include <ros/ros.h>
 #include <geometry_msgs/Quaternion.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -23,8 +24,6 @@ struct State {
   double y = 0.0;
   double theta = 0.0;
   double v = 0.0;
-  double a = 0.0;
-  double theta_rate = 0.0;
 
   State() = default;
   State(double _x, double _y, double _theta) : x(_x), y(_y), theta(_theta) {}
@@ -41,7 +40,6 @@ struct PathPoint {
   double s = 0.0;
   int direction = 1;  // 1: forward, -1: reverse
   double t = 0.0;
-  double d_lat = 0.0;
 
   PathPoint() = default;
   PathPoint(double _x, double _y, double _theta) : x(_x), y(_y), theta(_theta) {}
@@ -74,19 +72,25 @@ struct VehicleSpec {
   std::vector<CollisionCircle> collision_circles;
 };
 
-enum class DubinsPathType { LSL=0, LSR, RSL, RSR, RLR, LRL };
-
-struct DubinsPath {
-  DubinsPathType type;
-  double t, p, q, total_length, rho;
-  std::vector<PathPoint> points;
-};
-
 enum class RSPathType {
-  LfSfLf, LfSfRf, RfSfLf, RfSfRf,
-  LfRbLf, RfLbRf,
-  LfRbLb, RfLbRb,
-  LbSbRb, RbSbLb, LbSbLb, RbSbRb,
+  kPath0,
+  kPath1,
+  kPath2,
+  kPath3,
+  kPath4,
+  kPath5,
+  kPath6,
+  kPath7,
+  kPath8,
+  kPath9,
+  kPath10,
+  kPath11,
+  kPath12,
+  kPath13,
+  kPath14,
+  kPath15,
+  kPath16,
+  kPath17,
   UNKNOWN
 };
 
@@ -210,6 +214,47 @@ struct GlobalPlanningDiagnostic {
   const char* statusString() const { return carmaker_planning::statusString(status); }
 };
 
+struct LocalPlanningResult {
+  bool success = false;
+  Path path;
+  double smoothing_time = -1.0;
+  double resampling_time = -1.0;
+  double profiling_time = -1.0;
+  double total_time = -1.0;
+  std::vector<std::pair<std::string, std::string>> logs;
+  TrajectoryDiagnostic diagnostic;
+
+  void addLog(const std::string& level, const std::string& msg) {
+    logs.push_back({level, msg});
+  }
+  void warn(const std::string& msg) { addLog("WARN", msg); }
+  void info(const std::string& msg) { addLog("INFO", msg); }
+  void error(const std::string& msg) { addLog("ERROR", msg); }
+  void debug(const std::string& msg) { addLog("DEBUG", msg); }
+};
+
+struct LocalPlanningDiagnostic {
+  bool success = false;
+  double total_time = -1.0;
+  double smoothing_time = -1.0;
+  double resampling_time = -1.0;
+  double profiling_time = -1.0;
+  double path_length = -1.0;
+  size_t path_size = 0;
+  TrajectoryDiagnostic diagnostic;
+
+  LocalPlanningDiagnostic() = default;
+  explicit LocalPlanningDiagnostic(const LocalPlanningResult& res)
+    : success(res.success),
+      total_time(res.total_time),
+      smoothing_time(res.smoothing_time),
+      resampling_time(res.resampling_time),
+      profiling_time(res.profiling_time),
+      path_length(res.path.empty() ? -1.0 : res.path.back().s),
+      path_size(res.path.size()),
+      diagnostic(res.diagnostic) {}
+};
+
 struct GlobalGridIndex { int x=0, y=0, theta=0; };
 
 struct GlobalNode3D {
@@ -262,22 +307,29 @@ struct GlobalPlannerConfig {
   struct Weights { double turn, reverse, change_dir, heuristic; } weights;
 };
 
-struct GlobalPostProcessConfig {
+struct PostProcessConfig {
   struct Smoother {
+    bool enabled = true;
+    bool collision_check_enabled = true;
     double weight_data, weight_smooth, tolerance;
     int max_iterations;
   } smoother;
   struct Resampler {
+    bool enabled = true;
     double resolution;
   } resampler;
   struct Validator {
+    bool enabled = true;
     double time_tolerance_ms;
     double yaw_tolerance_rad;
+    double cusp_exclusion_margin = 0.3;
   } validator;
   struct Profiler {
+    bool enabled = true;
     double max_vel, max_accel, max_decel, max_jerk, max_steer_vel, max_lat_acc, goal_vel;
     double gear_shift_duration;
     double min_velocity_denominator;
+    int jerk_filter_passes = 5;
   } profiler;
   struct Visualization {
     double arrow_spacing_meters;
@@ -288,8 +340,51 @@ struct GlobalMainConfig {
   VehicleSpec vehicle;
   GlobalCostmapConfig global_costmap;
   GlobalPlannerConfig planner;
-  GlobalPostProcessConfig post_process;
+  PostProcessConfig post_process;
 };
+
+struct LocalPlannerConfig {
+  // Arrival detection
+  double endpoint_xy_tol  = 0.3;  ///< [m] endpoint XY tolerance
+  double endpoint_yaw_tol = 0.2;  ///< [rad] endpoint yaw tolerance
+  double segment_transition_xy_tol = 0.3;  ///< [m] non-final cusp transition tolerance
+  double segment_transition_yaw_tol = 0.2; ///< [rad] non-final cusp transition tolerance
+  double stop_vel_tol = 0.05;     ///< [m/s] velocity threshold before segment transition
+
+  // Replanning
+  double replanning_rate_hz        = 10.0; ///< [Hz]  local path refresh rate
+  double min_creep_speed = 0.1;            ///< [m/s] minimum tracking speed near endpoint
+  double creep_distance = 0.5;             ///< [m] distance window for endpoint creep
+  double trajectory_lock_distance = 0.5;   ///< [m] lock local trajectory when distance to endpoint is below this
+
+  PostProcessConfig post_process;
+};
+
+inline void loadPostProcessConfig(const ros::NodeHandle& nh,
+                                  PostProcessConfig& cfg,
+                                  const std::string& ns);
+inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg);
+inline void loadLocalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg);
+
+inline void loadLocalPlannerConfig(const ros::NodeHandle& nh, LocalPlannerConfig& cfg,
+                                   const std::string& ns = "local_planner") {
+  nh.param(ns + "/arrival/endpoint_xy_tol",  cfg.endpoint_xy_tol,  0.3);
+  nh.param(ns + "/arrival/endpoint_yaw_tol", cfg.endpoint_yaw_tol, 0.2);
+  nh.param(ns + "/arrival/segment_transition_xy_tol",
+           cfg.segment_transition_xy_tol,
+           cfg.endpoint_xy_tol);
+  nh.param(ns + "/arrival/segment_transition_yaw_tol",
+           cfg.segment_transition_yaw_tol,
+           cfg.endpoint_yaw_tol);
+  nh.param(ns + "/arrival/stop_vel_tol", cfg.stop_vel_tol, 0.05);
+
+  nh.param(ns + "/replanning/rate_hz",         cfg.replanning_rate_hz,        10.0);
+  nh.param(ns + "/trajectory_lock_distance",   cfg.trajectory_lock_distance,  0.5);
+  nh.param(ns + "/velocity/min_creep_speed", cfg.min_creep_speed, 0.1);
+  nh.param(ns + "/velocity/creep_distance", cfg.creep_distance, 0.5);
+
+  loadLocalPostProcessConfig(nh, cfg.post_process);
+}
 
 // ── Quaternion Helpers ────────────────────────────────────────────────
 inline geometry_msgs::Quaternion yawToQuaternion(double yaw) {
@@ -378,17 +473,24 @@ inline void loadGlobalPlannerConfig(const ros::NodeHandle& nh, GlobalPlannerConf
   nh.param(ns + "/weights/heuristic",       cfg.weights.heuristic,      1.0);
 }
 
-inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostProcessConfig& cfg,
-                                        const std::string& ns = "global_post_processing") {
+inline void loadPostProcessConfig(const ros::NodeHandle& nh,
+                                  PostProcessConfig& cfg,
+                                  const std::string& ns) {
+  nh.param(ns + "/smoother/enabled", cfg.smoother.enabled, true);
+  nh.param(ns + "/smoother/collision_check_enabled", cfg.smoother.collision_check_enabled, true);
   nh.param(ns + "/smoother/weight_data",    cfg.smoother.weight_data,   0.2);
   nh.param(ns + "/smoother/weight_smooth",  cfg.smoother.weight_smooth, 0.35);
   nh.param(ns + "/smoother/tolerance",      cfg.smoother.tolerance,     0.001);
   nh.param(ns + "/smoother/max_iterations", cfg.smoother.max_iterations, 500);
+  nh.param(ns + "/resampler/enabled", cfg.resampler.enabled, true);
   nh.param(ns + "/resampler/resolution",    cfg.resampler.resolution,   0.1);
 
+  nh.param(ns + "/validator/enabled", cfg.validator.enabled, true);
   nh.param(ns + "/validator/time_tolerance_ms", cfg.validator.time_tolerance_ms, 1.0);
   cfg.validator.yaw_tolerance_rad = deg2rad(nh.param<double>(ns + "/validator/yaw_tolerance_deg", 5.0));
+  nh.param(ns + "/validator/cusp_exclusion_margin", cfg.validator.cusp_exclusion_margin, 0.2);
 
+  nh.param(ns + "/profiler/enabled", cfg.profiler.enabled, true);
   nh.param(ns + "/profiler/max_vel",        cfg.profiler.max_vel,       1.5);
   nh.param(ns + "/profiler/max_accel",      cfg.profiler.max_accel,     1.0);
   nh.param(ns + "/profiler/max_decel",      cfg.profiler.max_decel,     1.5);
@@ -398,8 +500,17 @@ inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, GlobalPostPro
   nh.param(ns + "/profiler/goal_vel",       cfg.profiler.goal_vel,      0.0);
   nh.param(ns + "/profiler/gear_shift_duration", cfg.profiler.gear_shift_duration, 1.2);
   nh.param(ns + "/profiler/min_velocity_denominator", cfg.profiler.min_velocity_denominator, 0.02);
+  nh.param(ns + "/profiler/jerk_filter_passes", cfg.profiler.jerk_filter_passes, 5);
 
   nh.param(ns + "/visualization/arrow_spacing_meters", cfg.visualization.arrow_spacing_meters, 0.2);
+}
+
+inline void loadGlobalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg) {
+  loadPostProcessConfig(nh, cfg, "global_post_processing");
+}
+
+inline void loadLocalPostProcessConfig(const ros::NodeHandle& nh, PostProcessConfig& cfg) {
+  loadPostProcessConfig(nh, cfg, "local_post_processing");
 }
 
 inline void loadGlobalMainConfig(const ros::NodeHandle& nh, GlobalMainConfig& cfg) {
