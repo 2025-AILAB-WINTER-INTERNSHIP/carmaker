@@ -660,7 +660,12 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
     // const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
     // const double effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
     // cte -= computeOffTrackingOffset(wheelbase_, effective_curvature);
-    cte -= computeOffTrackingOffset(wheelbase_, rear_curvature);
+
+    // cte -= computeOffTrackingOffset(wheelbase_, rear_curvature);
+
+    const double front_path_curvature = feedback_reference.curvature;
+    const double effective_curvature = 0.5 * (rear_curvature + front_path_curvature);
+    cte -= computeOffTrackingOffset(wheelbase_, effective_curvature);
   }
 
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
