@@ -243,9 +243,8 @@ bool LocalizationNodelet::initEkf() {
 
     ekf_core_->setProcessNoise(Q);
 
-    // ROS 의존성을 EkfCore에서 Nodelet으로 격리: 로그 콜백 등록
-    ekf_core_->setLogCallbacks(
-        [this](const std::string& s) { NODELET_INFO("%s", s.c_str()); },
+    // ROS 의존성을 EkfCore에서 Nodelet으로 격리: warning 로그 콜백 등록
+    ekf_core_->setWarnLogCallback(
         [this](const std::string& s) { NODELET_WARN("%s", s.c_str()); }
     );
     NODELET_INFO("EKF Prediction Model: State-based constant velocity / constant yaw-rate");

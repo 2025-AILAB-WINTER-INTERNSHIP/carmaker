@@ -1,41 +1,175 @@
-﻿# EKF 위치 추정(Localization)
+# EKF 위치 추정(Localization)
 
-## 1. 상태 벡터 (State Vector)
-
-EKF는 시스템 오차 축소, 수치적 강건성 및 저속 환경에서의 횡방향 슬립 차단을 위해 다음과 같은 **6차원 상태 벡터**를 사용
+이 문서는 `EkfCore`가 어떤 이산시간 EKF(discrete-time extended Kalman filter) 흐름으로 동작하는지, 그리고 일반식
 
 $$
-x = \begin{bmatrix} X & Y & \theta & V_x & \omega & b_\omega \end{bmatrix}^T
+x_k = f_{k-1}(x_{k-1}, u_{k-1}, w_{k-1}), \quad
+y_k = h_k(x_k, v_k)
 $$
 
-- **$X, Y$:** 글로벌 위치 (Global Frame, `Fr0` 기준) - 차량 후륜축(Rear Axle) 중심점 기준
-- **$\theta$:** 글로벌 요각 (Heading, $YAW$)
-- **$V_x$:** 차량 로컬 종방향 속도 (Longitudinal Velocity, 후륜축 기준)
-- **$\omega$:** 차량 로컬 요레이트 (Yaw Rate)
-- **$b_\omega$:** IMU 자이로 센서 바이어스 (Gyro Bias)
+$$
+w_k \sim (0, Q_k), \quad v_k \sim (0, R_k)
+$$
+
+을 현재 차량 위치 추정 코드에 어떻게 대응시켰는지 설명한다.
 
 ---
 
-## 2. 상태 예측 모델 (State Prediction Model)
+## 1. 상태 벡터
 
-### 2.1 이산 시간 시스템 방정식 (State Propagation)
-
-상태 예측은 차량 후륜축 중심 기준 기구학 등속/등요레이트 모델(기구학 모델)을 사용하여 시간 간격 $dt$ 마다 다음과 같이 비선형 적분식으로 전파:
+EKF 상태는 차량 후륜축 중심을 기준으로 한 6차원 벡터다.
 
 $$
-x_k = f(x_{k-1}) = \begin{bmatrix} X_{k-1} + V_{x, k-1} \cos\theta_{k-1} \cdot dt \\ Y_{k-1} + V_{x, k-1} \sin\theta_{k-1} \cdot dt \\ \theta_{k-1} + \omega_{k-1} \cdot dt \\ V_{x, k-1} \\ \omega_{k-1} \\ b_{\omega, k-1} \end{bmatrix}
+x =
+\begin{bmatrix}
+X & Y & \theta & V_x & \omega & b_\omega
+\end{bmatrix}^T
 $$
 
-- 요각 예측치 $\theta_k$는 물리법칙에 맞추어 상시 $[-\pi, \pi]$ 범위로 정규화(Normalization)
+- **$X, Y$:** 글로벌 프레임(`Fr0`)에서의 후륜축 중심 위치
+- **$\theta$:** 글로벌 요각(`YAW`)
+- **$V_x$:** 차량 로컬 좌표계의 종방향 속도
+- **$\omega$:** 차량 로컬 좌표계의 yaw rate
+- **$b_\omega$:** IMU z축 자이로 bias
 
-### 2.2 시스템 자코비안 행렬 $F$ (6x6)
+이 상태 정의는 저속 주차/충전 패드 정렬 환경에서 횡방향 속도 상태를 따로 추정하지 않도록 설계했다. 횡방향 슬립이 작다는 물리 가정을 상태 모델 자체에 넣어, 센서 노이즈가 횡방향 위치 드리프트로 누적되는 것을 줄인다.
 
-시스템 천이 모델식 $f(x)$를 각 상태 변수로 편미분한 자코비안 행렬 $F = \frac{\partial f(x)}{\partial x}$:
+---
+
+## 2. 전체 EKF 흐름
+
+`EkfCore`는 다음 순서로 움직인다.
+
+1. **초기화:** `initialize()`에서 $x_0^+$, $P_0^+$를 설정한다. yaw는 즉시 `[-pi, pi]`로 정규화한다.
+2. **시간 전파:** `prediction(timestamp, vx_wheel, ax_imu)` 또는 각 `correct*()` 내부의 timestamp 처리에서 현재 상태를 목표 시각까지 전파한다.
+3. **공분산 전파:** 선형화 행렬 $F$와 process noise $Q_d$로 $P_k^-$를 계산한다.
+4. **측정 보정:** pose, wheel, IMU 측정마다 $z_k$, $h(x_k^-)$, $H$를 구성한다.
+5. **innovation covariance 계산:** $S = H P^- H^T + R$를 만든다.
+6. **Kalman gain 계산:** 교재 수식과 동일하게 $K = P^-H^TS^{-1}$ 형태로 계산한다.
+7. **상태 갱신:** $x_k^+ = x_k^- + K(z_k - h(x_k^-))$를 적용하고 yaw를 다시 정규화한다.
+8. **공분산 갱신:** Joseph form으로 $P_k^+$를 갱신하고 마지막에 대칭화한다.
+
+중요한 시간 정책은 다음과 같다.
+
+- 측정 timestamp가 현재 EKF state time보다 미래이면, correction 전에 그 시각까지 prediction을 먼저 수행한다.
+- 측정 timestamp가 이미 지나간 과거라면, 현재 코어에는 state history buffer가 없으므로 해당 보정을 적용하지 않는다.
+- 카메라/ICP 보정은 nodelet에서 범퍼 기준 측정값을 후륜축 기준으로 변환하고, 지연 시간만큼 선도 보상한 뒤 현재 시각 기준 측정으로 `correctPose()`에 전달한다.
+
+---
+
+## 3. 공식과 현재 구현의 대응
+
+이산시간 EKF 예측식은 다음과 같다.
 
 $$
-F = \begin{bmatrix}
-1 & 0 & -V_x \sin\theta \cdot dt & \cos\theta \cdot dt & 0 & 0 \\
-0 & 1 & V_x \cos\theta \cdot dt & \sin\theta \cdot dt & 0 & 0 \\
+P_k^- = F_{k-1} P_{k-1}^+ F_{k-1}^T + L_{k-1} Q_{k-1} L_{k-1}^T
+$$
+
+$$
+\hat{x}_k^- = f_{k-1}(\hat{x}_{k-1}^+, u_{k-1}, 0)
+$$
+
+현재 구현은 process noise가 상태 공간에 직접 더해지는 additive noise라고 두므로
+
+$$
+L_{k-1} = I
+$$
+
+로 단순화한다. 또한 `Q_`는 continuous-time PSD 성격의 행렬로 두고, prediction 구간 길이 $dt$를 곱해 이산 covariance로 근사한다.
+
+$$
+Q_{d,k} = Q_{dyn} \cdot dt
+$$
+
+따라서 코드의 공분산 예측은 다음 형태다.
+
+$$
+P_k^- = F_{k-1} P_{k-1}^+ F_{k-1}^T + Q_{dyn} \cdot dt
+$$
+
+측정 보정식은 교재의
+
+$$
+K_k =
+P_k^- H_k^T
+\left(H_k P_k^- H_k^T + M_k R_k M_k^T\right)^{-1}
+$$
+
+에 대응한다. 현재 pose, wheel, IMU 측정 모델은 모두 additive measurement noise이므로
+
+$$
+M_k = I
+$$
+
+로 단순화한다. 즉 코드에서는
+
+$$
+S_k = H_k P_k^- H_k^T + R_k
+$$
+
+를 만든다. 구현에서는 교재 공식과 바로 대응되도록 `S.inverse()` 형태로 Kalman gain을 계산한다.
+
+---
+
+## 4. 상태 예측 모델
+
+### 4.1 Euler 기반 상태 전파
+
+상태 예측은 후륜축 기준 Euler 1차 적분 모델을 사용한다. 한 prediction 구간 $dt$ 동안 yaw와 yaw rate는 일정하다고 보고, IMU 종방향 가속도 $a_x$로 종방향 속도 $V_x$를 먼저 예측한 뒤 평균 속도로 위치를 전파한다. 휠 속도 $v_{x,wheel}$은 예측 속도가 감속 중 물리적으로 반대 부호로 넘어가지 않도록 제한하는 방향 기준으로 사용한다.
+
+$$
+V_{x,k}^{pred} = V_{x,k-1} + a_x dt
+$$
+
+전진/정차 중인 경우 $v_{x,wheel} \ge -0.01$이면 $V_{x,k}^{pred}$가 음수가 되지 않도록 제한하고, 후진 중인 경우에는 양수가 되지 않도록 제한한다.
+
+$$
+\bar{V}_{x,k} = \frac{1}{2}\left(V_{x,k-1} + V_{x,k}^{pred}\right)
+$$
+
+$$
+X_k =
+X_{k-1}
++ \bar{V}_{x,k}\cos\theta_{k-1}\,dt
+$$
+
+$$
+Y_k =
+Y_{k-1}
++ \bar{V}_{x,k}\sin\theta_{k-1}\,dt
+$$
+
+$$
+\theta_k = \theta_{k-1} + \omega_{k-1}dt
+$$
+
+$$
+V_{x,k} = V_{x,k}^{pred}, \quad
+\omega_k = \omega_{k-1}, \quad
+b_{\omega,k} = b_{\omega,k-1}
+$$
+
+예측 후 yaw는 항상 다음처럼 정규화한다.
+
+$$
+\theta_k \leftarrow \operatorname{atan2}(\sin\theta_k, \cos\theta_k)
+$$
+
+### 4.2 시스템 자코비안 $F$
+
+코드의 $F$는 위 Euler 모델을 상태 변수에 대해 선형화한 행렬이다.
+
+$$
+F = \frac{\partial f}{\partial x}
+$$
+
+Euler 모델의 자코비안은 다음과 같다.
+
+$$
+F =
+\begin{bmatrix}
+1 & 0 & -\bar{V}_x\sin\theta\,dt & \cos\theta\,dt & 0 & 0 \\
+0 & 1 & \bar{V}_x\cos\theta\,dt & \sin\theta\,dt & 0 & 0 \\
 0 & 0 & 1 & 0 & dt & 0 \\
 0 & 0 & 0 & 1 & 0 & 0 \\
 0 & 0 & 0 & 0 & 1 & 0 \\
@@ -43,17 +177,23 @@ F = \begin{bmatrix}
 \end{bmatrix}
 $$
 
-### 2.3 시스템 공정 노이즈 공분산 행렬 $Q$ (6x6)
+코드의 $F$는 위치 전파에 평균 속도 $\bar{V}_x$를 사용한다. 단, $a_x$와 wheel sign clamp는 EKF 상태 벡터에 포함된 상태가 아니라 외부 입력이므로, 현재 구현의 자코비안은 상태 변수에 대한 주요 민감도만 반영한다.
 
-시스템 상태 전파에 따른 노이즈의 강도를 결정하는 공정 노이즈 행렬 $Q$는 대각 행렬로 정의된다. 실제 구현에서는 `ekf/process_noise/*` 파라미터를 기본값으로 사용하되, 매 EKF 주기마다 차량 가속도와 요레이트에 따라 동적으로 스케일링한 $Q_{dyn}$을 적용한다.
+위치는 시작 yaw 기준으로 1차 적분하므로 $X/Y$가 yaw rate에 직접 의존하는 항은 두지 않는다. yaw rate는 yaw 상태를 통해 다음 prediction step의 위치 전파에 간접적으로 반영된다.
+
+### 4.3 공정 노이즈 $Q_{dyn}$
+
+nodelet은 매 prediction 주기마다 차량 가속도와 yaw rate 크기를 보고 동적으로 $Q_{dyn}$을 만든 뒤 `setProcessNoise()`로 전달한다.
 
 $$
-Q_{dyn} = \text{diag}\left(
+Q_{dyn} =
+\operatorname{diag}
+\left(
 \sigma_{pos}^2 s_{dyn},
 \sigma_{pos}^2 s_{dyn},
 (\sigma_{yaw}s_{yaw})^2,
 (\sigma_{vx}s_{vel})^2,
-(\sigma_{\omega}s_{yaw})^2,
+(\sigma_\omega s_{yaw})^2,
 \sigma_{bias}^2
 \right)
 $$
@@ -61,245 +201,306 @@ $$
 - **$\sigma_{pos}$:** 위치 예측 노이즈 표준편차 (`pos_std`, 기본 0.05 m)
 - **$\sigma_{yaw}$:** 자세 예측 노이즈 표준편차 (`yaw_std`, 기본 0.03 rad)
 - **$\sigma_{vx}$:** 속도 예측 노이즈 표준편차 (`vel_std`, 기본 0.15 m/s)
-- **$\sigma_{\omega}$:** 요레이트 예측 노이즈 표준편차 (`yaw_rate_std`, 기본 0.01 rad/s)
-- **$\sigma_{bias}$:** 자이로 바이어스 변화 노이즈 표준편차 (`bias_std`, 기본 0.001 rad/s)
-- **$s_{vel}$:** $|a_x| > 1.0$일 때 가감속 크기에 따라 최대 5배까지 증가하는 속도 노이즈 스케일
-- **$s_{yaw}$:** $|\omega_{imu}| > 0.1$일 때 선회 크기에 따라 최대 10배까지 증가하는 요각/요레이트 노이즈 스케일
-- **$s_{dyn}$:** $s_{vel}$과 $s_{yaw}$를 합성한 위치 노이즈 스케일이며 최대 12배로 제한
+- **$\sigma_{\omega}$:** yaw rate 예측 노이즈 표준편차 (`yaw_rate_std`, 기본 0.01 rad/s)
+- **$\sigma_{bias}$:** gyro bias 변화 노이즈 표준편차 (`bias_std`, 설정 파일 기본 0.01 rad/s)
+- **$s_{vel}$:** 가감속이 클 때 속도 상태의 불확실성을 키우는 scale
+- **$s_{yaw}$:** 선회가 클 때 yaw/yaw rate 불확실성을 키우는 scale
+- **$s_{dyn}$:** 위치 불확실성에 적용하는 합성 scale
 
-상태 예측에 따른 오차 공분산 전파 수식은 다음과 같으며, 연산 후 수치적 대칭성을 보장:
-
-$$
-P_{k|k-1} = F P_{k-1} F^T + Q_{dyn} \cdot dt
-$$
-
-- 공정 노이즈 행렬 $Q_{dyn}$은 연속 시간(Continuous-time)의 파워 스펙트럼 밀도(PSD) 행렬이며, 오차 공분산 전파 시 $dt$를 곱하여 이산 시간(Discrete-time) 노이즈 공분산으로 **오일러 1차 근사(Euler 1st-order Integration)**하여 적용
-
-$$
-P_{k|k-1} = \frac{P_{k|k-1} + P_{k|k-1}^T}{2}
-$$
+`EkfCore`는 단순한 공식 대응을 위해 `Q_dyn`의 PSD 검사를 별도로 수행하지 않는다. 대신 외부에서 아주 작은 비대칭이 섞여 들어온 경우 공분산 의미를 유지하도록 `Q = (Q + Q^T) / 2`로 대칭화한 뒤 사용한다.
 
 ---
 
-## 3. 센서 관측 모델 (Sensor Measurement Model)
+## 5. 측정 모델
 
-### 3.1 센서 1: 비전 ICP 위치/자세 보정 (`correctPose`)
+### 5.1 Pose 보정: `correctPose`
 
-- **측정값 벡터 $z_{pose}$ (3x1):**
-    
-    $$
-    z_{pose} = \begin{bmatrix} X_{pose} & Y_{pose} & \theta_{pose} \end{bmatrix}^T
-    $$
-    
-    (EKF 예측 자체는 상태 기반 등속/등요레이트 모델을 사용한다. 단, 비동기 ICP 정합 결과는 범퍼 기준에서 후륜축 기준으로 변환한 뒤, 카메라 정합 지연 시간 $dt$만큼 nodelet에서 짧은 자전거 기구학 모델로 선도 보상한 후 `correctPose`에 입력한다.)
-    
-- **비선형 관측 모델식 $h_{pose}(x)$:**
-    
-    $$
-    h_{pose}(x) = \begin{bmatrix} X & Y & \theta \end{bmatrix}^T
-    $$
-    
-- **관측 자코비안 행렬 $H_{pose}$ (3x6):**
-    
-    $$
-    H_{pose} = \begin{bmatrix}
-    1 & 0 & 0 & 0 & 0 & 0 \\
-    0 & 1 & 0 & 0 & 0 & 0 \\
-    0 & 0 & 1 & 0 & 0 & 0
-    \end{bmatrix}
-    $$
-    
-- **관측 노이즈 공분산 행렬 $R_{pose}$ (3x3):**
-정합 매칭 공분산 $R_{reg}$을 후륜축으로 변환(J 자코비안)하고, 지연 시간에 비례한 공분산 인플레이션 항 $Q_{latency}$를 합산:
-    
-    $$
-    R_{pose} = J R_{reg} J^T + Q_{latency}
-    $$
-    
-    $$
-    J = \begin{bmatrix} 1 & 0 & -x_{offset} \sin\theta_{pose} \\ 0 & 1 & x_{offset} \cos\theta_{pose} \\ 0 & 0 & 1 \end{bmatrix}
-    $$
-    
-- 오프셋  마이너스 부호($-x_{offset}$): ICP 정합 측정 기준점(후방 범퍼)에서 차량의 고유 회전 중심인 **후륜축(Rear Axle)으로 좌표계 기준을 역변환 및 전파**하는 물리적 관계가 반영
+Pose 측정값은 후륜축 기준 위치와 yaw다.
 
-### 3.2 센서 2: 휠 오도메트리 속도/요레이트 보정 (`correctWheel`)
+$$
+z_{pose} =
+\begin{bmatrix}
+X_{pose} & Y_{pose} & \theta_{pose}
+\end{bmatrix}^T
+$$
 
-- **측정값 벡터 $z_{wheel}$ (2x1):**
-    
-    $$
-    z_{wheel} = \begin{bmatrix} v_{x, wheel} & \omega_{wheel} \end{bmatrix}^T
-    $$
-    
-    - 종방향 평균 휠속도 및 좌우 속도차 기반 요레이트 성분
-- **관측 모델식 $h_{wheel}(x)$:**
-    
-    $$
-    h_{wheel}(x) = \begin{bmatrix} V_x & \omega \end{bmatrix}^T
-    $$
-    
-- **관측 자코비안 행렬 $H_{wheel}$ (2x6):**
-    
-    $$
-    H_{wheel} = \begin{bmatrix}
-    0 & 0 & 0 & 1 & 0 & 0 \\
-    0 & 0 & 0 & 0 & 1 & 0
-    \end{bmatrix}
-    $$
-    
-- **관측 노이즈 공분산 행렬 $R_{wheel}$ (2x2):**
-    
-    $$
-    R_{wheel} = \begin{bmatrix}
-    \sigma_{wheel}^2 & 0 \\
-    0 & 2.0\frac{\sigma_{wheel}^2}{L_{track}^2}
-    \end{bmatrix}
-    $$
-    
-    (종방향 바퀴 슬립 감지 시 $R_{wheel}(0,0)$ 원소값은 적응형 계수로 팽창된다. 기본 팽창 계수는 100배이며, 급감속 상황에서는 실제 제동을 받아들이기 위해 최소 5배까지 완화된다.)
-    
+관측 모델은 다음과 같다.
 
-### 3.3 센서 3: IMU 요레이트 보정 (`correctImu`)
+$$
+h_{pose}(x) =
+\begin{bmatrix}
+X & Y & \theta
+\end{bmatrix}^T
+$$
 
-- **측정값 벡터 $z_{imu}$ (1x1):**
-    
-    $$
-    z_{imu} = \begin{bmatrix} \omega_{raw} \end{bmatrix}
-    $$
-    
-    - (저속 주행 환경에 무의미하고 노이즈가 큰 가속도 센서 보정을 차단하여 모델 무결성 확보)
-- **관측 모델식 $h_{imu}(x)$:**
-    
-    자이로 실측값에 EKF 내부에서 실시간 추정하는 바이어스 오차 성분을 결합하여 모델링:
-    
-    $$
-    h_{imu}(x) = \omega + b_\omega
-    $$
-    
-- **관측 자코비안 행렬 $H_{imu}$ (1x6):**
-    
-    $$
-    H_{imu} = \begin{bmatrix} 0 & 0 & 0 & 0 & 1 & 1 \end{bmatrix}
-    $$
-    
-- **관측 노이즈 공분산 행렬 $R_{imu}$ (1x1):**
-    
-    $$
-    R_{imu} = \begin{bmatrix} \sigma_{gyro}^2 \end{bmatrix}
-    $$
-    
-    ($\sigma_{gyro} = 0.01 \text{ rad/s}$)
-    
+$$
+H_{pose} =
+\begin{bmatrix}
+1 & 0 & 0 & 0 & 0 & 0 \\
+0 & 1 & 0 & 0 & 0 & 0 \\
+0 & 0 & 1 & 0 & 0 & 0
+\end{bmatrix}
+$$
 
-### 3.4 관측 및 공정 공분산 설계 사양 (Covariance Design Specification)
+ICP 정합 결과는 nodelet에서 다음 처리를 거친 뒤 core로 들어온다.
 
-1. **시스템 공정 노이즈 공분산 $Q_{dyn}$ (6x6):**
-    - 위치 $X, Y$ 성분: `pos_std^2 * scale_dyn` (`pos_std = 0.05`, `scale_dyn <= 12.0`)
-    - 요각 $\theta$ 성분: `(yaw_std * scale_yaw)^2` (`yaw_std = 0.03`, `scale_yaw <= 10.0`)
-    - 속도 $V_x$ 성분: `(vel_std * scale_vel)^2` (`vel_std = 0.15`, `scale_vel <= 5.0`)
-    - 요레이트 $\omega$ 성분: `(yaw_rate_std * scale_yaw)^2` (`yaw_rate_std = 0.01`)
-    - 자이로 바이어스 $b_\omega$ 성분: `bias_std^2` (`bias_std = 0.001`)
-    - 가감속이 크거나 급선회 중일 때는 모델 예측의 강성을 낮추기 위해 위 스케일을 키우고, 정속/완만한 선회 상황에서는 기본 파라미터 값을 유지
-2. **휠 오도메트리 관측 노이즈 공분산 $R_{wheel}$ (2x2):**
-    - 종방향 속도 분산 $R_{wheel}(0,0)$: $\sigma_{wheel}^2 = 0.05^2 = 0.0025$ (`wheel/speed_std`)
-        - *종방향 바퀴 슬립 감지 시:* $|v_{wheel} - V_{x, state}| > 1.0\text{m/s}$ 일 때, 해당 분산을 적응형 계수로 팽창시켜 EKF가 휠 속도를 덜 신뢰하도록 처리
-        - 기본 팽창 계수는 $100.0$이며, $a_x < -0.5\text{m/s}^2$인 급감속 상황에서는 실제 제동으로 인한 속도 감소를 수용하기 위해 `max(5.0, 100.0 + (a_x + 0.5) * 50.0)`으로 완화
-    - 요레이트 분산 $R_{wheel}(1,1)$: 차동 조향 오차 전파식 $2.0\frac{\sigma_{wheel}^2}{L_{track}^2}$을 적용하여 좌우 휠 속도 오차를 트랙 너비의 제곱에 맞춰 물리적으로 엄밀하게 스케일링
-3. **IMU 요레이트 관측 노이즈 공분산 $R_{imu}$ (1x1):**
-    - 자이로 단일 성분 분산: $\sigma_{gyro}^2 = 0.01^2 = 0.0001$ (MEMS 자이로 원초 노이즈 수준 매핑)
-4. **비전 ICP 관측 공분산 $R_{pose}$ (3x3):**
-    - **특징점 개별 공분산 ($C_{obs}$):** 카메라 원근 왜곡을 모사하여 Sweet Spot(렌즈 광축 바닥 투영점)으로부터의 거리에 비례하여 방사 방향($r^2$에 비례) 및 접선 방향($r$에 비례)의 오차를 2D Cartesian 좌표로 투영해 계산
-    - **포즈 정보 행렬(Hessian, $H$) 구성:** 개별 특징점 공분산의 역행렬을 가중치로 한 정합 쌍의 자코비안 $J_i$ 곱인 $H = \sum J_i^T W_i J_i$ 로 계산되어 특징점 공간 배치 분포(GDOP)를 직접 지표화
-    - **Max Capping 보호 기법:** 특징점이 한 축 방향으로 결여된 직선도로/터널 환경에서 공분산이 무한히 튀는 수치 비특이성을 예방하기 위해 고유값 분해(Eigenvalue Decomposition)를 통해 최대 한계 분산값인 `max_covariance` = `10.0`으로 설정
+1. ICP 결과는 범퍼 기준 pose로 나온다.
+2. `transformPose()`로 후륜축 기준 pose로 변환한다.
+3. ICP covariance는 레버암 자코비안으로 후륜축 기준 covariance로 전파한다.
+4. 카메라 정합 지연 시간에 따른 추가 불확실성 $Q_{latency}$를 더한다.
+5. 짧은 지연 시간만큼 자전거 모델로 현재 시각까지 선도 보상한다.
+
+후륜축 변환 covariance는 다음 형태다.
+
+$$
+R_{pose} = J R_{reg} J^T + Q_{latency}
+$$
+
+$$
+J =
+\begin{bmatrix}
+1 & 0 & -x_{offset}\sin\theta \\
+0 & 1 & x_{offset}\cos\theta \\
+0 & 0 & 1
+\end{bmatrix}
+$$
+
+`correctPose()` 내부에서는 yaw residual을 항상 wrap한다.
+
+$$
+y_\theta =
+\operatorname{atan2}
+\left(
+\sin(\theta_{pose}-\theta^-),
+\cos(\theta_{pose}-\theta^-)
+\right)
+$$
+
+또한 pose update에는 실차 안정용 rate limiter가 있다. 이 limiter는 EKF 이론식의 일부가 아니므로, clipping이 발생하면 공분산을 Joseph form으로 줄이지 않고 prior covariance를 유지한다. 이렇게 하면 상태는 부드럽게 따라가되, 필터가 clipping된 측정을 완전히 반영했다고 과신하지 않는다.
+
+### 5.2 Wheel 보정: `correctWheel`
+
+휠 측정값은 종방향 속도와 좌우 휠 속도차 기반 yaw rate다.
+
+$$
+z_{wheel} =
+\begin{bmatrix}
+v_{x,wheel} & \omega_{wheel}
+\end{bmatrix}^T
+$$
+
+관측 모델은 다음과 같다.
+
+$$
+h_{wheel}(x) =
+\begin{bmatrix}
+V_x & \omega
+\end{bmatrix}^T
+$$
+
+$$
+H_{wheel} =
+\begin{bmatrix}
+0 & 0 & 0 & 1 & 0 & 0 \\
+0 & 0 & 0 & 0 & 1 & 0
+\end{bmatrix}
+$$
+
+휠 관측은 gyro bias를 직접 보지 않는다. 따라서 IMU의 raw yaw rate와 휠 yaw rate가 함께 들어올 때, EKF는 `YAW_RATE`와 `B_YAW_RATE`를 분리할 근거를 얻는다.
+
+휠 관측 covariance는 다음과 같다.
+
+$$
+R_{wheel} =
+\begin{bmatrix}
+\sigma_{wheel}^2 & 0 \\
+0 & 2.0\frac{\sigma_{wheel}^2}{L_{track}^2}
+\end{bmatrix}
+$$
+
+종방향 slip이 감지되면 nodelet이 $R_{wheel}(0,0)$을 키워 휠 속도 측정의 영향력을 낮춘다.
+
+### 5.3 IMU 보정: `correctImu`
+
+IMU 측정은 raw yaw rate 하나만 사용한다.
+
+$$
+z_{imu} = \omega_{raw}
+$$
+
+관측 모델은 gyro bias를 포함한다.
+
+$$
+h_{imu}(x) = \omega + b_\omega
+$$
+
+$$
+H_{imu} =
+\begin{bmatrix}
+0 & 0 & 0 & 0 & 1 & 1
+\end{bmatrix}
+$$
+
+IMU 단독으로는 $\omega$와 $b_\omega$를 분리할 수 없다. bias 추정은 wheel yaw rate, pose yaw 변화, 정지 상태 pseudo measurement 같은 추가 정보가 함께 있을 때 안정된다.
 
 ---
 
-## 4. 공분산 업데이트 (Covariance Update)
+## 6. Innovation Covariance와 Kalman Gain
 
-오차 공분산 행렬 $P$의 대칭성(Symmetry) 및 양의 정정치(Positive-Definite) 수치 안정성을 엄밀하게 강제하여 필터 발산을 완벽히 억제하기 위해, 모든 센서 보정 업데이트 단계에서 **Joseph Form** 공식을 이용해 오차 공분산을 갱신:
+각 센서 update는 먼저 innovation covariance를 만든다.
 
 $$
-P_k = (I - K_k H_k) P_{k|k-1} (I - K_k H_k)^T + K_k R_k K_k^T
+S_k = H_k P_k^- H_k^T + R_k
 $$
 
-- **$K_k$:** 칼만 이득 (Kalman Gain) 행렬 [6xM]
-    
-    $$
-    K_k = P_{k|k-1} H_k^T (H_k P_{k|k-1} H_k^T + R_k)^{-1}
-    $$
-    
-- **$H_k$:** 업데이트 단계별 관측 자코비안 행렬 ($H_{pose}$ [3x6], $H_{wheel}$ [2x6], $H_{imu}$ [1x6])
-- **$R_k$:** 업데이트 단계별 관측 노이즈 공분산 행렬 ($R_{pose}$ [3x3], $R_{wheel}$ [2x2], $R_{imu}$ [1x1])
-- **$I$:** 6차원 단위 행렬 (Identity Matrix, [6x6])
+innovation residual은 다음과 같다.
+
+$$
+y_k = z_k - h_k(x_k^-)
+$$
+
+`EkfCore`는 별도의 통계적 outlier gate나 pose/wheel 측정의 $S_k$ 분해 검사를 두지 않는다. 입력 측정 공분산 $R_k$가 정상적으로 설정된다는 전제에서 교재식 그대로 update를 수행한다.
+
+Kalman gain은 수식상 다음과 같다.
+
+$$
+K_k = P_k^- H_k^T S_k^{-1}
+$$
+
+코드도 같은 형태를 사용한다.
+
+```cpp
+K = P * H.transpose() * S.inverse();
+```
+
+pose update에서는 $S$가 $3 \times 3$, wheel update에서는 $2 \times 2$라 계산량은 작다. 단, `S.inverse()`는 입력 covariance가 비정상적이면 결과가 불안정해질 수 있으므로, $R$ 튜닝과 입력 covariance 관리가 중요하다.
 
 ---
 
-## 5. 평가 (Evaluation Metrics)
+## 7. 상태와 공분산 보정
 
-### 5.1 위치 및 자세 추정 오차 (RMSE)
-
-실주행 궤적(Ground Truth, GT) 대비 EKF 추정값의 전체 시간 평균 제곱근 오차(RMSE)를 실시간 및 사후 분석으로 측정
-
-- **위치 추정 RMSE (Position RMSE, m):**
-    
-    $$
-    \text{RMSE}{pos} = \sqrt{\frac{1}{N}\sum{k=1}^N \left((X_{GT,k} - X_k)^2 + (Y_{GT,k} - Y_k)^2\right)}
-    $$
-    
-    - 실시간 진단 및 수렴 확인을 위해 `/localization/data/rmse_position` 토픽으로 instantaneous 위치 오차를 실시간 발행
-- **자세 추정 RMSE (Yaw RMSE, deg):**
-    
-    $$
-    \text{RMSE}{yaw} = \sqrt{\frac{1}{N}\sum{k=1}^N (e_{\theta, k})^2}
-    $$
-    
-    - $e_{\theta, k} = \text{WrapToPi}(\theta_{GT, k} - \theta_k)$
-    - 실시간 오차 판단을 위해 `/localization/data/rmse_orientation` 토픽으로 instantaneous 각도 편차를 실시간 발행
-
-### 5.2 수치적 일관성 검증 (NEES, Normalized Estimation Error Squared)
-
-필터가 계산한 오차 공분산 $P_k$가 실제 발생하는 추정 오차 범위를 투명하게 지탱하고 있는지 확인하기 위한 통계적 검증 지표
+상태 보정은 다음과 같다.
 
 $$
-\epsilon_k = e_k^T P_{pose, k}^{-1} e_k
+x_k^+ = x_k^- + K_k y_k
 $$
 
-- $e_k = \begin{bmatrix} X_{GT,k} - X_k & Y_{GT,k} - Y_k & \text{WrapToPi}(\theta_{GT,k} - \theta_k) \end{bmatrix}^T$
-- $P_{pose, k}$: EKF 오차 공분산 행렬 $P$에서 추출한 X, Y, Yaw 상태에 해당하는 3x3 부분 행렬
-- **모니터링 방식:** 매 스텝마다 실시간 계산된 $\epsilon_k$를 `/localization/data/nees` 토픽으로 퍼블리시하여 Plotjuggler 등을 통해 공분산 정합성 튜닝 추이를 시각화하며, 진단(/diagnostics) 토픽 내 `Cumulative Average NEES` 및 `Latest Instantaneous NEES`로 누적 상태를 수집
-- **판정 기준:** 3차원 포즈 오차이므로 평균 NEES가 자유도 수치인 **`3.0` 근방**에서 안정적으로 변동해야 이상적으로 튜닝된 상태
-    - **NEES $\gg 3.0$ (**실제 오차($e$)에 비해 필터가 계산한 공분산 $P$가 너무 작은 경우): 필터가 자기 상태를 지나치게 신뢰하여 센서 관측을 무시하다가 발산 위험성 → 시스템 노이즈 $Q$ 증가 or 센서 노이즈 $R$ 감쇠
-    - **NEES $\ll 3.0$ (실제 오차($e$)에 비해 필터가 계산한 공분산 $P$가 너무 큰 경우): 필터가 자기 상태를 불신하여 센서 잡음에 흔들림** → 시스템 노이즈 $Q$ 감쇠 or 센서 노이즈 $R$ 증가
+보정 후 yaw는 반드시 정규화한다.
 
-### 5.3 충전 패드 정렬도 (Charging Pad Alignment Accuracy)
+$$
+\theta_k^+ \leftarrow \operatorname{atan2}(\sin\theta_k^+, \cos\theta_k^+)
+$$
 
-최종 목적지인 충전 패드 상에 주차를 완료한 시점에서, 차량의 고유 기준축과 충전 패드 중심점 간의 상대 위치/자세 정밀도를 측정
+공분산은 Joseph form을 사용한다.
 
-- **기준:** 자율 주차 완료 시점에서의 최종 정적 정밀도 RMSE 평가
-    - 횡방향 주차 오차: **3cm 이하**
-    - 요각 정렬 오차: **1도 이하**
+$$
+P_k^+
+=
+(I - K_k H_k)P_k^-(I - K_k H_k)^T
++ K_k R_k K_k^T
+$$
+
+Joseph form은 단순식
+
+$$
+P_k^+ = (I - K_k H_k) P_k^-
+$$
+
+보다 수치적 대칭성과 양의 정부호성을 더 잘 보존한다. 다만 잘못된 $Q/R$, 잘못된 timestamp, 비정상 측정값까지 완전히 해결하는 것은 아니므로, 코드에서는 최소한의 방어 로직만 함께 둔다.
+
+- IMU scalar update에서 `R_gyro`와 scalar $S$가 0에 너무 가까우면 update 거부
+- 과거 timestamp 측정은 state buffer가 없으므로 update 거부
+- 보정 후 yaw 정규화
+- 보정 후 covariance 대칭화
 
 ---
 
-## 6. Appendix
+## 8. Timestamp와 비동기 센서 처리 한계
 
-### 6.1 CA(Constant Acceleration) 및 동역학 모델 대신 저속 기구학 모델을 사용하는 이유
+현재 코어는 correction 함수의 timestamp를 실제로 사용한다. 측정 시각이 현재 상태보다 미래이면 correction 전에 그 시각까지 prediction을 수행한다.
 
-1. **횡슬립(Drift) 차단 및 강건성 극대화:**
-    - 저속(0m/s ~ 2m/s) 주행 환경에서는 타이어 슬립각이 극도로 작기 때문에 횡방향 가속도($A_Y$)나 횡속도($V_Y$) 성분을 EKF 상태 변수에 넣고 추정할 경우, 센서 잡음으로 인해 상태 변수가 흔들리면서 차량이 게처럼 옆으로 기어가는 드리프트 현상이 발생
-    - 등속/등요레이트 기구학 모델은 횡방향 구속 조건($V_Y = 0$, Non-Holonomic Constraint)을 물리적 상태 구조 단계에서 완벽히 강제함으로써 저속 및 정지 시 시스템 위치 추정의 강건성을 원천적으로 향상
-2. **센서 드리프트 노이즈 누적 배제:**
-    - CA 모델 또는 IMU의 선가속도계 적분 방식을 활용하면 센서 자체의 바이어스 잡음이 속도와 위치로 이중 누적(Double Integration)되어 무제한 드리프트가 발생.
-    - 기구학 등속/등요레이트 모델을 적용하면 IMU는 가속도 수치를 차단하고 요레이트 자이로 센서만 바이어스 보정을 거쳐 깔끔하게 각도 적분에 사용하므로, 무의미한 중력 보정 계산이나 레버암 편심 미분 연산이 사라져 수치적 해석 안정성이 크게 향상
-3. **경량화 및 연산량 대폭 절감:**
-    - 12차원에서 6차원으로 상태 차원이 축소됨에 따라, 오차 공분산 예측을 위한 행렬 곱 연산($F P F^T$) 횟수가 획기적으로 줄어들어 임베디드 자율주행 보드나 실시간 제어 스텝(100Hz 이상)에서의 CPU 로드를 대폭 낮춰 시스템 지연을 최소화
+하지만 state history buffer는 아직 없다. 따라서 이미 지나간 과거 측정(out-of-sequence measurement)을 받아 과거 상태를 고치고 현재까지 재전파하는 기능은 지원하지 않는다.
 
-### 6.2 충전패드 랜드마크의 면(Area) 정합 대신 선(Edge/Line) 정합을 사용하는 이유
+실전 비동기 fusion에서 더 높은 정확도가 필요하면 다음 구조가 추가로 필요하다.
 
-1. **특징점 분포의 기하학적 명확성 확보 (DoP 향상):**
-    - 충전 패드 영역 전체를 2D 면(Area) 데이터(바이너리 꽉 찬 마스크)로 인식하여 ICP를 돌리게 되면, 면 내부의 평평하고 넓은 픽셀 정보들은 차량 이동에 따른 기하학적 구속(Gradient)을 주지 못해 슬라이딩 오차 발생 가능
-    - 충전 패드의 외각 경계선(Edge/Line) 정보만 모폴로지(Erosion) 연산으로 추출하여 정합할 경우, 특징점의 위치 정보가 경계선을 따라 명확한 1차원 선형 기울기를 형성하므로 정합 시 종/횡방향 및 헤딩각 방향에 대한 수학적 구속력이 극대화되어 수렴 속도와 정합 정밀도가 현격하게 상승
-2. **특징점 매칭 개수의 축소와 연산 부하 절감:**
-    - 면 내부의 무수한 점들을 KD-Tree 탐색 및 Mahalanobis 평가에 투입하는 것 대비, 경계선 픽셀만 필터링하여 정합을 시도하면 처리해야 할 특징점 수(Point Cloud size)가 감소
-    - 이는 ICP 루프당 최근접 이웃 탐색(Nearest Neighbor Search) 연산량을 급감시켜 실시간 위치 제어가 가능하도록 병목 현상을 해결
-3. **노면 조도 및 그림자 강건성 확보:**
-    - 실제 조명이나 가려짐(오클루전) 조건 하에서 면 전체의 이진화 임계값은 주변 밝기에 따라 찌그러지기 쉽지만, 경계선(Edge)의 경우 필터링 연산을 통해 비교적 강건하게 살아남으므로 실차 환경에서의 조도 강건성 향상
+- 센서 메시지를 timestamp 기준 queue로 정렬
+- 상태 history buffer 저장
+- 과거 상태 update 후 현재 시각까지 재전파
+- 센서별 latency 모델과 covariance inflation 정교화
+
+현재 카메라 보정은 nodelet에서 현재 시각 기준으로 선도 보상한 뒤 core에 전달하는 방식으로 이 문제를 완화한다.
+
+---
+
+## 9. 평가 지표
+
+### 9.1 위치 및 자세 RMSE
+
+GT 후륜축 pose와 EKF 후륜축 상태를 비교한다.
+
+$$
+\operatorname{RMSE}_{pos}
+=
+\sqrt{
+\frac{1}{N}
+\sum_{k=1}^{N}
+\left[
+(X_{GT,k}-X_k)^2 + (Y_{GT,k}-Y_k)^2
+\right]
+}
+$$
+
+$$
+\operatorname{RMSE}_{yaw}
+=
+\sqrt{
+\frac{1}{N}
+\sum_{k=1}^{N}
+e_{\theta,k}^2
+}
+$$
+
+$$
+e_{\theta,k}
+=
+\operatorname{atan2}
+\left(
+\sin(\theta_{GT,k}-\theta_k),
+\cos(\theta_{GT,k}-\theta_k)
+\right)
+$$
+
+### 9.2 NEES
+
+NEES는 실제 pose error가 EKF covariance와 통계적으로 잘 맞는지 보는 지표다.
+
+$$
+\epsilon_k = e_k^T P_{pose,k}^{-1} e_k
+$$
+
+$$
+e_k =
+\begin{bmatrix}
+X_{GT,k}-X_k &
+Y_{GT,k}-Y_k &
+\operatorname{WrapToPi}(\theta_{GT,k}-\theta_k)
+\end{bmatrix}^T
+$$
+
+3차원 pose error 기준이므로 평균 NEES는 이상적으로 자유도 3 근처에서 움직인다.
+
+- **NEES가 3보다 매우 큼:** 실제 오차에 비해 $P$가 너무 작아 필터가 과신 중일 가능성
+- **NEES가 3보다 매우 작음:** 실제 오차에 비해 $P$가 너무 커 필터가 지나치게 보수적일 가능성
+
+---
+
+## 10. 현재 모델의 남은 한계
+
+현재 구현은 실시간성과 단순성을 우선한 6차원 EKF다. 다음 개선은 별도 단계로 검토할 수 있다.
+
+- acceleration noise, yaw acceleration noise, gyro bias random walk를 명시한 $G Q_c G^T$ 형태의 process noise 모델
+- out-of-sequence measurement를 위한 state buffer
+- 정지 감지 시 $V_x=0$, $\omega=0$ pseudo measurement
+- IMU bias 초기 calibration
+- 센서 extrinsic 오차까지 포함한 covariance propagation
+- 더 큰 비선형성이 있는 환경에서 UKF 검토
