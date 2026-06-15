@@ -511,13 +511,31 @@ void LocalPlannerNodelet::logDecisionTransition(
                  decision.endpoint.y,
                  decision.endpoint.theta);
   } else if (segment_changed && decision.finished) {
-    if (decision.failed) {
-      NODELET_WARN("[LocalPlanner] ARRIVAL FAILED at final destination (precise tolerances not met)!");
+    double err_xy = 0.0;
+    double err_yaw = 0.0;
+    double err_v = std::abs(ego.v);
+    if (!trajectory_state_machine_.globalPath().empty()) {
+      const auto& target = trajectory_state_machine_.globalPath().back();
+      err_xy = dist(ego.x, ego.y, target.x, target.y);
+      err_yaw = std::abs(wrap_to_pi(ego.theta - target.theta));
     }
-    NODELET_INFO("[LocalPlanner] Active path finished: last_segment=%zu, state=%s, intent=%s",
-                 last_logged_segment_index_,
-                 trajectoryStateString(decision.state),
-                 trajectoryIntentString(decision.intent));
+    if (decision.failed) {
+      NODELET_WARN("[LocalPlanner] Active path finished (ARRIVAL FAILED at final destination, precise tolerances not met): last_segment=%zu, state=%s, intent=%s\n"
+                   "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
+                   last_logged_segment_index_,
+                   trajectoryStateString(decision.state),
+                   trajectoryIntentString(decision.intent),
+                   cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
+                   err_xy, rad2deg(err_yaw), err_v);
+    } else {
+      NODELET_INFO("[LocalPlanner] Active path finished: last_segment=%zu, state=%s, intent=%s\n"
+                   "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
+                   last_logged_segment_index_,
+                   trajectoryStateString(decision.state),
+                   trajectoryIntentString(decision.intent),
+                   cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
+                   err_xy, rad2deg(err_yaw), err_v);
+    }
   } else if (state_changed) {
     NODELET_DEBUG("[LocalPlanner] State transition: state=%s, intent=%s, segment=%zu",
                   trajectoryStateString(decision.state),
@@ -526,10 +544,24 @@ void LocalPlannerNodelet::logDecisionTransition(
   }
 
   if (decision.finished && !last_logged_finished_) {
+    double err_xy = 0.0;
+    double err_yaw = 0.0;
+    double err_v = std::abs(ego.v);
+    if (!trajectory_state_machine_.globalPath().empty()) {
+      const auto& target = trajectory_state_machine_.globalPath().back();
+      err_xy = dist(ego.x, ego.y, target.x, target.y);
+      err_yaw = std::abs(wrap_to_pi(ego.theta - target.theta));
+    }
     if (decision.failed) {
-      NODELET_WARN("[LocalPlanner] Final goal reached, but ARRIVAL FAILED (precise tolerances not met)!");
+      NODELET_WARN("[LocalPlanner] Final goal reached, but ARRIVAL FAILED (precise tolerances not met)!\n"
+                   "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
+                   cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
+                   err_xy, rad2deg(err_yaw), err_v);
     } else {
-      NODELET_INFO("[LocalPlanner] Final goal reached.");
+      NODELET_INFO("[LocalPlanner] Final goal reached.\n"
+                   "Tolerances: xy=%.3f, yaw=%.3f deg, vel=%.3f | Errors: xy=%.3f, yaw=%.3f deg, vel=%.3f",
+                   cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
+                   err_xy, rad2deg(err_yaw), err_v);
     }
   }
 
