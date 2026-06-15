@@ -57,7 +57,7 @@ public:
                          std::function<void(const std::string&)> warn);
 
   // EKF Core Cycle
-    void prediction(double timestamp);
+    void prediction(double timestamp, double vx_wheel = 0.0, double ax_imu = 0.0);
 
     // Multi-Sensor Corrections
     void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,

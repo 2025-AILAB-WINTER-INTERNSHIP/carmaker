@@ -48,7 +48,7 @@ void EkfCore::setLogCallbacks(std::function<void(const std::string&)> info,
     log_warn_ = std::move(warn);
 }
 
-void EkfCore::prediction(double timestamp) {
+void EkfCore::prediction(double timestamp, double vx_wheel, double ax_imu) {
     if (!is_initialized_) return;
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -66,20 +66,33 @@ void EkfCore::prediction(double timestamp) {
     double yaw = x_(YAW);
     double yaw_rate = x_(YAW_RATE);
 
+    // 종방향 가속도 입력을 통합하여 예측 속도 계산
+    double vx_next = vx + ax_imu * dt;
+    
+    // 주행 방향(휠 속도 부호 기준)에 따른 속도 제한 (감속 시 속도 부호 역전 방지)
+    if (vx_wheel >= -0.01) {
+        if (vx_next < 0.0) vx_next = 0.0; // 전진/정차 중인 경우 음의 속도로 흐르지 않도록 제한
+    } else {
+        if (vx_next > 0.0) vx_next = 0.0; // 후진 중인 경우 양의 속도로 흐르지 않도록 제한
+    }
+    
+    double vx_avg = 0.5 * (vx + vx_next);
+
     double cos_yaw = std::cos(yaw);
     double sin_yaw = std::sin(yaw);
 
     // 6차원 상태 기반 등속/등요레이트(YAW_RATE) 오도메트리 전파
-    x_(X) += vx * cos_yaw * dt;
-    x_(Y) += vx * sin_yaw * dt;
+    x_(X) += vx_avg * cos_yaw * dt;
+    x_(Y) += vx_avg * sin_yaw * dt;
     x_(YAW) += yaw_rate * dt;
-    // vx, yaw_rate, b_yaw_rate는 등속/등요레이트(YAW_RATE) 예측 모델에 따라 유지됨
+    x_(VX) = vx_next;
+    // yaw_rate, b_yaw_rate는 등요레이트(YAW_RATE) 예측 모델에 따라 유지됨
 
     // 자코비안 F 행렬 [6x6]
     StateMatrix F = StateMatrix::Identity();
-    F(X, YAW) = -vx * sin_yaw * dt;
+    F(X, YAW) = -vx_avg * sin_yaw * dt;
     F(X, VX) = cos_yaw * dt;
-    F(Y, YAW) = vx * cos_yaw * dt;
+    F(Y, YAW) = vx_avg * cos_yaw * dt;
     F(Y, VX) = sin_yaw * dt;
     F(YAW, YAW_RATE) = dt;
 

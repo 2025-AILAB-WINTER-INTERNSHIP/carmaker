@@ -569,7 +569,7 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
         ekf_core_->setProcessNoise(Q_dyn);
 
         // 6. EKF 예측: 현재 EKF 상태의 VX와 YAW_RATE로 전파
-        ekf_core_->prediction(current_time);
+        ekf_core_->prediction(current_time, vx_wheel, ax_raw);
 
         // 6. cycle 번호 기반 센서 보정
         if (dynamics.cycleno < last_processed_cycleno_) {
