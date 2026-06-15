@@ -225,7 +225,6 @@ bool FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     // cv::remap을 위한 룩업 테이블 생성: 빈 3D 캔버스(u, v)에 원본 이미지의 어느 픽셀(x, y)을 가져올지 기록
     map1_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32FC1);
     map2_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32FC1);
-    cos_theta_lut_ = cv::Mat(bev_cfg_.height, bev_cfg_.width, CV_32FC1);
     for (int v = 0; v < bev_cfg_.height; ++v) {
         for (int u = 0; u < bev_cfg_.width; ++u) {
             int idx = v * bev_cfg_.width + u;
@@ -258,8 +257,6 @@ bool FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
             double r = cv::norm(cam_points[idx]);
             double cos_theta = cam_points[idx].z / (r + 1e-6);   // zero division 방지
             double cos_fov_max = std::cos((max_fov_ / 2.0) * M_PI / 180.0); // 설정된 최대 화각 한계선 적용
-
-            cos_theta_lut_.at<float>(v, u) = static_cast<float>(cos_theta);
 
             if (is_blocked || cos_theta < cos_fov_max) {
                 // 시야각을 벗어나거나 차체에 가린 곳은 -1로 맵핑하여 렌더링에서 제외
@@ -541,17 +538,13 @@ std::vector<LocalFeature> FeatureExtractor::process(
 
         float base_sigma_m_per_px = bev_cfg_.resolution;
 
-        // 어안 왜곡 페널티 (Fisheye Distortion Penalty) 계산
-        float cos_theta = cos_theta_lut_.at<float>(v, u);
-        float penalty = 1.0f / (cos_theta * cos_theta + 1e-6f);
-
-        // 방사형 오차(sigma_r, 깊이 방향): 카메라 원근법 및 어안 렌즈 왜곡 반영
-        float sigma_r = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt_sq) * penalty;
+        // 방사형 오차(sigma_r, 깊이 방향): 카메라 원근법에 따른 거리 제곱 비례 반영
+        float sigma_r = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt_sq);
         float sigma_r_sq = sigma_r * sigma_r;
 
-        // 접선형 오차(sigma_t, 좌우 각도 방향): 픽셀의 각도(FOV) 및 어안 렌즈 왜곡 반영
+        // 접선형 오차(sigma_t, 좌우 각도 방향): 거리 선형 비례 반영
         float dist_opt = std::sqrt(dist_opt_sq);
-        float sigma_t = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt) * penalty;
+        float sigma_t = base_sigma_m_per_px * (1.0f + cov_k_ * dist_opt);
         float sigma_t_sq = sigma_t * sigma_t;
 
         // [3-3. 공분산(Covariance) 행렬 생성]

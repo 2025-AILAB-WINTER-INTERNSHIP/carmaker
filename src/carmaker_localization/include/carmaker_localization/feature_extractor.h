@@ -94,7 +94,6 @@ private:
     // Look-Up Table for remap
     cv::Mat map1_, map2_;
     cv::Mat cartesian_lut_x_, cartesian_lut_y_; // Precomputed X,Y in Fr1A
-    cv::Mat cos_theta_lut_; // Precomputed cos_theta for fisheye penalty
 
     bool is_initialized_;
     bool lut_initialized_;
