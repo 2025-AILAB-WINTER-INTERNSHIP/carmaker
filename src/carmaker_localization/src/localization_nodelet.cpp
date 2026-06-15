@@ -80,7 +80,6 @@ bool LocalizationNodelet::loadParameters() {
 
     resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
     r_max_ = pnh.param("feature_extractor/extraction/r_max", 15.0);
-    cov_k_ = pnh.param("feature_extractor/extraction/covariance_k", 1.0);
 
     max_position_step_ = pnh.param("ekf/rate_limiter/max_position_step", 0.15);
     max_yaw_step_ = pnh.param("ekf/rate_limiter/max_yaw_step", 0.05);
@@ -161,10 +160,19 @@ bool LocalizationNodelet::loadParameters() {
                 }
             }
 
+            double ch_cov_k = 1.0;
+            if (ch_cfg.hasMember("covariance_k")) {
+                if (ch_cfg["covariance_k"].getType() == XmlRpc::XmlRpcValue::TypeDouble) {
+                    ch_cov_k = static_cast<double>(ch_cfg["covariance_k"]);
+                } else if (ch_cfg["covariance_k"].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+                    ch_cov_k = static_cast<int>(ch_cfg["covariance_k"]);
+                }
+            }
+
             ch.extractor = std::make_shared<FeatureExtractor>(ch.name);
             ch.extractor->initialize(x_range, y_range, image_type_, resolution_);
             ch.extractor->initializeVisualization(vis_x_range, vis_y_range, resolution_);
-            ch.extractor->setExtractionParameters(r_max_, cov_k_, ch_max_fov);
+            ch.extractor->setExtractionParameters(r_max_, ch_cov_k, ch_max_fov);
 
             // 차량 풋프린트 필터: GT 이미지에서 차량 외곽선(검은 테두리)이 차선으로 오검출되는 것 방지
             // Fr1A 원점 = 후방 범퍼 중앙, x=[0, length], y=[-width/2, width/2]

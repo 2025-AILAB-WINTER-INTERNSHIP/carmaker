@@ -101,6 +101,7 @@ bool FeatureExtractor::updateLUT(const std::vector<double>& K_vec, const std::ve
     std::cout << "[1. Intrinsic Check]\n";
     std::cout << "  - fx: " << K_vec[0] << " (기대값: 약 236.09)\n";
     std::cout << "  - fy: " << K_vec[4] << " (기대값: 약 236.09)\n";
+    std::cout << "  - covariance_k: " << cov_k_ << "\n";
 
     // 역행렬 사전 계산 (Base 기준 카메라 위치 및 방향 도출용)
     cv::Mat R_cam_base_test = R_base_cam.t();

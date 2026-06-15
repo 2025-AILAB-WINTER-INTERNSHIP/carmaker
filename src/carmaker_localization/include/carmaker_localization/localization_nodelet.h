@@ -138,7 +138,6 @@ private:
     // Feature Extractor Config
     std::string image_type_;
     double r_max_ = 15.0;
-    double cov_k_ = 1.0;
 
     // Feature Loader & Registration Config
     double resolution_ = 0.05;
