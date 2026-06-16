@@ -301,6 +301,7 @@ private:
   int reverse_gear_{-1};
 
   double wheelbase_{2.97};
+  double rear_axle_offset_{0.82};
   double steering_ratio_{9.0};
   double max_steer_command_{4.5};
   double steering_command_sign_{1.0};

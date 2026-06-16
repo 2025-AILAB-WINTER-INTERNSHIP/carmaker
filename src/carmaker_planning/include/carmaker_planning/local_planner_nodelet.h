@@ -102,6 +102,7 @@ private:
   double             min_turning_radius_ = 5.2;
   double             pose_timeout_ = 0.5;
   double             wheelbase_ = 2.97;
+  double             rear_axle_offset_ = 0.82;
   double             diag_period_ = 1.0;
   double             fitting_lookahead_ = 2.0;
   LocalTrajectoryPlanner local_trajectory_planner_;

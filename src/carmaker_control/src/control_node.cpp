@@ -191,6 +191,9 @@ void ControlNode::loadParameters()
 
   double min_turning_radius = 5.5;
   pnh_.param("vehicle/wheelbase", wheelbase_, wheelbase_);
+  if (!pnh_.getParam("vehicle/rear_axle_offset", rear_axle_offset_)) {
+    pnh_.param("vehicle/rear_axle_offset_x", rear_axle_offset_, 0.82);
+  }
   pnh_.param("vehicle/min_turning_radius", min_turning_radius, min_turning_radius);
 
   double max_tire_steer_deg = 28.4;
@@ -747,12 +750,12 @@ double ControlNode::computeRemainingDistance(const std::vector<PathPoint>& path,
                                              const Pose2D& pose,
                                              int direction) const
 {
-  (void)direction;
   if (path.empty()) {
     return 0.0;
   }
   const std::size_t idx = std::min(nearest_index, path.size() - 1);
-  const double s_goal = path.back().s - wheelbase_ * 1.1;
+  const double lookahead_offset = (direction >= 0) ? (wheelbase_ * 1.1) : (rear_axle_offset_ * 1.1);
+  const double s_goal = path.back().s - lookahead_offset;
   double dist_to_end = std::hypot(pose.x - path[idx].x, pose.y - path[idx].y) + (s_goal - path[idx].s);
   return std::max(0.0, dist_to_end);
 }

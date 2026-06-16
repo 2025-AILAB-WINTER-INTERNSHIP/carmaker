@@ -68,6 +68,9 @@ void LocalPlannerNodelet::onInit() {
   pnh_.param("local_planner/fitting_lookahead", fitting_lookahead_, 2.0);
 
   wheelbase_ = pnh_.param<double>("vehicle/wheelbase", 2.97);
+  if (!pnh_.getParam("vehicle/rear_axle_offset", rear_axle_offset_)) {
+    pnh_.param("vehicle/rear_axle_offset_x", rear_axle_offset_, 0.82);
+  }
   state_machine_config_.mode = TrajectoryStateMachine::parseMode(mode_);
   state_machine_config_.endpoint_xy_tol = cfg_.endpoint_xy_tol;
   state_machine_config_.endpoint_yaw_tol = cfg_.endpoint_yaw_tol;
@@ -883,8 +886,10 @@ void LocalPlannerNodelet::recomputeTimingAndAcceleration(Path& path) const {
 }
 
 double LocalPlannerNodelet::getControlLookaheadOffset(int direction) const {
-  if (direction == 1 || direction == -1) {
+  if (direction == 1) {
     return wheelbase_ * 1.1;
+  } else if (direction == -1) {
+    return rear_axle_offset_ * 1.1;
   }
   return 0.0;
 }

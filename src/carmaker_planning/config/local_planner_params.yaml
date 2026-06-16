@@ -30,6 +30,7 @@ setting:
 vehicle:
   wheelbase: 2.97
   min_turning_radius: 5.5 # 유효 회전 반경
+  rear_axle_offset: 0.82 # 후방 범퍼와 후륜 축 사이의 거리
   limits:
     max_steer_vel: 0.6108 # [rad/s]
 
