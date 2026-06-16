@@ -305,6 +305,9 @@ struct GlobalPlannerConfig {
   double step_size;
   int next_node_num, analytic_expansion_ratio;
   struct Weights { double turn, reverse, change_dir, heuristic; } weights;
+  bool goal_straight_enabled = true;
+  double goal_straight_distance = 3.0;
+  int goal_straight_direction = -1;
 };
 
 struct PostProcessConfig {
@@ -471,6 +474,9 @@ inline void loadGlobalPlannerConfig(const ros::NodeHandle& nh, GlobalPlannerConf
   nh.param(ns + "/weights/reverse",         cfg.weights.reverse,        5.0);
   nh.param(ns + "/weights/change_dir",      cfg.weights.change_dir,     15.0);
   nh.param(ns + "/weights/heuristic",       cfg.weights.heuristic,      1.0);
+  nh.param(ns + "/goal_straight_constraint/enabled", cfg.goal_straight_enabled, true);
+  nh.param(ns + "/goal_straight_constraint/distance", cfg.goal_straight_distance, 3.0);
+  nh.param(ns + "/goal_straight_constraint/direction", cfg.goal_straight_direction, -1);
 }
 
 inline void loadPostProcessConfig(const ros::NodeHandle& nh,

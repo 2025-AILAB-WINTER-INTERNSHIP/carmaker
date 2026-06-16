@@ -33,8 +33,17 @@ GlobalPlanningResult GlobalPlanner::plan(
   GlobalPlanningResult result;
   const auto total_start = Clock::now();
 
-  // 1. Validate inputs (Bounds and Collision check for start/goal)
-  result.status = validateInputs(start, goal, map);
+  State target_goal = goal;
+  if (config_.planner.goal_straight_enabled) {
+    State sub_goal;
+    sub_goal.x = goal.x - config_.planner.goal_straight_distance * config_.planner.goal_straight_direction * std::cos(goal.theta);
+    sub_goal.y = goal.y - config_.planner.goal_straight_distance * config_.planner.goal_straight_direction * std::sin(goal.theta);
+    sub_goal.theta = goal.theta;
+    target_goal = sub_goal;
+  }
+
+  // 1. Validate inputs (Bounds and Collision check for start/target_goal)
+  result.status = validateInputs(start, target_goal, map);
   if (result.status != PlanningStatus::SUCCESS_OPTIMAL) {
     result.total_time = elapsedSeconds(total_start);
     return result;
@@ -42,7 +51,7 @@ GlobalPlanningResult GlobalPlanner::plan(
 
   // 2. Run Hybrid A* search (Core Kinodynamic Expansion)
   const auto planning_start = Clock::now();
-  result.status = hybrid_astar_->plan(start, goal, map);
+  result.status = hybrid_astar_->plan(start, target_goal, map);
   result.planning_time = elapsedSeconds(planning_start);
   result.expanded_nodes = hybrid_astar_->getExpandedNodes();
   result.search_iterations = hybrid_astar_->getSearchIterations();
@@ -55,6 +64,30 @@ GlobalPlanningResult GlobalPlanner::plan(
   // Store raw path from search
   result.raw_path = hybrid_astar_->getPath();
   result.path = result.raw_path;
+
+  // 최종 직선 구간 덧붙임 (포스트 프로세싱 전단계)
+  if (config_.planner.goal_straight_enabled && !result.path.empty()) {
+    const double dist_to_goal = config_.planner.goal_straight_distance;
+    const double resolution = config_.planner.xy_resolution;
+    int num_pts = static_cast<int>(std::ceil(dist_to_goal / resolution));
+
+    double last_x = result.path.back().x;
+    double last_y = result.path.back().y;
+    double last_theta = result.path.back().theta;
+    int dir = config_.planner.goal_straight_direction;
+
+    for (int i = 1; i <= num_pts; ++i) {
+      double d = std::min(dist_to_goal, i * resolution);
+      PathPoint p;
+      p.x = last_x + d * std::cos(last_theta) * dir;
+      p.y = last_y + d * std::sin(last_theta) * dir;
+      p.theta = last_theta;
+      p.kappa = 0.0;
+      p.direction = dir;
+      result.path.push_back(p);
+    }
+    result.raw_path = result.path;
+  }
 
   // 3. Post-processing Pipeline (Smoothing -> Resampling -> Profiling)
   if (!postProcess(result, map, current_velocity)) {
