@@ -278,6 +278,7 @@ private:
   double arrival_slow_distance_{0.5};
   double alignment_fade_distance_{2.0};
   double front_curvature_weight_{0.5};
+  int off_tracking_mode_{3};
   double forward_control_lookahead_{0.0};
   double reverse_control_lookahead_{0.82};
   double max_target_speed_{0.7};

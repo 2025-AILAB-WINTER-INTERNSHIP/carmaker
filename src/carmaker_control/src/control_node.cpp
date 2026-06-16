@@ -160,6 +160,8 @@ void ControlNode::loadParameters()
 
   pnh_.param("control/front_curvature_weight", front_curvature_weight_, 0.5);
   front_curvature_weight_ = std::max(0.0, std::min(1.0, front_curvature_weight_));
+  pnh_.param("control/off_tracking_mode", off_tracking_mode_, 3);
+  off_tracking_mode_ = std::max(0, std::min(3, off_tracking_mode_));
   pnh_.param("control/forward/control_lookahead", forward_control_lookahead_, 0.0);
   pnh_.param("control/reverse/control_lookahead", reverse_control_lookahead_, 0.82);
 
@@ -667,16 +669,22 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
   //   - Corner entry  (κ_rear≈0, κ_front>0): min→0, no premature offset
   //   - Steady curve  (κ_rear≈κ_front):      min→κ, full compensation
   //   - Corner exit   (κ_rear>0, κ_front≈0): min→0, no lingering offset
-  if (direction >= 0) {
-    // const double front_path_curvature = feedback_reference.curvature;
-    // const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
-    // const double effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
-    // cte -= computeOffTrackingOffset(wheelbase_, effective_curvature);
+  if (direction >= 0 && off_tracking_mode_ != 0) {
+    double effective_curvature = 0.0;
+    if (off_tracking_mode_ == 1) {
+      // Mode 1: Pure rear axle curvature
+      effective_curvature = rear_curvature;
+    } else if (off_tracking_mode_ == 2) {
+      // Mode 2: Weighted front/rear blending
+      const double front_path_curvature = feedback_reference.curvature;
+      effective_curvature = (1.0 - front_curvature_weight_) * rear_curvature + front_curvature_weight_ * front_path_curvature;
+    } else if (off_tracking_mode_ == 3) {
+      // Mode 3: Minimum absolute curvature of front and rear (Recommended)
+      const double front_path_curvature = feedback_reference.curvature;
+      const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
+      effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
+    }
 
-    // cte -= computeOffTrackingOffset(wheelbase_, rear_curvature);
-
-    const double front_path_curvature = feedback_reference.curvature;
-    const double effective_curvature = (1.0 - front_curvature_weight_) * rear_curvature + front_curvature_weight_ * front_path_curvature;
     const double off_tracking_offset = computeOffTrackingOffset(wheelbase_, effective_curvature);
 
     // 최종 지점 정렬을 위해 남은 거리에 비례하여 오프셋 선형 감쇄(Fade-out)
@@ -1196,6 +1204,7 @@ void ControlNode::reconfigureCallback(carmaker_control::CarmakerControlConfig& c
   forward_control_lookahead_ = config.forward_control_lookahead;
   reverse_control_lookahead_ = config.reverse_control_lookahead;
   front_curvature_weight_ = config.front_curvature_weight;
+  off_tracking_mode_ = config.off_tracking_mode;
 
   ROS_INFO("CarmakerControl dynamic parameters updated.");
 }

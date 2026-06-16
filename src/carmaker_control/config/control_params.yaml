@@ -31,11 +31,13 @@ control:
   min_tracking_speed: 0.25
   min_creep_speed: 0.20
   arrival_slow_distance: 1.0
-  alignment_fade_distance: 2.97
   # Parking speed cap.
   max_target_speed: 0.5
 
+  # 내륜차 보정
+  off_tracking_mode: 3 # 보정 모드 (0: Disabled, 1: PureRear, 2: Weighted, 3: MinAbs)
   front_curvature_weight: 0.45 # 전륜 곡률 가중치 (1.0 - front_curvature_weight는 후륜 가중치)
+  alignment_fade_distance: 3.86 # 2.97(휠베이스) + 0.89(전륜->전방범퍼)
 
   # 전진용 Lookahead
   forward:
