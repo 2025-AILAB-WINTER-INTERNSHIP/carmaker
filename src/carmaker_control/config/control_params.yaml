@@ -35,14 +35,17 @@ control:
   # Parking speed cap.
   max_target_speed: 0.5
 
+  front_curvature_weight: 0.45 # 전륜 곡률 가중치 (1.0 - front_curvature_weight는 후륜 가중치)
+
   # 전진용 Lookahead
   forward:
     lookahead_distance: 0
     lookahead_time: 0
     min_lookahead_distance: 0
     max_lookahead_distance: 0
-    curvature_preview_distance: 0
+    curvature_preview_distance: 0 # 선제 곡률 계산 위치
     curvature_preview_window: 0
+    control_lookahead: 0.0 # 전진 Stanley 피드백 횡오차/헤딩 계산점 추가 전방 투영 거리
 
   # 후진용 Lookahead
   reverse:
@@ -50,8 +53,9 @@ control:
     lookahead_time: 0
     min_lookahead_distance: 0
     max_lookahead_distance: 0
-    curvature_preview_distance: 1.0
-    curvature_preview_window: 0.18
+    curvature_preview_distance: 0.82 # 선제 곡률 계산 위치
+    curvature_preview_window: 0.0
+    control_lookahead: 0.82 # 후진 Stanley 피드백 횡오차/헤딩 계산점 전방 투영 거리
 
   # Path index tracking -------------------------------------------------------
   # nearest index가 경로 위에서 크게 튀지 않도록 이전 index 주변만 검색한다.
@@ -96,19 +100,19 @@ stanley:
 
   # 전진용 Stanley 제어 파라미터 (안정성 및 밀림 방지 위주)
   forward:
-    k: 4.5 # 횡오차 복귀 강도
-    k_soft: 0.3 # 저속 분모 보정
-    cte_gain: 4.0 # 횡오차 gain
-    heading_gain: 4.0 # 헤딩 오차 gain
+    k: 1.0 # 횡오차 복귀 강도
+    k_soft: 0.2 # 저속 분모 보정
+    cte_gain: 1.0 # 횡오차 gain
+    heading_gain: 1.0 # 헤딩 오차 gain
     curvature_ff_gain: 0 # 곡률 feedforward gain
 
   # 후진용 Stanley 제어 파라미터 (후진 민감성/조향 댐핑 위주)
   reverse:
-    k: 4.5
+    k: 1.0
     k_soft: 0.3
-    cte_gain: 4.5
-    heading_gain: 3.0
-    curvature_ff_gain: 0.5
+    cte_gain: 1.0
+    heading_gain: 1.0
+    curvature_ff_gain: 1.0
     reverse_curvature_ff_sign: -1.0
 
 vehicle:

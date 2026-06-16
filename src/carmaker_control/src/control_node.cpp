@@ -158,6 +158,11 @@ void ControlNode::loadParameters()
   alignment_fade_distance_ = std::max(0.1, alignment_fade_distance_);
   max_target_speed_ = std::max(0.0, max_target_speed_);
 
+  pnh_.param("control/front_curvature_weight", front_curvature_weight_, 0.5);
+  front_curvature_weight_ = std::max(0.0, std::min(1.0, front_curvature_weight_));
+  pnh_.param("control/forward/control_lookahead", forward_control_lookahead_, 0.0);
+  pnh_.param("control/reverse/control_lookahead", reverse_control_lookahead_, 0.82);
+
   // Load structured lookahead parameters
   forward_lookahead_ = loadLookaheadParams("forward");
   reverse_lookahead_ = loadLookaheadParams("reverse");
@@ -482,8 +487,11 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
 
   Pose2D tracking_pose = state.pose;
   if (active_trajectory_.direction() > 0) {
-    tracking_pose.x = state.pose.x + wheelbase_ * std::cos(state.pose.yaw);
-    tracking_pose.y = state.pose.y + wheelbase_ * std::sin(state.pose.yaw);
+    tracking_pose.x = state.pose.x + (wheelbase_ + forward_control_lookahead_) * std::cos(state.pose.yaw);
+    tracking_pose.y = state.pose.y + (wheelbase_ + forward_control_lookahead_) * std::sin(state.pose.yaw);
+  } else {
+    tracking_pose.x = state.pose.x - reverse_control_lookahead_ * std::cos(state.pose.yaw);
+    tracking_pose.y = state.pose.y - reverse_control_lookahead_ * std::sin(state.pose.yaw);
   }
 
 
@@ -668,7 +676,7 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
     // cte -= computeOffTrackingOffset(wheelbase_, rear_curvature);
 
     const double front_path_curvature = feedback_reference.curvature;
-    const double effective_curvature = 0.5 * (rear_curvature + front_path_curvature);
+    const double effective_curvature = (1.0 - front_curvature_weight_) * rear_curvature + front_curvature_weight_ * front_path_curvature;
     const double off_tracking_offset = computeOffTrackingOffset(wheelbase_, effective_curvature);
 
     // 최종 지점 정렬을 위해 남은 거리에 비례하여 오프셋 선형 감쇄(Fade-out)
@@ -811,6 +819,7 @@ void ControlNode::advertiseDebugTopics()
 
   debug_pubs_.rear_axle_pose = advertiseDebug<geometry_msgs::PoseStamped>("rear_axle_pose");
   debug_pubs_.front_axle_pose = advertiseDebug<geometry_msgs::PoseStamped>("front_axle_pose");
+  debug_pubs_.tracking_pose = advertiseDebug<geometry_msgs::PoseStamped>("tracking_pose");
   debug_pubs_.nearest_pose = advertiseDebug<geometry_msgs::PoseStamped>("nearest_pose");
   debug_pubs_.control_pose = advertiseDebug<geometry_msgs::PoseStamped>("control_pose");
   debug_pubs_.lookahead_pose = advertiseDebug<geometry_msgs::PoseStamped>("lookahead_pose");
@@ -887,6 +896,7 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   const double front_x = pose.x + wheelbase_ * std::cos(pose.yaw);
   const double front_y = pose.y + wheelbase_ * std::sin(pose.yaw);
   publishPoseDebug(debug_pubs_.front_axle_pose, front_x, front_y, pose.yaw, stamp);
+  publishPoseDebug(debug_pubs_.tracking_pose, tracking_pose.x, tracking_pose.y, tracking_pose.yaw, stamp);
 
   if (trajectory && !trajectory->empty()) {
     const auto& path = trajectory->points;
@@ -1182,6 +1192,11 @@ void ControlNode::reconfigureCallback(carmaker_control::CarmakerControlConfig& c
 
   // Update Alignment Fade-out Parameter
   alignment_fade_distance_ = config.alignment_fade_distance;
+
+  // Update Steering Lookahead & Curvature Weight parameters
+  forward_control_lookahead_ = config.forward_control_lookahead;
+  reverse_control_lookahead_ = config.reverse_control_lookahead;
+  front_curvature_weight_ = config.front_curvature_weight;
 
   ROS_INFO("CarmakerControl dynamic parameters updated.");
 }

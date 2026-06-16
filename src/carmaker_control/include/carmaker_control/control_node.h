@@ -101,6 +101,7 @@ private:
   struct DebugPublishers {
     ros::Publisher rear_axle_pose;
     ros::Publisher front_axle_pose;
+    ros::Publisher tracking_pose;
     ros::Publisher nearest_pose;
     ros::Publisher control_pose;
     ros::Publisher lookahead_pose;
@@ -276,6 +277,9 @@ private:
   double min_creep_speed_{0.1};
   double arrival_slow_distance_{0.5};
   double alignment_fade_distance_{2.0};
+  double front_curvature_weight_{0.5};
+  double forward_control_lookahead_{0.0};
+  double reverse_control_lookahead_{0.82};
   double max_target_speed_{0.7};
 
   LookaheadParams forward_lookahead_;
