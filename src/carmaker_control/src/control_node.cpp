@@ -150,12 +150,14 @@ void ControlNode::loadParameters()
   pnh_.param("control/min_tracking_speed", min_tracking_speed_, 0.2);
   pnh_.param("control/min_creep_speed", min_creep_speed_, 0.1);
   pnh_.param("control/arrival_slow_distance", arrival_slow_distance_, 0.5);
-  pnh_.param("control/alignment_fade_distance", alignment_fade_distance_, 2.0);
+  pnh_.param("control/off_tracking_fade_distance", off_tracking_fade_distance_, 3.86);
+  pnh_.param("control/tracking_pose_fade_distance", tracking_pose_fade_distance_, 3.86);
   pnh_.param("control/max_target_speed", max_target_speed_, 0.7);
   min_tracking_speed_ = std::max(0.0, min_tracking_speed_);
   min_creep_speed_ = std::max(0.0, min_creep_speed_);
   arrival_slow_distance_ = std::max(0.0, arrival_slow_distance_);
-  alignment_fade_distance_ = std::max(0.1, alignment_fade_distance_);
+  off_tracking_fade_distance_ = std::max(0.1, off_tracking_fade_distance_);
+  tracking_pose_fade_distance_ = std::max(0.1, tracking_pose_fade_distance_);
   max_target_speed_ = std::max(0.0, max_target_speed_);
 
   pnh_.param("control/front_curvature_weight", front_curvature_weight_, 0.5);
@@ -487,17 +489,23 @@ void ControlNode::controlTimerCallback(const ros::TimerEvent& event)
   const double current_speed = std::abs(state.signed_speed);
   nearest_index_ = findNearestIndex(active_trajectory_, state.pose, nearest_index_);
 
+  const double distance_to_end = computeRemainingDistance(active_trajectory_.points, nearest_index_, state.pose, active_trajectory_.direction());
+
+  double tracking_pose_fade_factor = 1.0;
+  if (tracking_pose_fade_distance_ > 0.0) {
+    tracking_pose_fade_factor = clamp(distance_to_end / tracking_pose_fade_distance_, 0.0, 1.0);
+  }
+
   Pose2D tracking_pose = state.pose;
   if (active_trajectory_.direction() > 0) {
-    tracking_pose.x = state.pose.x + (wheelbase_ + forward_control_lookahead_) * std::cos(state.pose.yaw);
-    tracking_pose.y = state.pose.y + (wheelbase_ + forward_control_lookahead_) * std::sin(state.pose.yaw);
+    const double lookahead_offset = (wheelbase_ + forward_control_lookahead_) * tracking_pose_fade_factor;
+    tracking_pose.x = state.pose.x + lookahead_offset * std::cos(state.pose.yaw);
+    tracking_pose.y = state.pose.y + lookahead_offset * std::sin(state.pose.yaw);
   } else {
+    // 후진 시에는 조향축이 뒤처지므로 조향 안정성 유지를 위해 룩어헤드를 감쇄하지 않고 고정값 유지
     tracking_pose.x = state.pose.x - reverse_control_lookahead_ * std::cos(state.pose.yaw);
     tracking_pose.y = state.pose.y - reverse_control_lookahead_ * std::sin(state.pose.yaw);
   }
-
-
-  const double distance_to_end = computeRemainingDistance(active_trajectory_.points, nearest_index_, state.pose, active_trajectory_.direction());
 
   const int dir = active_trajectory_.direction();
   const LookaheadParams& lp = (dir >= 0) ? forward_lookahead_ : reverse_lookahead_;
@@ -693,11 +701,11 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
     const double off_tracking_offset = computeOffTrackingOffset(wheelbase_, effective_curvature);
 
     // 최종 지점 정렬을 위해 남은 거리에 비례하여 오프셋 선형 감쇄(Fade-out)
-    double fade_factor = 1.0;
-    if (alignment_fade_distance_ > 0.0) {
-      fade_factor = clamp(distance_to_end / alignment_fade_distance_, 0.0, 1.0);
+    double off_tracking_fade_factor = 1.0;
+    if (off_tracking_fade_distance_ > 0.0) {
+      off_tracking_fade_factor = clamp(distance_to_end / off_tracking_fade_distance_, 0.0, 1.0);
     }
-    cte -= off_tracking_offset * fade_factor;
+    cte -= off_tracking_offset * off_tracking_fade_factor;
   }
 
   const double heading_error = normalizeAngle(feedback_reference.yaw - pose.yaw);
@@ -1202,8 +1210,9 @@ void ControlNode::reconfigureCallback(carmaker_control::CarmakerControlConfig& c
   reverse_lookahead_.curvature_preview_distance = config.reverse_curvature_preview_distance;
   reverse_lookahead_.curvature_preview_window = config.reverse_curvature_preview_window;
 
-  // Update Alignment Fade-out Parameter
-  alignment_fade_distance_ = config.alignment_fade_distance;
+  // Update Alignment Fade-out Parameters
+  off_tracking_fade_distance_ = config.off_tracking_fade_distance;
+  tracking_pose_fade_distance_ = config.tracking_pose_fade_distance;
 
   // Update Steering Lookahead & Curvature Weight parameters
   forward_control_lookahead_ = config.forward_control_lookahead;

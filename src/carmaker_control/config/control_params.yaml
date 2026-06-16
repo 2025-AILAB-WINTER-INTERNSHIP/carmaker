@@ -37,7 +37,8 @@ control:
   # 내륜차 보정
   off_tracking_mode: 3 # 보정 모드 (0: Disabled, 1: PureRear, 2: Weighted, 3: MinAbs)
   front_curvature_weight: 0.45 # 전륜 곡률 가중치 (1.0 - front_curvature_weight는 후륜 가중치)
-  alignment_fade_distance: 3.86 # 2.97(휠베이스) + 0.89(전륜->전방범퍼)
+  off_tracking_fade_distance: 3.86 # 내륜차 보정 오프셋 감쇄 거리 # 2.97(휠베이스) + 0.89(전륜->전방범퍼)
+  tracking_pose_fade_distance: 3.86 # 제어 피드백 추적점 감쇄 거리
 
   # 전진용 Lookahead
   forward:
@@ -57,7 +58,7 @@ control:
     max_lookahead_distance: 0
     curvature_preview_distance: 0 # 선제 곡률 계산 위치
     curvature_preview_window: 0.0
-    control_lookahead: 0.82 # 후진 Stanley 피드백 횡오차/헤딩 계산점 전방 투영 거리
+    control_lookahead: 0.3 # 후진 Stanley 피드백 횡오차/헤딩 계산점 전방 투영 거리
 
   # Path index tracking -------------------------------------------------------
   # nearest index가 경로 위에서 크게 튀지 않도록 이전 index 주변만 검색한다.
