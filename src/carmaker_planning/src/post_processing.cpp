@@ -470,8 +470,12 @@ bool PostProcessor::profile(Path& path, double start_vel, std::vector<std::pair<
     if (j > 0) {
       size_t prev_end = segments[j - 1].second;
       double ds = dist(path[prev_end], path[seg_start]);
-      // Use configurable gear_shift_duration for the stationary transition time at the cusp
-      double dt = (ds > 1e-6) ? ds / 0.1 : config_.profiler.gear_shift_duration;
+      // Use configurable gear_shift_duration for the stationary transition time at the cusp.
+      // Guarantee at least gear_shift_duration at direction transitions to allow enough time for wheel redirection.
+      double dt = config_.profiler.gear_shift_duration;
+      if (ds > 1e-6) {
+        dt = std::max(dt, ds / 0.1);
+      }
       current_time_offset = path[prev_end].t + dt;
     }
 

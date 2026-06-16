@@ -73,16 +73,27 @@ GlobalPlanningResult GlobalPlanner::plan(
 
     double last_x = result.path.back().x;
     double last_y = result.path.back().y;
-    double last_theta = result.path.back().theta;
     int dir = config_.planner.goal_straight_direction;
+
+    // 실제 마지막 경로 세그먼트의 진행 방향 각도를 추출하여 직선을 연장합니다.
+    double extend_theta = result.path.back().theta;
+    if (result.path.size() >= 2) {
+      double dx = last_x - result.path[result.path.size() - 2].x;
+      double dy = last_y - result.path[result.path.size() - 2].y;
+      if (std::hypot(dx, dy) > 1e-3) {
+        extend_theta = std::atan2(dy, dx);
+        if (result.path.back().direction == -1) {
+          extend_theta = wrap_to_pi(extend_theta + M_PI);
+        }
+      }
+    }
 
     for (int i = 1; i <= num_pts; ++i) {
       double d = std::min(dist_to_goal, i * resolution);
       PathPoint p;
-      p.x = last_x + d * std::cos(last_theta) * dir;
-      p.y = last_y + d * std::sin(last_theta) * dir;
-      p.theta = last_theta;
-      p.kappa = 0.0;
+      p.x = last_x + d * std::cos(extend_theta) * dir;
+      p.y = last_y + d * std::sin(extend_theta) * dir;
+      p.theta = extend_theta;
       p.direction = dir;
       result.path.push_back(p);
     }

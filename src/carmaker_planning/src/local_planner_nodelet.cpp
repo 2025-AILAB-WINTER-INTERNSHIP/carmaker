@@ -910,8 +910,14 @@ void LocalPlannerNodelet::appendOffset(Path& path, double offset) const {
     p.y = last_pt.y + d * std::sin(theta) * last_pt.direction;
     p.theta = theta;
     // 0.0까지 선형적으로 감쇠하도록 처리하여 부드러운 핸들 정렬 유도
-    double ratio = (offset <= 1e-6) ? 1.0 : std::max(0.0, std::min(1.0, d / offset));
-    p.kappa = last_pt.kappa * (1.0 - ratio);
+    // double ratio = (offset <= 1e-6) ? 1.0 : std::max(0.0, std::min(1.0, d / offset));
+    // p.kappa = last_pt.kappa * (1.0 - ratio);
+
+    // 단순 곡률값 유지 직선 -> 내륜 보정 적용
+    // p.kappa = last_pt.kappa;
+
+    // 곡률 0으로 설정
+    p.kappa = 0.0;
     p.v = 0.0;
     p.a = 0.0;
     p.direction = last_pt.direction;
