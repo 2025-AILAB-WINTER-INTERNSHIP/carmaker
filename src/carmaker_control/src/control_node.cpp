@@ -726,15 +726,14 @@ double ControlNode::computeRemainingDistance(const std::vector<PathPoint>& path,
                                              const Pose2D& pose,
                                              int direction) const
 {
+  (void)direction;
   if (path.empty()) {
     return 0.0;
   }
   const std::size_t idx = std::min(nearest_index, path.size() - 1);
-  double dist_to_end = std::hypot(pose.x - path[idx].x, pose.y - path[idx].y) + (path.back().s - path[idx].s);
-  if (direction > 0) {
-    dist_to_end = std::max(0.0, dist_to_end - wheelbase_);
-  }
-  return dist_to_end;
+  const double s_goal = path.back().s - wheelbase_ * 1.5;
+  double dist_to_end = std::hypot(pose.x - path[idx].x, pose.y - path[idx].y) + (s_goal - path[idx].s);
+  return std::max(0.0, dist_to_end);
 }
 
 ControlNode::TargetSpeedDecision ControlNode::selectTargetSpeedForPath(
