@@ -37,7 +37,7 @@ control:
   # 내륜차 보정
   off_tracking_mode: 3 # 보정 모드 (0: Disabled, 1: PureRear, 2: Weighted, 3: MinAbs)
   front_curvature_weight: 0.45 # 전륜 곡률 가중치 (1.0 - front_curvature_weight는 후륜 가중치)
-  off_tracking_fade_distance: 3.86 # 내륜차 보정 오프셋 감쇄 거리 # 2.97(휠베이스) + 0.89(전륜->전방범퍼)
+  off_tracking_fade_distance: 0 # 내륜차 보정 오프셋 감쇄 거리 # 2.97(휠베이스) + 0.89(전륜->전방범퍼)
   tracking_pose_fade_distance: 0 # 제어 피드백 추적점 감쇄 거리
 
   # 전진용 Lookahead
@@ -111,10 +111,10 @@ stanley:
 
   # 후진용 Stanley 제어 파라미터 (후진 민감성/조향 댐핑 위주)
   reverse:
-    k: 1.0
+    k: 1.5
     k_soft: 0.3
     cte_gain: 1.0
-    heading_gain: 1.0
+    heading_gain: 1.2
     curvature_ff_gain: 1.0
     reverse_curvature_ff_sign: -1.0
 

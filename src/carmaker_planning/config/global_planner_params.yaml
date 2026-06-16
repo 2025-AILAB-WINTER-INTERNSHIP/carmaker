@@ -80,7 +80,7 @@ global_planner:
 
   goal_straight_constraint:
     enabled: true
-    distance: 3.0 # meters
+    distance: 3.86 # meters (wheel base + front bumper: 3.86, rear axle: 0.82)
     direction: -1 # 1: Forward arrival, -1: Reverse arrival (Default: reverse parking)
 
 # Post processing pipeline parameters
