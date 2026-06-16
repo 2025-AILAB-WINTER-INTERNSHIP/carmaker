@@ -681,16 +681,21 @@ double ControlNode::computeSteeringCommand(const Pose2D& pose,
     double effective_curvature = 0.0;
     const double front_path_curvature = feedback_reference.curvature;
 
-    if (off_tracking_mode_ == 1) {
-      // Mode 1: Pure rear axle curvature
-      effective_curvature = rear_curvature;
-    } else if (off_tracking_mode_ == 2) {
-      // Mode 2: Weighted front/rear blending
-      effective_curvature = (1.0 - front_curvature_weight_) * rear_curvature + front_curvature_weight_ * front_path_curvature;
-    } else if (off_tracking_mode_ == 3) {
-      // Mode 3: Minimum absolute curvature of front and rear (Recommended)
-      const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
-      effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
+    if (rear_curvature * front_path_curvature < 0.0) {
+      // Opposite signs (S-curve inflection zone) -> Disable offset to prevent wrong-direction forces
+      effective_curvature = 0.0;
+    } else {
+      if (off_tracking_mode_ == 1) {
+        // Mode 1: Pure rear axle curvature
+        effective_curvature = rear_curvature;
+      } else if (off_tracking_mode_ == 2) {
+        // Mode 2: Weighted front/rear blending
+        effective_curvature = (1.0 - front_curvature_weight_) * rear_curvature + front_curvature_weight_ * front_path_curvature;
+      } else if (off_tracking_mode_ == 3) {
+        // Mode 3: Minimum absolute curvature of front and rear (Recommended)
+        const double min_abs_kappa = std::min(std::abs(rear_curvature), std::abs(front_path_curvature));
+        effective_curvature = std::copysign(min_abs_kappa, rear_curvature);
+      }
     }
 
     const double off_tracking_offset = computeOffTrackingOffset(wheelbase_, effective_curvature);
