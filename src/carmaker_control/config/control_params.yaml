@@ -53,7 +53,7 @@ control:
     lookahead_time: 0
     min_lookahead_distance: 0
     max_lookahead_distance: 0
-    curvature_preview_distance: 0.82 # 선제 곡률 계산 위치
+    curvature_preview_distance: 0 # 선제 곡률 계산 위치
     curvature_preview_window: 0.0
     control_lookahead: 0.82 # 후진 Stanley 피드백 횡오차/헤딩 계산점 전방 투영 거리
 

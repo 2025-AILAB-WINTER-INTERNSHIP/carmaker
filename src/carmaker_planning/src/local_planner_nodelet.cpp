@@ -761,9 +761,12 @@ bool LocalPlannerNodelet::composeTrajectoryForDecision(
     return false;
   }
 
-  // 전진 주행일 경우 최종 경로 끝단에 휠베이스 오프셋 일괄 연장 적용! (락 구간 피팅 궤적도 자동으로 포함됨)
-  if (!path.empty() && decision.active_direction == 1) {
-    appendWheelbaseOffset(path, wheelbase_);
+  // 최종 경로 끝단에 오프셋 일괄 연장 적용 (락 구간 피팅 궤적도 자동으로 포함됨)
+  if (!path.empty()) {
+    double offset = getControlLookaheadOffset(decision.active_direction);
+    if (offset > 0.0) {
+      appendOffset(path, offset);
+    }
   }
 
   // 락 상태 저장 (연장 처리가 완료된 완성본이 locked_path_에 안전하게 저장됨)
@@ -823,7 +826,7 @@ bool LocalPlannerNodelet::applyTrackingCreepIfNeeded(
     return false;
   }
 
-  const double offset = (path.back().direction == 1) ? wheelbase_ : 0.0;
+  const double offset = getControlLookaheadOffset(path.back().direction);
 
   bool changed = false;
   for (size_t i = 0; i + 1 < path.size(); ++i) {
@@ -879,32 +882,35 @@ void LocalPlannerNodelet::recomputeTimingAndAcceleration(Path& path) const {
   }
 }
 
-void LocalPlannerNodelet::appendWheelbaseOffset(Path& path, double wheelbase) const {
-  if (path.empty() || wheelbase <= 0.0) return;
-  double resolution = 0.1;
-  if (path.size() >= 2) {
-    resolution = dist(path[path.size() - 2], path.back());
-    if (resolution <= 1e-3) {
-      resolution = 0.1;
-    }
+double LocalPlannerNodelet::getControlLookaheadOffset(int direction) const {
+  if (direction == 1 || direction == -1) {
+    return wheelbase_ * 1.5;
+  }
+  return 0.0;
+}
+
+void LocalPlannerNodelet::appendOffset(Path& path, double offset) const {
+  if (path.empty() || offset <= 0.0) return;
+  double resolution = cfg_.post_process.resampler.resolution;
+  if (resolution <= 1e-4) {
+    resolution = 0.1;
   }
   const auto& last_pt = path.back();
   const double theta = last_pt.theta;
   const double time_from_start = last_pt.t;
   const double start_s = last_pt.s;
 
-  // 단순 직선 연장 (곡률 K = 0.0, 제어기 단에서 내륜차 보정을 처리하므로 직선 연장이 기하학적으로 일치함)
-  int num_offset_points = static_cast<int>(std::ceil(wheelbase / resolution));
+  int num_offset_points = static_cast<int>(std::ceil(offset / resolution));
   path.reserve(path.size() + num_offset_points);
 
   for (int i = 1; i <= num_offset_points; ++i) {
-    double d = std::min(wheelbase, i * resolution);
+    double d = std::min(offset, i * resolution);
     PathPoint p;
-    p.x = last_pt.x + d * std::cos(theta);
-    p.y = last_pt.y + d * std::sin(theta);
+    p.x = last_pt.x + d * std::cos(theta) * last_pt.direction;
+    p.y = last_pt.y + d * std::sin(theta) * last_pt.direction;
     p.theta = theta;
     // 0.0까지 선형적으로 감쇠하도록 처리하여 부드러운 핸들 정렬 유도
-    double ratio = (wheelbase <= 1e-6) ? 1.0 : std::max(0.0, std::min(1.0, d / wheelbase));
+    double ratio = (offset <= 1e-6) ? 1.0 : std::max(0.0, std::min(1.0, d / offset));
     p.kappa = last_pt.kappa * (1.0 - ratio);
     p.v = 0.0;
     p.a = 0.0;
