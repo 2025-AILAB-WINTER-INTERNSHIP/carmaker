@@ -752,7 +752,7 @@ double ControlNode::computeRemainingDistance(const std::vector<PathPoint>& path,
     return 0.0;
   }
   const std::size_t idx = std::min(nearest_index, path.size() - 1);
-  const double s_goal = path.back().s - wheelbase_ * 1.5;
+  const double s_goal = path.back().s - wheelbase_ * 1.1;
   double dist_to_end = std::hypot(pose.x - path[idx].x, pose.y - path[idx].y) + (s_goal - path[idx].s);
   return std::max(0.0, dist_to_end);
 }

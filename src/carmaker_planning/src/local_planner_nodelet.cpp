@@ -884,7 +884,7 @@ void LocalPlannerNodelet::recomputeTimingAndAcceleration(Path& path) const {
 
 double LocalPlannerNodelet::getControlLookaheadOffset(int direction) const {
   if (direction == 1 || direction == -1) {
-    return wheelbase_ * 1.5;
+    return wheelbase_ * 1.1;
   }
   return 0.0;
 }
