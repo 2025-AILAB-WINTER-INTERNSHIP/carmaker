@@ -1,0 +1,13 @@
+parking_scenario:
+  # Re-parking / Realignment Thresholds
+  max_re_parking_attempts: 3
+  re_parking_xy_threshold: 0.10     # [m]
+  re_parking_yaw_threshold: 0.05    # [rad] (~2.86 degrees)
+
+  topics:
+    subscribe:
+      goal: "/planning/goal"
+      arrival_error: "/planning/local/arrival_error"
+    publish:
+      goal: "/planning/goal"
+      result: "/parking/result"

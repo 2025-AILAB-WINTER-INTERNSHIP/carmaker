@@ -9,6 +9,7 @@ topics:
     odom: "/localization/odom" # EKF
   publish:
     trajectory: "/planning/trajectory"
+    arrival_error: "/planning/local/arrival_error"
     debug:
       path: "/planning/debug/local/path"
       pose: "/planning/debug/local/pose"

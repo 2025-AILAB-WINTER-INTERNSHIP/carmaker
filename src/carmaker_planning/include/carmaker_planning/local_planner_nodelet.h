@@ -35,6 +35,7 @@
 #include "carmaker_planning/visualizer.h"
 #include <carmaker_msgs/TrajectoryPath.h>
 #include <carmaker_msgs/DynamicsInfo.h>
+#include <carmaker_msgs/ArrivalError.h>
 
 namespace carmaker_planning {
 
@@ -87,6 +88,7 @@ private:
   ros::NodeHandle nh_, pnh_;
   ros::Subscriber trajectory_sub_, dynamics_sub_, odom_sub_, test_pose_sub_;
   ros::Publisher  trajectory_pub_;
+  ros::Publisher  arrival_error_pub_;
   ros::Timer      publish_timer_;
   ros::WallTimer  diag_timer_;
   ros::Time       last_timer_time_;

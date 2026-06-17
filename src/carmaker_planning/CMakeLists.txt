@@ -76,9 +76,13 @@ target_link_libraries(carmaker_planning_local_nodelet
   ${catkin_LIBRARIES}
 )
 
+add_executable(scenario_manager_node src/scenario_manager_node.cpp)
+target_link_libraries(scenario_manager_node ${catkin_LIBRARIES})
+
 if(catkin_EXPORTED_TARGETS)
   add_dependencies(carmaker_planning_nodelet       ${catkin_EXPORTED_TARGETS})
   add_dependencies(carmaker_planning_local_nodelet ${catkin_EXPORTED_TARGETS})
+  add_dependencies(scenario_manager_node           ${catkin_EXPORTED_TARGETS})
 endif()
 
 if(CATKIN_ENABLE_TESTING)
@@ -100,6 +104,7 @@ endif()
 
 install(TARGETS ${PROJECT_NAME}_global carmaker_planning_nodelet
                 ${PROJECT_NAME}_local  carmaker_planning_local_nodelet
+                scenario_manager_node
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

@@ -21,6 +21,7 @@ add_message_files(
   CameraBundle.msg
   TrajectoryPoint.msg
   TrajectoryPath.msg
+  ArrivalError.msg
 )
 
 generate_messages(

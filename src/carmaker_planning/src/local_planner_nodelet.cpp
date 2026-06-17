@@ -97,6 +97,9 @@ void LocalPlannerNodelet::onInit() {
   trajectory_sub_       = nh_.subscribe(traj_in, 1,
                               &LocalPlannerNodelet::trajectoryCallback, this);
   trajectory_pub_ = nh_.advertise<carmaker_msgs::TrajectoryPath>(traj_out, 1, true);
+  const std::string err_out = pnh_.param<std::string>(
+      "topics/publish/arrival_error", "/planning/local/arrival_error");
+  arrival_error_pub_ = nh_.advertise<carmaker_msgs::ArrivalError>(err_out, 1, true);
   visualizer_ = std::make_unique<Visualizer>(nh_, pnh_, false);
 
   if (use_test_pose_) {
@@ -624,6 +627,13 @@ void LocalPlannerNodelet::logDecisionTransition(
                    cfg_.endpoint_xy_tol, rad2deg(cfg_.endpoint_yaw_tol), cfg_.stop_vel_tol,
                    err_xy, rad2deg(err_yaw), err_v);
     }
+
+    carmaker_msgs::ArrivalError err_msg;
+    err_msg.header.stamp = ros::Time::now();
+    err_msg.header.frame_id = global_frame_;
+    err_msg.xy_error = err_xy;
+    err_msg.yaw_error = err_yaw;
+    arrival_error_pub_.publish(err_msg);
   }
 
   last_decision_log_valid_ = true;
