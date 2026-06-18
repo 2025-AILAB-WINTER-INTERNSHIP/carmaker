@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
+  rospy
   nodelet
   carmaker_msgs
   sensor_msgs
@@ -29,6 +30,7 @@ catkin_package(
   LIBRARIES carmaker_localization_nodelet
   CATKIN_DEPENDS
     roscpp nodelet carmaker_msgs sensor_msgs geometry_msgs nav_msgs
+    rospy
     cv_bridge tf2_ros tf2_geometry_msgs message_filters image_transport
     diagnostic_updater
 )
@@ -57,6 +59,11 @@ if(catkin_EXPORTED_TARGETS)
   add_dependencies(carmaker_localization_nodelet ${catkin_EXPORTED_TARGETS})
 endif()
 
+catkin_install_python(PROGRAMS
+  tools/evaluate_ekf.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 install(TARGETS carmaker_localization_nodelet
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
@@ -71,6 +78,6 @@ install(FILES nodelet_plugins.xml
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 
-install(DIRECTORY launch config
+install(DIRECTORY launch config data
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )

@@ -51,6 +51,7 @@ void EkfCore::initialize(double x, double y, double yaw, double timestamp, doubl
     x_(YAW) = normalizeAngle(yaw);
     x_(VX) = vx;
 
+    // 초기 공분산 설정: 위치과 자세는 비교적 확실하지만, 속도와 요레이트는 더 불확실하게 시작
     P_.setIdentity();
     P_.block<2, 2>(X, X) *= 0.1;
     P_(YAW, YAW) *= 0.05;

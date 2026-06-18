@@ -492,6 +492,31 @@ $$
 - **NEES가 3보다 매우 큼:** 실제 오차에 비해 $P$가 너무 작아 필터가 과신 중일 가능성
 - **NEES가 3보다 매우 작음:** 실제 오차에 비해 $P$가 너무 커 필터가 지나치게 보수적일 가능성
 
+### 9.3 지표 추출 도구
+
+`evaluate_ekf.py`는 저장된 rosbag 또는 실시간 ROS topic에서 Position RMSE, Yaw RMSE, NEES를 계산한다. CSV는 기본적으로 `src/carmaker_localization/data/csv/` 아래 timestamp 파일명으로 저장되며, 기존 파일이 있으면 `_001`, `_002` suffix를 붙여 덮어쓰지 않는다. 같은 경로를 강제로 덮어쓰려면 `--overwrite`를 사용한다.
+
+Bag 후처리:
+
+```bash
+rosrun carmaker_localization evaluate_ekf.py bag ekf_eval.bag \
+  --summary-output
+```
+
+실시간 누적 평가:
+
+```bash
+rosrun carmaker_localization evaluate_ekf.py live --csv
+```
+
+또는 launch 파일로 실행할 수 있다.
+
+```bash
+roslaunch carmaker_localization ekf_metrics_live.launch
+```
+
+기본 입력 topic은 `/carmaker/dynamic_info`와 `/localization/odom`이며, GT와 EKF odom은 기본 `0.05 s` 이내의 가장 가까운 timestamp끼리 매칭한다. 실시간 모드는 `/localization/eval/position_rmse`, `/localization/eval/yaw_rmse_deg`, `/localization/eval/mean_nees` 등의 누적 지표 topic도 함께 발행한다.
+
 ---
 
 ## 10. 현재 모델의 남은 한계

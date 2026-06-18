@@ -1,0 +1,4 @@
+*.bag
+*.bag.active
+!.gitignore
+!.gitkeep

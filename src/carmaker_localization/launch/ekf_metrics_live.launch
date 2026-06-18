@@ -1,0 +1,28 @@
+<launch>
+  <arg name="gt_topic" default="/carmaker/dynamic_info" />
+  <arg name="odom_topic" default="/localization/odom" />
+  <arg name="max_dt" default="0.05" />
+  <arg name="csv" default="auto" />
+  <arg name="print_period" default="1.0" />
+  <arg name="publish_prefix" default="/localization/eval" />
+  <arg name="quiet" default="false" />
+
+  <arg if="$(eval arg('csv') != '')" name="csv_arg" value="--csv $(arg csv)" />
+  <arg unless="$(eval arg('csv') != '')" name="csv_arg" value="" />
+  <arg if="$(arg quiet)" name="quiet_arg" value="--quiet" />
+  <arg unless="$(arg quiet)" name="quiet_arg" value="" />
+
+  <node
+    pkg="carmaker_localization"
+    type="evaluate_ekf.py"
+    name="ekf_metrics_evaluator"
+    output="screen"
+    args="live
+      --gt-topic $(arg gt_topic)
+      --odom-topic $(arg odom_topic)
+      --max-dt $(arg max_dt)
+      --print-period $(arg print_period)
+      --publish-prefix $(arg publish_prefix)
+      $(arg csv_arg)
+      $(arg quiet_arg)" />
+</launch>
