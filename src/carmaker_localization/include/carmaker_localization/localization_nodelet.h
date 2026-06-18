@@ -82,7 +82,6 @@ private:
     // Callbacks
     void infoCallback(const sensor_msgs::CameraInfoConstPtr& msg, size_t idx);
     void dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg);
-    void predictionCallback(const ros::TimerEvent& event);
     void imagesCallback(
         const sensor_msgs::ImageConstPtr& img0,
         const sensor_msgs::ImageConstPtr& img1,
@@ -152,18 +151,12 @@ private:
     double imu_gyro_std_ = 0.01;
     double q_pos_std_ = 0.05;
     double q_yaw_std_ = 0.03;
-    double q_vel_std_ = 0.15;
-    double q_yaw_rate_std_ = 0.01;
-    double q_bias_std_ = 0.01;
 
     // EKF Rate Limiter & Validation Gate Config
     double max_position_step_ = 0.15;
     double max_yaw_step_ = 0.05;
     double max_position_dev_ = 1.0;
     double max_yaw_dev_ = 0.25;
-
-    // Wheel Slip Detection Config
-    double slip_threshold_long_ = 0.5;
 
     // EKF Initial State Config
     bool use_manual_initial_state_ = false;
@@ -186,7 +179,6 @@ private:
     ros::Publisher debug_r_wheel_vx_pub_;
     ros::Publisher debug_r_wheel_yaw_rate_pub_;
     ros::Publisher debug_r_imu_yaw_rate_pub_;
-    ros::Timer prediction_timer_;
     ros::ServiceServer map_srv_;
 
     // Diagnostics
@@ -234,6 +226,8 @@ private:
     carmaker_msgs::DynamicsInfo latest_dynamics_;
     bool dynamics_received_ = false;
     long long last_processed_cycleno_ = -1;
+    double latest_motion_velocity_ = 0.0;
+    double latest_motion_yaw_rate_ = 0.0;
 
     // Correction Hz tracking
     uint64_t correction_count_          = 0;

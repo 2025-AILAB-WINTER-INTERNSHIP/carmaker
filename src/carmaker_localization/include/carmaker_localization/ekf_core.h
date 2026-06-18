@@ -11,18 +11,15 @@ namespace carmaker_localization {
 /**
  * @brief EKF 상태 변수별 기준 좌표 프레임 정의
  *
- * 상태 벡터: [X, Y, YAW, VX, YAW_RATE, B_YAW_RATE]
- * - 위치(X, Y), 요각(YAW), 종방향 속도(VX)는 후륜축 기준
- * - YAW_RATE는 차량 좌표계 z축 회전율, B_YAW_RATE는 IMU z축 자이로 bias
+ * 상태 벡터: [X, Y, YAW]
+ * - 위치(X, Y), 요각(YAW)은 후륜축 기준
+ * - 종방향 속도와 yaw rate는 EKF 상태가 아니라 motion input으로 사용
  */
 
 // EKF 상태 인덱스
 enum StateIdx {
     X = 0, Y,          // Position (Global Frame) - Rear Axle (후륜축) 기준
     YAW,               // Heading (Global Frame)
-    VX,                // Velocity (Vehicle Frame) - Rear Axle (후륜축) 기준
-    YAW_RATE,          // Turn Rate (Vehicle Frame)
-    B_YAW_RATE,        // IMU Gyro Bias
     STATE_DIM
 };
 
@@ -44,7 +41,7 @@ public:
     ~EkfCore() = default;
 
     // Initialization
-    void initialize(double x, double y, double yaw, double timestamp, double vx = 0.0);
+    void initialize(double x, double y, double yaw, double timestamp);
     bool isInitialized() const;
 
     // Parameters
@@ -57,21 +54,19 @@ public:
     void setWarnLogCallback(std::function<void(const std::string&)> warn);
 
     // EKF Core Cycle
-    void prediction(double timestamp, double vx_wheel = 0.0, double ax_imu = 0.0);
+    void prediction(double timestamp, double velocity, double yaw_rate, const Eigen::Matrix2d& R_input);
 
     // Multi-Sensor Corrections
     void correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,
                      double max_pos_step = 999.0, double max_yaw_step = 999.0);
-    void correctImu(double yaw_rate, double R_gyro, double timestamp);
-    void correctWheel(double vx, double yaw_rate, const Eigen::Matrix2d& R, double timestamp);
 
     // 상태 조회
     StateFrame getState() const;
 
 private:
     // mutex_를 잡은 상태에서만 호출하는 내부 예측 루틴.
-    // public prediction()과 각 correction()이 동일한 시간 전파 로직을 공유한다.
-    bool predictUnlocked(double timestamp, double vx_wheel = 0.0, double ax_imu = 0.0);
+    // public prediction()과 correction timestamp advance가 동일한 시간 전파 로직을 공유한다.
+    bool predictUnlocked(double timestamp, double velocity, double yaw_rate, const Eigen::Matrix2d& R_input);
 
     // correction timestamp가 현재 상태보다 미래이면 그 시각까지 prediction을 수행한다.
     // 이미 지나간 측정(out-of-sequence)은 state buffer가 없으므로 적용하지 않는다.
@@ -92,6 +87,9 @@ private:
     StateVector x_;
     StateMatrix P_;
     StateMatrix Q_;
+    double last_velocity_;
+    double last_yaw_rate_;
+    Eigen::Matrix2d last_input_noise_;
 
     // Timing & History
     double last_time_;

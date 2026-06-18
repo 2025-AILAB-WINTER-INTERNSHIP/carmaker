@@ -73,20 +73,19 @@ graph TD
 
 ### 3.1 EKF Sensor Fusion (EkfCore)
 
-**상태 벡터 (11-state):** $\mathbf{x} = [x, y, v_x, v_y, a_x, a_y, \psi, \dot\psi, b_{ax}, b_{ay}, b_{\dot\psi}]^T$
+**상태 벡터 (3-state):** $\mathbf{x} = [x, y, \psi]^T$
 
 - **기준 좌표계 설정:**
-  - 위치($x, y$), 속도($v_x, v_y$), 요각($\psi$), 요레이트($\dot\psi$)는 차량 후방 범퍼 중앙(**Fr1A**) 기준.
-  - 가속도($a_x, a_y$)는 기구학 구속 조건의 수치적 안정성(강체 회전으로 인한 외력 영향 배제)을 위해 **후륜 축(Rear Axle) 중심** 기준.
+  - 위치($x, y$)와 요각($\psi$)은 **후륜 축(Rear Axle) 중심** 기준.
+  - 종방향 속도와 yaw rate는 상태가 아니라 `DynamicsInfo` 기반 motion input으로 사용.
 
 **수학적 최적화 및 강건성:**
 
 1. **각도 정규화 최적화:** 삼각함수 호출을 배제하고 분기문(`if`) 기반의 `normalizeAngle`을 사용하여 고주파 루프 성능 극대화.
 2. **발산 감지 (Divergence Guard):** 업데이트 후 공분산 행렬의 Trace가 임계값을 초과하면 초기 공분산으로 소프트 리셋하여 운영 계속성 확보.
 3. **지연 보상 알고리즘:**
-   - 비전 데이터 수신 시 타임스탬프 기반 과거 상태 조회.
-   - 해당 시점에서 보정 업데이트 수행.
-   - 업데이트 시점부터 현재까지 버퍼링된 입력을 재적용(Re-propagation)하여 최신 상태 도출.
+   - 비전 데이터 수신 시 현재 EKF state timestamp 기준으로 정합 결과를 선도 보상.
+   - state history buffer 없이 최신 state에 직접 pose correction 적용.
 4. **보정치 변화율 제한기 (Rate Limiter):**
    - EKF 보정 갱신값($dx$)이 급격하게 업데이트되어 차량 위치가 도약(Jump)하는 현상을 막기 위해, 스텝당 최대 허용 위치 보정량(`max_position_step`) 및 요각 보정량(`max_yaw_step`)을 설정하여 갱신량을 클램핑(Clamping)함으로써 부드러운 수렴을 보장.
 

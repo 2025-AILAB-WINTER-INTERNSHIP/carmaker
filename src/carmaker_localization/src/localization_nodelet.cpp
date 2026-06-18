@@ -73,7 +73,6 @@ bool LocalizationNodelet::loadParameters() {
     wheelbase_ = pnh.param("vehicle/wheelbase", 2.97);
 
     wheel_speed_std_ = pnh.param("ekf/wheel/speed_std", 0.05);
-    slip_threshold_long_ = pnh.param("ekf/wheel/slip_threshold_long", 0.5);
     imu_gyro_std_ = pnh.param("ekf/imu/gyro_std", 0.01);
 
     resolution_ = pnh.param("feature_extractor/bev/resolution", 0.05);
@@ -229,17 +228,11 @@ bool LocalizationNodelet::initEkf() {
 
     q_pos_std_ = pnh.param("ekf/process_noise/pos_std", 0.05);
     q_yaw_std_ = pnh.param("ekf/process_noise/yaw_std", 0.03);
-    q_vel_std_ = pnh.param("ekf/process_noise/vel_std", 0.15);
-    q_yaw_rate_std_ = pnh.param("ekf/process_noise/yaw_rate_std", 0.01);
-    q_bias_std_ = pnh.param("ekf/process_noise/bias_std", 0.01);
 
     Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
     Q(X, X) = std::pow(q_pos_std_, 2);
     Q(Y, Y) = std::pow(q_pos_std_, 2);
     Q(YAW, YAW) = std::pow(q_yaw_std_, 2);
-    Q(VX, VX) = std::pow(q_vel_std_, 2);
-    Q(YAW_RATE, YAW_RATE) = std::pow(q_yaw_rate_std_, 2);
-    Q(B_YAW_RATE, B_YAW_RATE) = std::pow(q_bias_std_, 2);
 
     ekf_core_->setProcessNoise(Q);
 
@@ -247,7 +240,7 @@ bool LocalizationNodelet::initEkf() {
     ekf_core_->setWarnLogCallback(
         [this](const std::string& s) { NODELET_WARN("%s", s.c_str()); }
     );
-    NODELET_INFO("EKF Prediction Model: State-based constant velocity / constant yaw-rate");
+    NODELET_INFO("EKF Prediction Model: 3D pose state with motion input [velocity, yaw_rate]");
     NODELET_INFO("EKF Frame: rear axle (rear_axle_offset: %.2fm)", rear_axle_x_);
     return true;
 }
@@ -382,12 +375,7 @@ bool LocalizationNodelet::setupRosIo() {
     odom_pub_ = nh.advertise<nav_msgs::Odometry>(topic_odom, 10);
     pose_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_pose, 10);
 
-    double ekf_freq = pnh.param("ekf/frequency", 100.0);
-    if (ekf_freq <= 0.1) {
-        NODELET_ERROR("Invalid EKF frequency parameter: %.2f (expected > 0.1)", ekf_freq);
-        return false;
-    }
-    prediction_timer_ = nh.createTimer(ros::Duration(1.0 / ekf_freq), &LocalizationNodelet::predictionCallback, this);
+    NODELET_INFO("EKF prediction is driven by DynamicsInfo timestamps.");
 
     std::string topic_estimation_data = pnh.param("topics/publish/data/estimation_pose", std::string("/localization/data/estimation_pose"));
     std::string topic_correction_data = pnh.param("topics/publish/data/correction_pose", std::string("/localization/data/correction_pose"));
@@ -471,20 +459,22 @@ void LocalizationNodelet::infoCallback(const sensor_msgs::CameraInfoConstPtr& ms
 }
 
 void LocalizationNodelet::dynamicsCallback(const carmaker_msgs::DynamicsInfoConstPtr& msg) {
-    std::lock_guard<std::mutex> lock(dyn_mutex_);
-    latest_dynamics_ = *msg;
-    dynamics_received_ = true;
-}
-
-void LocalizationNodelet::predictionCallback(const ros::TimerEvent& event) {
-    double current_time = ros::Time::now().toSec();
-    if (current_time == 0.0) current_time = event.current_real.toSec();
-
-    carmaker_msgs::DynamicsInfo current_dynamics;
+    carmaker_msgs::DynamicsInfo current_dynamics = *msg;
     {
-        std::lock_guard<std::mutex> dyn_lock(dyn_mutex_);
-        if (!dynamics_received_) return;
-        current_dynamics = latest_dynamics_;
+        std::lock_guard<std::mutex> lock(dyn_mutex_);
+        latest_dynamics_ = current_dynamics;
+        dynamics_received_ = true;
+    }
+
+    double current_time = current_dynamics.header.stamp.toSec();
+    if (current_time <= 0.0) {
+        current_time = current_dynamics.time.toSec();
+    }
+    if (current_time <= 0.0) {
+        current_time = ros::Time::now().toSec();
+    }
+    if (current_time <= 0.0) {
+        current_time = ros::WallTime::now().toSec();
     }
 
     updateEstimation(current_time, current_dynamics);
@@ -502,6 +492,11 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
             double raw_dt = current_time - last_prediction_time_;
             if (raw_dt < -1.0 || raw_dt > 5.0) {
                 NODELET_WARN_THROTTLE(2.0, "EKF Time jump detected (dt: %.3f). Triggering localization reset...", raw_dt);
+                needs_reset = true;
+            }
+            if (last_processed_cycleno_ >= 0 && dynamics.cycleno >= 0 && dynamics.cycleno < last_processed_cycleno_) {
+                NODELET_WARN_THROTTLE(2.0, "DynamicsInfo cycle number jumped backwards (%lld -> %lld). Triggering localization reset...",
+                                      last_processed_cycleno_, static_cast<long long>(dynamics.cycleno));
                 needs_reset = true;
             }
         }
@@ -527,31 +522,38 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
             return;
         }
 
-        // 3. 단조 증가 보정: TF와 Odom 스트림 시간이 항상 증가하도록 보장
-        if (current_time <= last_prediction_time_) {
-            current_time = last_prediction_time_ + 0.0001; // Minimum 0.1ms monotonic step
+        if (dynamics.cycleno > 0 && dynamics.cycleno == last_processed_cycleno_) {
+            NODELET_WARN_THROTTLE(2.0, "Skipping duplicate DynamicsInfo cycle number: %lld",
+                                  static_cast<long long>(dynamics.cycleno));
+            return;
         }
 
-        // 4. 휠 속도 계산
+        // 3. dynamics timestamp는 EKF 입력 샘플의 시간 기준이다. 중복/역전 샘플은 재적분하지 않는다.
+        if (current_time <= last_prediction_time_) {
+            NODELET_WARN_THROTTLE(2.0, "Skipping non-monotonic DynamicsInfo timestamp: %.6f <= %.6f",
+                                  current_time, last_prediction_time_);
+            return;
+        }
+
+        // 4. motion input 계산: 속도는 후륜 휠 평균, yaw rate는 IMU z축 gyro를 사용한다.
         double v_left  = dynamics.Vhcl_RL_rotv * tire_radius_;
         double v_right = dynamics.Vhcl_RR_rotv * tire_radius_;
-        double vx_wheel       = (v_left + v_right) / 2.0;
-        double yaw_rate_wheel = (v_right - v_left) / track_width_;
+        double velocity_input = (v_left + v_right) / 2.0;
+        double yaw_rate_input = dynamics.Sensor_Inertial_0_Omega_B_z;
 
-        // 5. 차량 동역학 기반 EKF 공정 노이즈(Q) 동적 계산
+        // 5. 차량 동역학 기반 EKF 공정 노이즈와 motion input 노이즈 동적 계산
         const double ax_raw = dynamics.Sensor_Inertial_0_Acc_B_x;
-        const double wz_raw = dynamics.Sensor_Inertial_0_Omega_B_z;
 
-        // 가감속이 심할 때 속도 예측 노이즈 팽창 (모델 예측의 강성을 완화하여 센서 관측 수렴성 유도)
+        // 가감속이 심할 때 속도 입력 노이즈 팽창
         double scale_vel = 1.0;
         if (std::abs(ax_raw) > 1.0) {
             scale_vel = std::min(5.0, 1.0 + (std::abs(ax_raw) - 1.0) * 1.5);
         }
 
-        // 급선회 시 요각 및 요레이트 예측 노이즈 팽창 (원심력/타이어 슬립 횡슬립에 따른 회전 오차 흡수)
+        // 급선회 시 yaw 입력 및 yaw 상태 공정 노이즈 팽창
         double scale_yaw = 1.0;
-        if (std::abs(wz_raw) > 0.1) { // 0.1 rad/s (약 5.7 deg/s) 이상 선회 시
-            scale_yaw = std::min(10.0, 1.0 + (std::abs(wz_raw) - 0.1) * 8.0);
+        if (std::abs(yaw_rate_input) > 0.1) { // 0.1 rad/s (약 5.7 deg/s) 이상 선회 시
+            scale_yaw = std::min(10.0, 1.0 + (std::abs(yaw_rate_input) - 0.1) * 8.0);
         }
 
         // 두 요인을 선형 누적으로 결합하여 단일 동적 스케일링 인자 도출 (극단적 팽창 방지를 위해 상한 12.0배 제한)
@@ -561,71 +563,36 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
         Q_dyn(X, X) = std::pow(q_pos_std_, 2) * scale_dyn; 
         Q_dyn(Y, Y) = std::pow(q_pos_std_, 2) * scale_dyn;
         Q_dyn(YAW, YAW) = std::pow(q_yaw_std_ * scale_yaw, 2);
-        Q_dyn(VX, VX) = std::pow(q_vel_std_ * scale_vel, 2);
-        Q_dyn(YAW_RATE, YAW_RATE) = std::pow(q_yaw_rate_std_ * scale_yaw, 2);
-        Q_dyn(B_YAW_RATE, B_YAW_RATE) = std::pow(q_bias_std_, 2);
 
         ekf_core_->setProcessNoise(Q_dyn);
 
-        // 6. EKF 예측: 현재 EKF 상태의 VX와 YAW_RATE로 전파
-        ekf_core_->prediction(current_time, vx_wheel, ax_raw);
+        Eigen::Matrix2d R_input = Eigen::Matrix2d::Zero();
+        R_input(0, 0) = std::pow(wheel_speed_std_, 2) * scale_vel;
+        R_input(1, 1) = std::pow(imu_gyro_std_, 2) * scale_yaw;
 
-        // 6. cycle 번호 기반 센서 보정
-        if (dynamics.cycleno < last_processed_cycleno_) {
-            last_processed_cycleno_ = -1; // cycleno 역전 시 (시뮬레이션 루프) 리셋
-        }
+        // 6. EKF 예측: 3D pose state를 motion input으로 전파
+        ekf_core_->prediction(current_time, velocity_input, yaw_rate_input, R_input);
+        latest_motion_velocity_ = velocity_input;
+        latest_motion_yaw_rate_ = yaw_rate_input;
+        last_processed_cycleno_ = dynamics.cycleno;
 
-        if (dynamics.cycleno > last_processed_cycleno_) {
-            const double ax_raw = dynamics.Sensor_Inertial_0_Acc_B_x;
-            const double wz_raw = dynamics.Sensor_Inertial_0_Omega_B_z;
+        // 디버깅용 motion input 분산 발행
+        std_msgs::Float64 debug_wheel_vx_msg;
+        debug_wheel_vx_msg.data = R_input(0, 0);
+        debug_r_wheel_vx_pub_.publish(debug_wheel_vx_msg);
 
-            // 6a. IMU 자이로 보정(1D yaw rate)
-            double R_gyro = std::pow(imu_gyro_std_, 2);
-            ekf_core_->correctImu(wz_raw, R_gyro, current_time);
+        std_msgs::Float64 debug_wheel_yaw_rate_msg;
+        debug_wheel_yaw_rate_msg.data = 2.0 * std::pow(wheel_speed_std_ / track_width_, 2) * scale_yaw;
+        debug_r_wheel_yaw_rate_pub_.publish(debug_wheel_yaw_rate_msg);
 
-            // 디버깅용 IMU yaw rate 분산 발행
-            std_msgs::Float64 debug_imu_msg;
-            debug_imu_msg.data = R_gyro;
-            debug_r_imu_yaw_rate_pub_.publish(debug_imu_msg);
+        std_msgs::Float64 debug_imu_msg;
+        debug_imu_msg.data = R_input(1, 1);
+        debug_r_imu_yaw_rate_pub_.publish(debug_imu_msg);
 
-            // 6b. 휠 보정 및 슬립 발생 시 공분산 팽창
-            Eigen::Matrix2d R_wheel = Eigen::Matrix2d::Identity();
-            R_wheel(0, 0) = std::pow(wheel_speed_std_, 2);                        // 종방향 휠 속도 분산
-            R_wheel(1, 1) = 2.0 * std::pow(wheel_speed_std_ / track_width_, 2);   // 요레이트 분산
-
-            const double vx_state = ekf_core_->getState().x(VX);
-
-            // 종방향 슬립 감지 및 감속 상황 적응 처리
-            // 차량이 급감속할 때(ax_raw가 음수로 클 때)는 실제 제동 상황이므로 슬립 팽창 비율을 완화하여 EKF가 휠 감속 속도를 받아들이도록 유도
-            double slip_inflation = 100.0;
-            if (ax_raw < -0.5) {
-                // ax_raw가 -0.5 m/s^2 이하로 내려갈수록 최소 5.0배 수준까지 인플레이션을 점진적으로 감쇄
-                slip_inflation = std::max(5.0, 100.0 + (ax_raw - (-0.5)) * 50.0);
-            }
-
-            if (std::abs(vx_wheel - vx_state) > slip_threshold_long_) {
-                R_wheel(0, 0) *= slip_inflation;
-                NODELET_WARN_THROTTLE(1.0, "Longitudinal slip detected (vx_wheel: %.2f, vx_state: %.2f, inflation: %.1f)!", vx_wheel, vx_state, slip_inflation);
-            }
-
-            ekf_core_->correctWheel(vx_wheel, yaw_rate_wheel, R_wheel, current_time);
-
-            // 디버깅용 휠 관측 분산 발행
-            std_msgs::Float64 debug_wheel_vx_msg;
-            debug_wheel_vx_msg.data = R_wheel(0, 0);
-            debug_r_wheel_vx_pub_.publish(debug_wheel_vx_msg);
-
-            std_msgs::Float64 debug_wheel_yaw_rate_msg;
-            debug_wheel_yaw_rate_msg.data = R_wheel(1, 1);
-            debug_r_wheel_yaw_rate_pub_.publish(debug_wheel_yaw_rate_msg);
-
-            last_processed_cycleno_ = dynamics.cycleno;
-        }
-
-        // 6c. 누적 RMSE 계산 및 순간 오차 발행(GT 후륜축 vs EKF 후륜축 상태)
+        // 7. 누적 RMSE 계산 및 순간 오차 발행(GT 후륜축 vs EKF 후륜축 상태)
         calculateAndPublishErrors(dynamics);
 
-        // 7. Publish EKF 예측 결과 및 디버깅 데이터
+        // 8. Publish EKF 예측 결과 및 디버깅 데이터
         publishEstimation(ros::Time(current_time));
         last_prediction_time_ = current_time;
     }
@@ -973,7 +940,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         cpp_features.push_back(cpp_feat);
     }
 
-    // ICP 특징점 정합(100Hz EKF 루프가 막히지 않도록 mutex 해제 후 수행)
+    // ICP 특징점 정합(dynamics-driven EKF prediction이 막히지 않도록 mutex 해제 후 수행)
     auto registration_result = registration_engine_->align(cpp_features, ref_features, initial_guess);
     if (registration_result.success) {
         Eigen::Vector3d z;
@@ -983,28 +950,27 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
 
         // 뮤텍스 락 아래 스레드 안전한 EKF 보정 단계 수행
         Eigen::Matrix3d R_reg = registration_result.covariance;
-        double current_time = ros::Time::now().toSec();
+        double current_time = 0.0;
         double img_time = features.header.stamp.toSec();
-        double dt = current_time - img_time;
-
-        if (dt < 0.0 || dt >= 1.5) {
-            ROS_WARN_THROTTLE(2.0, "performCorrection: Measurement latency too high (%.3f s) or negative. Skipping EKF correction.", dt);
-            return;
-        }
+        double dt = 0.0;
 
         Eigen::Matrix3d R_reg_rear = Eigen::Matrix3d::Zero();
 
         {
             std::lock_guard<std::mutex> lock(estimation_mutex_);
 
-            auto current_state = ekf_core_->getState().x;
-            double v = current_state(VX);
+            auto state_frame = ekf_core_->getState();
+            current_time = state_frame.timestamp;
+            dt = current_time - img_time;
 
-            double delta = 0.0;
-            {
-                std::lock_guard<std::mutex> dyn_lock(dyn_mutex_);
-                delta = (latest_dynamics_.Vhcl_FL_rz + latest_dynamics_.Vhcl_FR_rz) / 2.0;
+            if (dt < 0.0 || dt >= 1.5) {
+                ROS_WARN_THROTTLE(2.0, "performCorrection: Measurement latency too high (%.3f s) or negative. Skipping EKF correction.", dt);
+                return;
             }
+
+            const auto& current_state = state_frame.x;
+            double v = latest_motion_velocity_;
+            double yaw_rate = latest_motion_yaw_rate_;
 
             // ICP 결과(z)는 base_footprint(범퍼) 기준 → 후륜축으로 변환
             z = transformPose(z, rear_axle_x_);
@@ -1035,7 +1001,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             // 후륜축 기준 기구학 자전거 모델로 전방 지연 시간 선도 보상
             z(0) += v * std::cos(z(2)) * dt;
             z(1) += v * std::sin(z(2)) * dt;
-            z(2) += (v * std::tan(delta) / wheelbase_) * dt;
+            z(2) += yaw_rate * dt;
 
             // 요각 정규화
             while (z(2) > M_PI) z(2) -= 2.0 * M_PI;
@@ -1055,7 +1021,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             // ICP 관측값의 신뢰도(fitness_score가 낮을수록 높음)가 높을수록 
             // 검증 게이트(max_position_dev_) 범위를 동적으로 확장하여 누적된 큰 드리프트를 한번에 구제 및 복구
             // EKF 상태의 불확실성(P)에 따른 3-sigma 오차 한계선 계산
-            const auto& P_current = ekf_core_->getState().P;
+            const auto& P_current = state_frame.P;
             double ekf_uncertainty_3sigma = 3.0 * std::sqrt(P_current(X, X) + P_current(Y, Y));
             double ekf_yaw_uncertainty_3sigma = 3.0 * std::sqrt(P_current(YAW, YAW));
 
@@ -1171,15 +1137,15 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
     estimation_data_pub_.publish(pose_msg);
     visualizer_->publishEstimation(pose_msg);
 
-    // EKF 속도(VX)는 후륜축 기준 → 속도 출력 명세를 후륜축 기준으로 설정
+    // 속도 출력은 EKF 상태가 아니라 최신 motion input을 사용한다.
     nav_msgs::Odometry odom_msg;
     odom_msg.header = pose_msg.header;
     odom_msg.child_frame_id = prediction_rear_axle_frame_; // 후륜축 예측 프레임
     odom_msg.pose = pose_msg.pose;
-    odom_msg.twist.twist.linear.x = x(VX);
+    odom_msg.twist.twist.linear.x = latest_motion_velocity_;
     odom_msg.twist.twist.linear.y = 0.0;
     odom_msg.twist.twist.linear.z = 0.0;
-    odom_msg.twist.twist.angular.z = x(YAW_RATE);
+    odom_msg.twist.twist.angular.z = latest_motion_yaw_rate_;
     odom_pub_.publish(odom_msg);
 
     // 1. TF 발행: global -> prediction_rear_axle(후륜축, EKF 추정 상태 기준)
@@ -1222,8 +1188,6 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
     double std_x = std::sqrt(std::max(0.0, P(X, X)));
     double std_y = std::sqrt(std::max(0.0, P(Y, Y)));
     double std_yaw = std::sqrt(std::max(0.0, P(YAW, YAW))) * 180.0 / M_PI; // 도 단위
-    double std_vx = std::sqrt(std::max(0.0, P(VX, VX)));
-    double std_yaw_rate = std::sqrt(std::max(0.0, P(YAW_RATE, YAW_RATE))) * 180.0 / M_PI; // 도/초 단위
     double pos_uncertainty = std::sqrt(std_x * std_x + std_y * std_y);
 
     if (pos_uncertainty < 0.15) {
@@ -1257,16 +1221,14 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
     stat.add("Uncertainty Position X (m)", std_x);
     stat.add("Uncertainty Position Y (m)", std_y);
     stat.add("Uncertainty Yaw (deg)", std_yaw);
-    stat.add("Uncertainty Velocity Vx (m/s)", std_vx);
-    stat.add("Uncertainty Yaw Rate (deg/s)", std_yaw_rate);
     stat.add("Position 2D Uncertainty (m)", pos_uncertainty);
 
     // 중앙 모니터링을 위한 현재 추정 상태 값
     stat.add("Estimated X (m)", x(X));
     stat.add("Estimated Y (m)", x(Y));
     stat.add("Estimated Yaw (deg)", x(YAW) * 180.0 / M_PI);
-    stat.add("Estimated Vx (m/s)", x(VX));
-    stat.add("Estimated Yaw Rate (deg/s)", x(YAW_RATE) * 180.0 / M_PI);
+    stat.add("Input Velocity (m/s)", latest_motion_velocity_);
+    stat.add("Input Yaw Rate (deg/s)", latest_motion_yaw_rate_ * 180.0 / M_PI);
 
     // 보정 주파수 = 성공 횟수 / (현재 시뮬 시각 - 첫 보정 시뮬 시각)
     {
@@ -1334,6 +1296,8 @@ void LocalizationNodelet::resetLocalization() {
         std::lock_guard<std::mutex> lock(estimation_mutex_);
         last_prediction_time_ = 0.0;
         last_processed_cycleno_ = -1;
+        latest_motion_velocity_ = 0.0;
+        latest_motion_yaw_rate_ = 0.0;
         cumulative_pos_sq_err_ = 0.0;
         cumulative_yaw_sq_err_ = 0.0;
         err_count_ = 0;
@@ -1375,10 +1339,12 @@ void LocalizationNodelet::initLocalization(double current_time, const carmaker_m
     double init_x = use_manual_initial_state_ ? init_x_ : current_dynamics.RearAxle_x;
     double init_y = use_manual_initial_state_ ? init_y_ : current_dynamics.RearAxle_y;
 
-    double init_vx = use_manual_initial_state_ ? 0.0 : current_dynamics.Car_vx;
+    latest_motion_velocity_ = 0.0;
+    latest_motion_yaw_rate_ = 0.0;
+    last_processed_cycleno_ = current_dynamics.cycleno;
 
-    ekf_core_->initialize(init_x, init_y, init_yaw, current_time, init_vx);
-    NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg] with vx %.2f", init_x, init_y, init_yaw * 180.0 / M_PI, init_vx);
+    ekf_core_->initialize(init_x, init_y, init_yaw, current_time);
+    NODELET_INFO("EKF Initialized at [%.2f, %.2f, %.2f deg]", init_x, init_y, init_yaw * 180.0 / M_PI);
 
     // 정적 TF 발행: prediction_rear_axle(후륜축) -> prediction_bumper(범퍼)
     geometry_msgs::TransformStamped static_tf;
