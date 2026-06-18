@@ -576,7 +576,7 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
         latest_motion_yaw_rate_ = yaw_rate_input;
         last_processed_cycleno_ = dynamics.cycleno;
 
-        // 디버깅용 motion input 분산 발행
+        // 디버깅용 입력/참고 분산 발행
         std_msgs::Float64 debug_wheel_vx_msg;
         debug_wheel_vx_msg.data = R_input(0, 0);
         debug_r_wheel_vx_pub_.publish(debug_wheel_vx_msg);
@@ -1041,7 +1041,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
                 return;
             }
 
-            // 후륜축 기준으로 EKF 상태 보정 (속도 한계 조절 적용)
+            // 후륜축 기준 pose 관측으로 EKF 상태 보정
             ekf_core_->correctPose(z(0), z(1), z(2), R_reg_rear, current_time, max_position_step_, max_yaw_step_);
         }
 

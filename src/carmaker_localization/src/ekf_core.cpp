@@ -8,7 +8,7 @@ namespace carmaker_localization {
 
 namespace {
 // 파일 내부 전용 상수 모음.
-// 시간 처리와 스칼라 분산 검사 하한값을 EkfCore 구현 안에서만 사용
+// 시간 처리 기준값을 EkfCore 구현 안에서만 사용
 
 // EKF 예측 단계에서 dt가 이 값보다 작으면 예측을 생략
 constexpr double kMinPredictionDt = 1e-4;
@@ -66,8 +66,8 @@ bool EkfCore::isInitialized() const {
 void EkfCore::setProcessNoise(const StateMatrix& Q) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // P^- = FPF^T + LQL^T에서 이 구현은 L=I로 단순화
-    // Q는 continuous-time PSD 행렬이므로, prediction 단계에서는 Q * dt로 이산화
+    // Q_는 pose 상태에 직접 더해지는 continuous-time residual process noise다.
+    // prediction 단계에서는 Q_ * dt로 이산화한다.
     Q_ = (Q + Q.transpose()) * 0.5;
 }
 
@@ -88,12 +88,13 @@ bool EkfCore::predictUnlocked(double timestamp, double velocity, double yaw_rate
         if (log_warn_) log_warn_("[EkfCore] Prediction skipped: timestamp is not finite.");
         return false;
     } 
-    //velocity/yaw_rate가 정상 숫자인지 확인
+    // velocity/yaw_rate가 정상 숫자인지 확인
     if (!std::isfinite(velocity) || !std::isfinite(yaw_rate)) {
         if (log_warn_) log_warn_("[EkfCore] Prediction skipped: motion input is not finite.");
         return false;
     }
     
+    // 입력 공분산은 이론적으로 대칭이어야 하므로 작은 비대칭을 보정한다.
     Eigen::Matrix2d input_noise = (R_input + R_input.transpose()) * 0.5;
     for (int r = 0; r < input_noise.rows(); ++r) {
         for (int c = 0; c < input_noise.cols(); ++c) {
@@ -148,11 +149,20 @@ bool EkfCore::predictUnlocked(double timestamp, double velocity, double yaw_rate
     // 예측된 yaw는 원형 변수이므로 정규화하여 -pi ~ pi 범위로 유지
     x_(YAW) = normalizeAngle(x_(YAW));
 
-    // --- 2) 공분산 예측: P^-_k = F P^+_{k-1} F^T + L Q L^T ---
-    // Q = Q_pose * dt + G R_input G^T
-    // Q_는 pose 상태에 직접 더해지는 residual process noise로 사용한다.
-    // input_noise는 motion input uncertainty로 G R_input G^T를 통해 pose 공분산에 반영한다.
-    // Q_는 continuous-time PSD 행렬이므로, 예측 단계에서는 Q_ * dt로 이산화
+    // --- 2) 공분산 예측 ---
+    //
+    // 일반식은 P^- = F P^+ F^T + L Q L^T.
+    // 여기서는 process noise를 두 종류로 나눠서 구성한다.
+    //
+    //   L = [I, G]
+    //   Q = blockdiag(Q_pose * dt, R_input)
+    //
+    // 따라서
+    //
+    //   L Q L^T = Q_pose * dt + G R_input G^T
+    //
+    // Q_는 pose 상태에 직접 더해지는 continuous-time residual process noise이고,
+    // input_noise는 motion input [velocity, yaw_rate]의 covariance다.
     P_ = F * P_ * F.transpose() + Q_ * dt + G * input_noise * G.transpose();
     // 수치적 안정성을 위한 공분산 대칭화
     stabilizeCovariance();
@@ -195,7 +205,7 @@ void EkfCore::stabilizeCovariance() {
     P_ = (P_ + P_.transpose()) * 0.5;
 }
 
-// 센서1: 외부 위치/자세 관측 보정
+// 외부 위치/자세 관측 보정
 void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d& R, double timestamp,
                           double max_pos_step, double max_yaw_step) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -204,7 +214,7 @@ void EkfCore::correctPose(double x, double y, double yaw, const Eigen::Matrix3d&
 
     // --- 3) 측정 모델: z_pose = h_pose(x) + v, v ~ N(0, R_pose) ---
     //
-    // h_pose(x) = [X, Y, YAW]^T 이므로 H = dh/dx는 상태에서 해당 성분을 꺼내는 선택 행렬
+    // h_pose(x) = [X, Y, YAW]^T 이므로 H = dh/dx는 3x3 identity와 같다.
     // M은 additive measurement noise이므로 M=I.
     Eigen::Matrix<double, 3, STATE_DIM> H = Eigen::Matrix<double, 3, STATE_DIM>::Zero();
     H(0, X) = 1.0; H(1, Y) = 1.0; H(2, YAW) = 1.0;
@@ -257,7 +267,7 @@ void EkfCore::handleTimeJump(double timestamp) {
     if (log_warn_) {
         std::ostringstream oss;
         oss << "[EkfCore] Time jump detected (dt: " << (timestamp - last_time_)
-            << "s). Resetting covariance and dynamic states.";
+            << "s). Resetting covariance and motion input.";
         log_warn_(oss.str());
     }
 

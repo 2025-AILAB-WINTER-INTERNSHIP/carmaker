@@ -23,7 +23,7 @@ enum StateIdx {
     STATE_DIM
 };
 
-// EKF 상태(6x1) 및 공분산(6x6) 타입 정의
+// EKF 상태(3x1) 및 공분산(3x3) 타입 정의
 using StateVector = Eigen::Matrix<double, STATE_DIM, 1>;
 using StateMatrix = Eigen::Matrix<double, STATE_DIM, STATE_DIM>;
 
@@ -87,6 +87,8 @@ private:
     StateVector x_;
     StateMatrix P_;
     StateMatrix Q_;
+
+    // 마지막 motion input: correction timestamp advance 때 재사용한다.
     double last_velocity_;
     double last_yaw_rate_;
     Eigen::Matrix2d last_input_noise_;
