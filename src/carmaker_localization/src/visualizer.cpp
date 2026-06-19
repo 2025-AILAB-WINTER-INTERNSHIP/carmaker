@@ -2,6 +2,7 @@
 #include <tf2/utils.h>
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/PointField.h>
+#include <cmath>
 
 namespace carmaker_localization {
 
@@ -19,14 +20,16 @@ Visualizer::Visualizer(const ros::NodeHandle& nh) : nh_(nh) {
     std::string topic_estimation_markers = pnh.param("topics/publish/debug/estimation_markers", std::string("/localization/debug/estimation_markers"));
     std::string topic_correction_markers = pnh.param("topics/publish/debug/correction_markers", std::string("/localization/debug/correction_markers"));
     std::string topic_estimation_trajectory = pnh.param("topics/publish/debug/estimation_trajectory", std::string("/localization/debug/estimation_trajectory"));
-    std::string topic_map_features = pnh.param("topics/publish/debug/map_features", std::string("/localization/debug/map_features"));
+    std::string topic_landmarks = pnh.param("topics/publish/debug/landmarks", std::string("/localization/debug/landmarks"));
+    std::string topic_icp = pnh.param("topics/publish/debug/icp", std::string("/localization/debug/icp"));
 
     // 3. Publishers
     svm_pub_ = nh_.advertise<sensor_msgs::Image>(topic_svm, 1);
     estimation_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_estimation_markers, 1);
     correction_marker_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_correction_markers, 1);
     estimation_trajectory_pub_ = nh_.advertise<nav_msgs::Path>(topic_estimation_trajectory, 1);
-    map_features_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_map_features, 1, true); // latched = true for static map
+    landmarks_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_landmarks, 1, true); // latched = true for static map
+    icp_debug_pub_ = nh_.advertise<visualization_msgs::MarkerArray>(topic_icp, 1);
 
     // 4. Vehicle dimensions
     vehicle_width_ = pnh.param("vehicle/width", 1.9);
@@ -369,11 +372,11 @@ void Visualizer::clearObservation(const std::string& channel_name) {
     pub.publish(marker_array);
 }
 
-void Visualizer::clearReferenceFeatures() {
-    if (map_features_pub_.getNumSubscribers() == 0) return;
+void Visualizer::clearLandmarkFeatures() {
+    if (landmarks_pub_.getNumSubscribers() == 0) return;
 
     visualization_msgs::MarkerArray marker_array;
-    std::vector<std::string> namespaces = {"map_lanes", "map_landmarks"};
+    std::vector<std::string> namespaces = {"landmark_lanes", "landmarks"};
     for (const auto& ns : namespaces) {
         visualization_msgs::Marker m;
         m.header.frame_id = global_frame_;
@@ -382,13 +385,13 @@ void Visualizer::clearReferenceFeatures() {
         m.action = visualization_msgs::Marker::DELETEALL;
         marker_array.markers.push_back(m);
     }
-    map_features_pub_.publish(marker_array);
+    landmarks_pub_.publish(marker_array);
 }
 
 void Visualizer::reset() {
     clearEstimation();
     clearCorrection();
-    clearReferenceFeatures();
+    clearLandmarkFeatures();
     for (const auto& pair : observation_pub_map_) {
         clearObservation(pair.first);
     }
@@ -444,8 +447,8 @@ void Visualizer::_addVehicleMarker(visualization_msgs::MarkerArray& marker_array
     marker_array.markers.push_back(text);
 }
 
-void Visualizer::publishReferenceFeatures(const std::vector<ReferenceFeature>& reference_features) {
-    if (map_features_pub_.getNumSubscribers() == 0 && !map_features_pub_.isLatched()) return;
+void Visualizer::publishLandmarkFeatures(const std::vector<LandmarkFeature>& landmarks) {
+    if (landmarks_pub_.getNumSubscribers() == 0 && !landmarks_pub_.isLatched()) return;
 
     visualization_msgs::MarkerArray marker_array;
 
@@ -453,7 +456,7 @@ void Visualizer::publishReferenceFeatures(const std::vector<ReferenceFeature>& r
     visualization_msgs::Marker lane_marker;
     lane_marker.header.frame_id = global_frame_;
     lane_marker.header.stamp = ros::Time::now();
-    lane_marker.ns = "map_lanes";
+    lane_marker.ns = "landmark_lanes";
     lane_marker.id = 0;
     lane_marker.type = visualization_msgs::Marker::SPHERE_LIST;
     lane_marker.action = visualization_msgs::Marker::ADD;
@@ -466,7 +469,7 @@ void Visualizer::publishReferenceFeatures(const std::vector<ReferenceFeature>& r
     // 2. Landmark Points (Class 2) - SPHERE_LIST
     visualization_msgs::Marker landmark_marker;
     landmark_marker.header = lane_marker.header;
-    landmark_marker.ns = "map_landmarks";
+    landmark_marker.ns = "landmarks";
     landmark_marker.id = 1;
     landmark_marker.type = visualization_msgs::Marker::SPHERE_LIST;
     landmark_marker.action = visualization_msgs::Marker::ADD;
@@ -476,7 +479,7 @@ void Visualizer::publishReferenceFeatures(const std::vector<ReferenceFeature>& r
     landmark_marker.color.r = 1.0; landmark_marker.color.g = 0.3; landmark_marker.color.b = 0.3; landmark_marker.color.a = 0.8; // Coral Red
     landmark_marker.pose.orientation.w = 1.0;
 
-    for (const auto& feat : reference_features) {
+    for (const auto& feat : landmarks) {
         geometry_msgs::Point p;
         p.x = feat.x;
         p.y = feat.y;
@@ -490,7 +493,158 @@ void Visualizer::publishReferenceFeatures(const std::vector<ReferenceFeature>& r
 
     marker_array.markers.push_back(lane_marker);
     marker_array.markers.push_back(landmark_marker);
-    map_features_pub_.publish(marker_array);
+    landmarks_pub_.publish(marker_array);
+}
+
+namespace {
+
+const char* kIcpLandmarkNs = "icp_landmarks";
+const char* kIcpObservedNs = "icp_transformed_observed_features";
+const char* kIcpAssociationNs = "icp_association_lines";
+
+void appendClearMarker(visualization_msgs::MarkerArray& marker_array,
+                       const std::string& frame_id,
+                       const ros::Time& stamp,
+                       const std::string& ns) {
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = frame_id;
+    marker.header.stamp = stamp;
+    marker.ns = ns;
+    marker.action = visualization_msgs::Marker::DELETEALL;
+    marker_array.markers.push_back(marker);
+}
+
+} // namespace
+
+visualization_msgs::MarkerArray createIcpAssociationMarkers(
+    const std::string& frame_id,
+    const ros::Time& stamp,
+    const RegistrationResult& result,
+    double marker_resolution,
+    bool include_clear_markers) {
+    visualization_msgs::MarkerArray marker_array;
+    if (include_clear_markers) {
+        appendClearMarker(marker_array, frame_id, stamp, kIcpLandmarkNs);
+        appendClearMarker(marker_array, frame_id, stamp, kIcpObservedNs);
+        appendClearMarker(marker_array, frame_id, stamp, kIcpAssociationNs);
+    }
+
+    if (!result.debug) {
+        return marker_array;
+    }
+
+    const auto& debug = *result.debug;
+
+    // 1. Landmark Features (blue points)
+    visualization_msgs::Marker landmark_marker;
+    landmark_marker.header.frame_id = frame_id;
+    landmark_marker.header.stamp = stamp;
+    landmark_marker.ns = kIcpLandmarkNs;
+    landmark_marker.id = 0;
+    landmark_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+    landmark_marker.action = visualization_msgs::Marker::ADD;
+    landmark_marker.scale.x = marker_resolution * 1.5;
+    landmark_marker.scale.y = marker_resolution * 1.5;
+    landmark_marker.scale.z = 0.02;
+    landmark_marker.color.r = 0.0; landmark_marker.color.g = 0.0; landmark_marker.color.b = 1.0; landmark_marker.color.a = 0.8;
+    landmark_marker.pose.orientation.w = 1.0;
+
+    for (const auto& landmark : debug.query_landmarks) {
+        geometry_msgs::Point p;
+        p.x = landmark.x;
+        p.y = landmark.y;
+        p.z = 0.01;
+        landmark_marker.points.push_back(p);
+    }
+    marker_array.markers.push_back(landmark_marker);
+
+    // 2. Transformed Observed Features (light-green/red points)
+    visualization_msgs::Marker obs_marker;
+    obs_marker.header.frame_id = frame_id;
+    obs_marker.header.stamp = stamp;
+    obs_marker.ns = kIcpObservedNs;
+    obs_marker.id = 1;
+    obs_marker.type = visualization_msgs::Marker::SPHERE_LIST;
+    obs_marker.action = visualization_msgs::Marker::ADD;
+    obs_marker.scale.x = marker_resolution * 1.5;
+    obs_marker.scale.y = marker_resolution * 1.5;
+    obs_marker.scale.z = 0.02;
+    obs_marker.pose.orientation.w = 1.0;
+
+    // 3. Association Lines (green/orange lines)
+    visualization_msgs::Marker lines_marker;
+    lines_marker.header.frame_id = frame_id;
+    lines_marker.header.stamp = stamp;
+    lines_marker.ns = kIcpAssociationNs;
+    lines_marker.id = 2;
+    lines_marker.type = visualization_msgs::Marker::LINE_LIST;
+    lines_marker.action = visualization_msgs::Marker::ADD;
+    lines_marker.scale.x = 0.02; // thickness of line
+    lines_marker.pose.orientation.w = 1.0;
+
+    for (const auto& assoc : debug.associations) {
+        // Transformed observed feature from bumper to map frame using final transform
+        Eigen::Vector2d pt_obs_map = result.transform * Eigen::Vector2d(assoc.obs_x, assoc.obs_y);
+
+        geometry_msgs::Point p_obs;
+        p_obs.x = pt_obs_map.x();
+        p_obs.y = pt_obs_map.y();
+        p_obs.z = 0.02; // slightly elevated
+
+        obs_marker.points.push_back(p_obs);
+
+        std_msgs::ColorRGBA c_obs;
+        if (assoc.is_inlier) {
+            // 연두색 (light green)
+            c_obs.r = 0.5; c_obs.g = 1.0; c_obs.b = 0.0; c_obs.a = 0.9;
+        } else {
+            // 빨간색 (red)
+            c_obs.r = 1.0; c_obs.g = 0.0; c_obs.b = 0.0; c_obs.a = 0.9;
+        }
+        obs_marker.colors.push_back(c_obs);
+
+        // Association line if matched landmark is valid
+        if (!std::isnan(assoc.landmark_x) && !std::isnan(assoc.landmark_y)) {
+            geometry_msgs::Point p_landmark;
+            p_landmark.x = assoc.landmark_x;
+            p_landmark.y = assoc.landmark_y;
+            p_landmark.z = 0.02;
+
+            lines_marker.points.push_back(p_obs);
+            lines_marker.points.push_back(p_landmark);
+
+            std_msgs::ColorRGBA c_line;
+            if (assoc.is_inlier) {
+                // 녹색 (green)
+                c_line.r = 0.0; c_line.g = 0.8; c_line.b = 0.0; c_line.a = 0.6;
+            } else {
+                // 주황색 (orange)
+                c_line.r = 1.0; c_line.g = 0.5; c_line.b = 0.0; c_line.a = 0.6;
+            }
+            lines_marker.colors.push_back(c_line);
+            lines_marker.colors.push_back(c_line);
+        }
+    }
+
+    marker_array.markers.push_back(obs_marker);
+    marker_array.markers.push_back(lines_marker);
+
+    return marker_array;
+}
+
+visualization_msgs::MarkerArray Visualizer::createAssociationMarkers(const std::string& frame_id, const ros::Time& stamp, const RegistrationResult& result) {
+    return createIcpAssociationMarkers(frame_id, stamp, result, resolution_, false);
+}
+
+void Visualizer::publishAssociationMarkers(const std::string& frame_id, const ros::Time& stamp, const RegistrationResult& result) {
+    if (hasIcpSubscribers()) {
+        visualization_msgs::MarkerArray markers = createIcpAssociationMarkers(frame_id, stamp, result, resolution_, true);
+        icp_debug_pub_.publish(markers);
+    }
+}
+
+bool Visualizer::hasIcpSubscribers() const {
+    return icp_debug_pub_.getNumSubscribers() > 0;
 }
 
 } // namespace carmaker_localization

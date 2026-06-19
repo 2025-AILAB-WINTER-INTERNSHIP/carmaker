@@ -1,0 +1,27 @@
+<launch>
+    <!-- Load parameters from localization_params.yaml -->
+    <rosparam command="load" file="$(find carmaker_localization)/config/localization_params.yaml" />
+
+    <!-- mode selects which evaluator node to run: static or bag. -->
+    <arg name="mode" default="static" />
+
+    <!-- Static mode options -->
+    <arg name="grid_step" default="1.0" />
+
+    <!-- Bag mode options -->
+    <arg name="bag_path" default="" />
+    <arg name="max_match_dt" default="0.2" />
+
+    <node if="$(eval arg('mode') == 'static')"
+          pkg="carmaker_localization" type="static_evaluator" name="static_evaluator" output="screen">
+        <!-- Default landmark file path -->
+        <param name="landmark_file" value="$(find carmaker_localization)/config/Test.osm" />
+        <param name="grid_step" value="$(arg grid_step)" />
+    </node>
+
+    <node if="$(eval arg('mode') == 'bag')"
+          pkg="carmaker_localization" type="bag_evaluator" name="bag_evaluator" output="screen">
+        <param name="bag_path" value="$(arg bag_path)" />
+        <param name="max_match_dt" value="$(arg max_match_dt)" />
+    </node>
+</launch>

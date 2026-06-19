@@ -54,7 +54,7 @@ Visualization Manager:
       Value: true
     - Class: rviz/MarkerArray
       Enabled: true
-      Marker Topic: /localization/debug/map_features
+      Marker Topic: /localization/debug/landmarks
       Name: Features(Landmark)
       Namespaces:
         map_landmarks: true

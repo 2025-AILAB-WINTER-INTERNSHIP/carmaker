@@ -1,19 +1,23 @@
 #include "carmaker_localization/icp_registration.h"
 #include "carmaker_localization/nanoflann.hpp"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <cmath>
+#include <chrono>
+#include <limits>
+#include <utility>
 #include <Eigen/Eigenvalues>
 
 namespace carmaker_localization {
 
 // ─────────────────────────────────────────────────────────────────────────────
-// nanoflann point-cloud adapter for ReferenceFeature (2D: x, y)
+// nanoflann point-cloud adapter for LandmarkFeature (2D: x, y)
 // ─────────────────────────────────────────────────────────────────────────────
-struct ReferenceFeatureCloud {
-    const std::vector<ReferenceFeature>& pts;
-    explicit ReferenceFeatureCloud(const std::vector<ReferenceFeature>& p) : pts(p) {}
+struct LandmarkFeatureCloud {
+    const std::vector<LandmarkFeature>& pts;
+    explicit LandmarkFeatureCloud(const std::vector<LandmarkFeature>& p) : pts(p) {}
 
     // nanoflann interface
     inline size_t kdtree_get_point_count() const { return pts.size(); }
@@ -25,12 +29,13 @@ struct ReferenceFeatureCloud {
 };
 
 using KDTree2D = nanoflann::KDTreeSingleIndexAdaptor<
-    nanoflann::L2_Simple_Adaptor<double, ReferenceFeatureCloud>,
-    ReferenceFeatureCloud,
+    nanoflann::L2_Simple_Adaptor<double, LandmarkFeatureCloud>,
+    LandmarkFeatureCloud,
     2 /* dims */>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: 2×2 대칭 행렬 [[a, b], [b, c]] 의 최대 고유값
+// 고유값 계산: det(M - lambda I) = 0
 //   → Euclidean 보수 탐색 반경 r² = χ²_threshold × λ_max(C_map) 계산에 사용
 // ─────────────────────────────────────────────────────────────────────────────
 static double maxEigenvalue2x2(double a, double b, double c) {
@@ -38,6 +43,31 @@ static double maxEigenvalue2x2(double a, double b, double c) {
     double disc       = std::sqrt(0.25 * (a - c) * (a - c) + b * b);
     return half_trace + disc;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Thread-local cache for KD-Tree index reuse
+// ─────────────────────────────────────────────────────────────────────────────
+struct KDTreeCache {
+    const LandmarkFeature* cached_landmarks_data = nullptr;
+    size_t cached_landmarks_size = 0;
+    double cached_first_x = 0.0;
+
+    std::map<int, std::vector<LandmarkFeature>> landmarks_by_class;
+    std::map<int, std::unique_ptr<LandmarkFeatureCloud>> clouds;
+    std::map<int, std::unique_ptr<KDTree2D>> kdtrees;
+
+    void clear() {
+        kdtrees.clear();
+        clouds.clear();
+        landmarks_by_class.clear();
+        cached_landmarks_data = nullptr;
+        cached_landmarks_size = 0;
+        cached_first_x = 0.0;
+    }
+};
+
+static thread_local KDTreeCache t_tree_cache;
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IcpRegistration
@@ -52,12 +82,31 @@ IcpRegistration::IcpRegistration(double fitness_threshold, int max_iterations, d
 
 RegistrationResult IcpRegistration::align(
     const std::vector<LocalFeature>& observed,
-    const std::vector<ReferenceFeature>& reference,
-    const Eigen::Isometry2d& initial_guess) {
+    const std::vector<LandmarkFeature>& landmarks,
+    const Eigen::Isometry2d& initial_guess,
+    bool collect_debug_info,
+    bool collect_associations,
+    bool collect_iteration_trace) {
 
+    auto start_time = std::chrono::high_resolution_clock::now();
     RegistrationResult result;
-    result.success = false;
-    if (observed.empty() || reference.size() < 3) return result;
+    result.transform = initial_guess;
+    result.num_observed = observed.size();
+    result.num_landmarks = landmarks.size();
+    if (collect_debug_info || collect_associations || collect_iteration_trace) {
+        result.debug.emplace();
+    }
+
+    auto finish_debug_timing = [&]() {
+        if (!result.debug) return;
+        auto end_time = std::chrono::high_resolution_clock::now();
+        result.debug->latency_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+    };
+
+    if (observed.empty() || landmarks.size() < 3) {
+        finish_debug_timing();
+        return result;
+    }
 
     // Uniform step downsampling to prevent CPU saturation while preserving spatial distribution
     std::vector<LocalFeature> observed_used;
@@ -70,37 +119,65 @@ RegistrationResult IcpRegistration::align(
         observed_used = observed;
     }
 
-    // Group reference features by class for class-specific matching
-    std::map<int, std::vector<ReferenceFeature>> ref_by_class;
-    for (const auto& ref : reference)
-        ref_by_class[ref.class_id].push_back(ref);
+    // ── KDTree 캐싱 검사 및 지연 빌드 (Lazy Building) ──────────────────────────
+    const LandmarkFeature* current_data = landmarks.empty() ? nullptr : landmarks.data();
+    size_t current_size = landmarks.size();
+    double current_first_x = landmarks.empty() ? 0.0 : landmarks.front().x;
 
-    // ── 클래스별 KD-tree 구축 (ICP 반복 루프 시작 전 1회) ─────────────────────
-    //   KDTree2D 는 참조(reference)를 보관하므로 ref_by_class 의 수명 내에서만 사용
-    std::map<int, std::unique_ptr<ReferenceFeatureCloud>> clouds;
-    std::map<int, std::unique_ptr<KDTree2D>>        kdtrees;
+    bool cache_miss = (t_tree_cache.cached_landmarks_data != current_data) ||
+                      (t_tree_cache.cached_landmarks_size != current_size) ||
+                      (t_tree_cache.cached_first_x != current_first_x);
 
-    for (const auto& kv : ref_by_class) {
-        int cid   = kv.first;
-        auto cloud = std::make_unique<ReferenceFeatureCloud>(kv.second);
-        auto tree  = std::make_unique<KDTree2D>(
-                         2, *cloud,
-                         nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf size */));
-        tree->buildIndex();
-        clouds .emplace(cid, std::move(cloud));
-        kdtrees.emplace(cid, std::move(tree));
+    if (cache_miss) {
+        t_tree_cache.clear();
+        t_tree_cache.cached_landmarks_data = current_data;
+        t_tree_cache.cached_landmarks_size = current_size;
+        t_tree_cache.cached_first_x = current_first_x;
+
+        if (!landmarks.empty()) {
+            for (const auto& landmark : landmarks) {
+                t_tree_cache.landmarks_by_class[landmark.class_id].push_back(landmark);
+            }
+
+            for (const auto& kv : t_tree_cache.landmarks_by_class) {
+                int cid = kv.first;
+                auto cloud = std::make_unique<LandmarkFeatureCloud>(kv.second);
+                auto tree = std::make_unique<KDTree2D>(
+                                 2, *cloud,
+                                 nanoflann::KDTreeSingleIndexAdaptorParams(10 /* max leaf size */));
+                tree->buildIndex();
+                t_tree_cache.clouds.emplace(cid, std::move(cloud));
+                t_tree_cache.kdtrees.emplace(cid, std::move(tree));
+            }
+        }
     }
+
+    auto& landmarks_by_class = t_tree_cache.landmarks_by_class;
+    auto& kdtrees = t_tree_cache.kdtrees;
+
 
     Eigen::Isometry2d transform  = initial_guess;
     double            prev_error = 1e9;
+    int actual_iterations = 0;
+    if (collect_iteration_trace && result.debug) {
+        result.debug->iteration_traces.reserve(max_iterations_ + 1);
+        IterationTrace initial_trace;
+        initial_trace.iteration = -1;
+        initial_trace.estimated_x = transform.translation().x();
+        initial_trace.estimated_y = transform.translation().y();
+        initial_trace.estimated_yaw = Eigen::Rotation2Dd(transform.linear()).angle();
+        initial_trace.elapsed_ms = 0.0;
+        result.debug->iteration_traces.push_back(std::move(initial_trace));
+    }
 
     // ── ICP 반복 ──────────────────────────────────────────────────────────────
     for (int iter = 0; iter < max_iterations_; ++iter) {
+        actual_iterations = iter + 1;
         std::vector<Eigen::Vector2d> dst_pts;
         double current_error      = 0.0;
         double total_error_weight = 0.0;
 
-        // 1:1 유니크 정합 테이블: class_id → (ref_idx → {LocalFeature, min_dist²})
+        // 1:1 유니크 정합 테이블: class_id → (landmark_idx → {LocalFeature, min_dist²})
         std::map<int, std::map<size_t, std::pair<LocalFeature, double>>> best_matches;
         Eigen::Matrix2d R_curr = transform.linear();
 
@@ -138,24 +215,24 @@ RegistrationResult IcpRegistration::align(
 
             // 3. 반경 내 후보들 중 최소 마할라노비스 거리 선택
             double min_dist_sq = 9.0;  // χ² threshold
-            int    best_ref_idx = -1;
+            int    best_landmark_idx = -1;
 
             for (const auto& m : ret_matches) {
-                const auto& ref = ref_by_class[obs.class_id][m.first];
-                Eigen::Vector2d dp(ref.x - pt_map_guess.x(), ref.y - pt_map_guess.y());
+                const auto& landmark = landmarks_by_class[obs.class_id][m.first];
+                Eigen::Vector2d dp(landmark.x - pt_map_guess.x(), landmark.y - pt_map_guess.y());
                 double d2 = dp.transpose() * Info_map * dp;
                 if (d2 < min_dist_sq) {
                     min_dist_sq  = d2;
-                    best_ref_idx = static_cast<int>(m.first);
+                    best_landmark_idx = static_cast<int>(m.first);
                 }
             }
 
             // 4. 1:1 유니크 정합 강제 (이미 할당된 맵 포인트가 있다면 더 가까운 것만 생존)
-            if (best_ref_idx != -1) {
+            if (best_landmark_idx != -1) {
                 auto& class_matches = best_matches[obs.class_id];
-                if (class_matches.find(best_ref_idx) == class_matches.end() ||
-                    min_dist_sq < class_matches[best_ref_idx].second) {
-                    class_matches[best_ref_idx] = {obs, min_dist_sq};
+                if (class_matches.find(best_landmark_idx) == class_matches.end() ||
+                    min_dist_sq < class_matches[best_landmark_idx].second) {
+                    class_matches[best_landmark_idx] = {obs, min_dist_sq};
                 }
             }
         }
@@ -164,14 +241,14 @@ RegistrationResult IcpRegistration::align(
         std::vector<LocalFeature> src_feats;
         for (const auto& class_pair : best_matches) {
             int class_id = class_pair.first;
-            for (const auto& ref_pair : class_pair.second) {
-                size_t ref_idx  = ref_pair.first;
-                const auto& feat = ref_pair.second.first;
+            for (const auto& landmark_pair : class_pair.second) {
+                size_t landmark_idx  = landmark_pair.first;
+                const auto& feat = landmark_pair.second.first;
                 double w = 1.0 / (feat.cov_xx + feat.cov_yy + 1e-4);
                 src_feats.push_back(feat);
-                dst_pts.push_back(Eigen::Vector2d(ref_by_class[class_id][ref_idx].x,
-                                                  ref_by_class[class_id][ref_idx].y));
-                current_error       += w * ref_pair.second.second;
+                dst_pts.push_back(Eigen::Vector2d(landmarks_by_class[class_id][landmark_idx].x,
+                                                  landmarks_by_class[class_id][landmark_idx].y));
+                current_error       += w * landmark_pair.second.second;
                 total_error_weight  += w;
             }
         }
@@ -219,6 +296,39 @@ RegistrationResult IcpRegistration::align(
         transform.translation() = t;
 
         if (total_error_weight > 1e-6) current_error /= total_error_weight;
+        if (collect_iteration_trace && result.debug) {
+            IterationTrace trace;
+            trace.iteration = iter;
+            trace.estimated_x = transform.translation().x();
+            trace.estimated_y = transform.translation().y();
+            trace.estimated_yaw = Eigen::Rotation2Dd(transform.linear()).angle();
+            trace.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start_time).count();
+
+            size_t trace_size = 0;
+            for (const auto& class_pair : best_matches) trace_size += class_pair.second.size();
+            trace.associations.reserve(trace_size);
+
+            for (const auto& class_pair : best_matches) {
+                const int class_id = class_pair.first;
+                const auto& landmark_list = landmarks_by_class[class_id];
+                for (const auto& landmark_pair : class_pair.second) {
+                    const size_t landmark_idx = landmark_pair.first;
+                    const auto& feat = landmark_pair.second.first;
+                    const auto& landmark = landmark_list[landmark_idx];
+
+                    Association assoc;
+                    assoc.obs_x = feat.x;
+                    assoc.obs_y = feat.y;
+                    assoc.landmark_x = landmark.x;
+                    assoc.landmark_y = landmark.y;
+                    assoc.dist_mahalanobis = std::sqrt(landmark_pair.second.second);
+                    assoc.class_id = static_cast<uint8_t>(class_id);
+                    assoc.is_inlier = true;
+                    trace.associations.push_back(assoc);
+                }
+            }
+            result.debug->iteration_traces.push_back(std::move(trace));
+        }
         if (std::abs(prev_error - current_error) < 1e-4) break;
         prev_error = current_error;
     }
@@ -230,6 +340,14 @@ RegistrationResult IcpRegistration::align(
 
     // 3x3 2D Pose (x, y, yaw)에 대한 정보 행렬(Information Matrix, Hessian) 누적 변수
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+
+    std::vector<std::pair<int, size_t>> added_landmarks;
+
+    if (collect_associations && result.debug) {
+        result.debug->associations.reserve(observed_used.size());
+        result.debug->query_landmarks.reserve(landmarks.size());
+        added_landmarks.reserve(landmarks.size());
+    }
 
     for (const auto& obs : observed_used) {
         if (kdtrees.find(obs.class_id) == kdtrees.end()) continue;
@@ -254,14 +372,35 @@ RegistrationResult IcpRegistration::align(
         nanoflann::SearchParameters params;
         params.sorted = false;
         const auto num_matches = kdtrees[obs.class_id]->radiusSearch(query_pt, search_radius_sq, ret_matches, params);
-        if (num_matches == 0) continue;
+
+        double min_dist_sq = 1e9;
+        int best_landmark_idx = -1;
 
         for (const auto& m : ret_matches) {
-            const auto& ref = ref_by_class[obs.class_id][m.first];
-            Eigen::Vector2d dp(ref.x - pt_map.x(), ref.y - pt_map.y());
+            const auto& landmark = landmarks_by_class[obs.class_id][m.first];
 
-            // 인라이어(Inlier) 판정
-            if (dp.transpose() * Info_map * dp < 9.0) {
+            if (collect_associations && result.debug) {
+                const auto key = std::make_pair(obs.class_id, static_cast<size_t>(m.first));
+                const auto it = std::find(added_landmarks.begin(), added_landmarks.end(), key);
+                if (it == added_landmarks.end()) {
+                    added_landmarks.push_back(key);
+                    result.debug->query_landmarks.push_back(landmark);
+                }
+            }
+
+            Eigen::Vector2d dp(landmark.x - pt_map.x(), landmark.y - pt_map.y());
+            double d2 = dp.transpose() * Info_map * dp;
+            if (d2 < min_dist_sq) {
+                min_dist_sq  = d2;
+                best_landmark_idx = static_cast<int>(m.first);
+            }
+        }
+
+        if (best_landmark_idx != -1) {
+            const auto& landmark = landmarks_by_class[obs.class_id][best_landmark_idx];
+            bool is_inlier = (min_dist_sq < 9.0);
+
+            if (is_inlier) {
                 inliers++;
 
                 // 정합 쌍의 기하학적 제약 조건을 Hessian에 누적
@@ -274,19 +413,44 @@ RegistrationResult IcpRegistration::align(
 
                 // H += J^T * W * J (가중치 W로 Info_map 사용)
                 H += J.transpose() * Info_map * J;
-                break;
+            }
+
+            // Record association
+            if (collect_associations && result.debug) {
+                Association assoc;
+                assoc.obs_x = obs.x;
+                assoc.obs_y = obs.y;
+                assoc.landmark_x = landmark.x;
+                assoc.landmark_y = landmark.y;
+                assoc.dist_mahalanobis = std::sqrt(min_dist_sq);
+                assoc.class_id = static_cast<uint8_t>(obs.class_id);
+                assoc.is_inlier = is_inlier;
+                result.debug->associations.push_back(assoc);
+            }
+        } else {
+            // No matches inside search radius, mark as outlier with NaN landmarks
+            if (collect_associations && result.debug) {
+                Association assoc;
+                assoc.obs_x = obs.x;
+                assoc.obs_y = obs.y;
+                assoc.landmark_x = std::numeric_limits<double>::quiet_NaN();
+                assoc.landmark_y = std::numeric_limits<double>::quiet_NaN();
+                assoc.dist_mahalanobis = 1e9;
+                assoc.class_id = static_cast<uint8_t>(obs.class_id);
+                assoc.is_inlier = false;
+                result.debug->associations.push_back(assoc);
             }
         }
     }
 
-    result.num_observed  = observed.size();
-    result.num_reference = reference.size();
     result.fitness_score = (valid_observed_count == 0) ? 0.0
                          : static_cast<double>(inliers) / valid_observed_count;
 
+    // Always fill final transform for debug/visualization
+    result.transform = transform;
+
     if (result.fitness_score >= fitness_threshold_) {
         result.success   = true;
-        result.transform = transform;
 
         // 정합 스코어에 의한 공분산 인플레이션 계수 계산 (이중 스케일링 방지)
         double scale      = 1.0 / std::max(result.fitness_score, 1e-3);
@@ -321,6 +485,11 @@ RegistrationResult IcpRegistration::align(
             result.covariance = Eigen::Matrix3d::Identity() * max_covariance_;
         }
     }
+
+    if (result.debug) {
+        result.debug->iterations = actual_iterations;
+    }
+    finish_debug_timing();
 
     return result;
 }

@@ -1,11 +1,14 @@
 #include "carmaker_localization/localization_nodelet.h"
 #include <ros/console.h>
-#include "carmaker_localization/osm_feature_loader.h"
+#include "carmaker_localization/osm_landmark_loader.h"
 #include "carmaker_localization/icp_registration.h"
 #include <XmlRpcValue.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <pluginlib/class_list_macros.h>
 #include <tf2_ros/static_transform_broadcaster.h>
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace carmaker_localization {
 
@@ -318,28 +321,34 @@ bool LocalizationNodelet::setupRosIo() {
     ros::NodeHandle& nh = getNodeHandle();
     ros::NodeHandle& pnh = getPrivateNodeHandle();
 
-    // 특징점 지도 로더 설정
-    std::string feature_format = pnh.param("feature_registration/map_format", std::string("osm"));
-    std::string feature_file = pnh.param("feature_registration/map_file", std::string(""));
+    // 랜드마크 로더 설정
+    std::string landmark_format = pnh.param("feature_registration/landmark_format", std::string(""));
+    if (landmark_format.empty()) {
+        landmark_format = pnh.param("feature_registration/map_format", std::string("osm"));
+    }
+    std::string landmark_file = pnh.param("feature_registration/landmark_file", std::string(""));
+    if (landmark_file.empty()) {
+        landmark_file = pnh.param("feature_registration/map_file", std::string(""));
+    }
 
-    if (feature_format == "osm") {
-        feature_loader_ = std::make_shared<OsmFeatureLoader>(resolution_);
-        if (!feature_loader_) {
-            NODELET_ERROR("Failed to allocate OsmFeatureLoader instance.");
+    if (landmark_format == "osm") {
+        landmark_loader_ = std::make_shared<OsmLandmarkLoader>(resolution_);
+        if (!landmark_loader_) {
+            NODELET_ERROR("Failed to allocate OsmLandmarkLoader instance.");
             return false;
         }
-        if (!feature_file.empty()) {
-            if (feature_loader_->load(feature_file)) {
-                NODELET_INFO("Features loaded successfully from: %s", feature_file.c_str());
+        if (!landmark_file.empty()) {
+            if (landmark_loader_->load(landmark_file)) {
+                NODELET_INFO("Landmarks loaded successfully from: %s", landmark_file.c_str());
                 if (visualizer_) {
-                    visualizer_->publishReferenceFeatures(feature_loader_->queryNear(0.0, 0.0, -1.0));
+                    visualizer_->publishLandmarkFeatures(landmark_loader_->queryNear(0.0, 0.0, -1.0));
                 }
             } else {
-                NODELET_ERROR("Failed to load features: %s", feature_file.c_str());
+                NODELET_ERROR("Failed to load landmarks: %s", landmark_file.c_str());
                 return false;
             }
         } else {
-            NODELET_WARN("No map_file specified for feature_registration. Reference features will be empty.");
+            NODELET_WARN("No landmark_file specified for feature_registration. Landmarks will be empty.");
         }
     }
 
@@ -395,10 +404,12 @@ bool LocalizationNodelet::setupRosIo() {
     std::string topic_r_wheel_vx = pnh.param("topics/publish/debug/r_wheel_vx", std::string("/localization/debug/r_wheel_vx"));
     std::string topic_r_wheel_yaw_rate = pnh.param("topics/publish/debug/r_wheel_yaw_rate", std::string("/localization/debug/r_wheel_yaw_rate"));
     std::string topic_r_imu_yaw_rate = pnh.param("topics/publish/debug/r_imu_yaw_rate", std::string("/localization/debug/r_imu_yaw_rate"));
+    std::string topic_icp_metrics = pnh.param("topics/publish/debug/icp_metrics", std::string("/localization/debug/icp_metrics"));
 
     debug_r_wheel_vx_pub_ = nh.advertise<std_msgs::Float64>(topic_r_wheel_vx, 10);
     debug_r_wheel_yaw_rate_pub_ = nh.advertise<std_msgs::Float64>(topic_r_wheel_yaw_rate, 10);
     debug_r_imu_yaw_rate_pub_ = nh.advertise<std_msgs::Float64>(topic_r_imu_yaw_rate, 10);
+    icp_metrics_pub_ = nh.advertise<carmaker_msgs::IcpRegistrationMetrics>(topic_icp_metrics, 10);
 
     // 진단 업데이터 설정(표준 /diagnostics 토픽으로 직접 발행)
     diagnostic_updater_ = std::make_unique<diagnostic_updater::Updater>(nh, pnh);
@@ -564,7 +575,7 @@ void LocalizationNodelet::updateEstimation(double current_time, const carmaker_m
         double scale_dyn = std::min(12.0, scale_yaw + scale_vel - 1.0);
 
         Eigen::Matrix<double, STATE_DIM, STATE_DIM> Q_dyn = Eigen::Matrix<double, STATE_DIM, STATE_DIM>::Zero();
-        Q_dyn(X, X) = std::pow(q_pos_std_, 2) * scale_dyn; 
+        Q_dyn(X, X) = std::pow(q_pos_std_, 2) * scale_dyn;
         Q_dyn(Y, Y) = std::pow(q_pos_std_, 2) * scale_dyn;
         Q_dyn(YAW, YAW) = std::pow(q_yaw_std_ * scale_yaw, 2);
 
@@ -866,7 +877,7 @@ void LocalizationNodelet::processImages(
 
             if (fusion_) {
                 combined.features.insert(combined.features.end(), features.features.begin(), features.features.end());
-            } else if (feature_registration_enabled_ && feature_loader_ && registration_engine_) {
+            } else if (feature_registration_enabled_ && landmark_loader_ && registration_engine_) {
                 std::lock_guard<std::mutex> lock(correction_queue_mutex_);
                 if (correction_queue_.size() < 1) {
                     correction_queue_.push(features);
@@ -883,7 +894,7 @@ void LocalizationNodelet::processImages(
         visualizer_->publishSvmImage(svm_canvas_, seam_line_points_);
     }
 
-    if (fusion_ && !combined.features.empty() && feature_registration_enabled_ && feature_loader_ && registration_engine_) {
+    if (fusion_ && !combined.features.empty() && feature_registration_enabled_ && landmark_loader_ && registration_engine_) {
         std::lock_guard<std::mutex> lock(correction_queue_mutex_);
         if (correction_queue_.size() < 1) {
             correction_queue_.push(combined);
@@ -901,7 +912,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
     }
 
     Eigen::Isometry2d initial_guess = Eigen::Isometry2d::Identity();
-    std::vector<ReferenceFeature> ref_features;
+    std::vector<LandmarkFeature> landmarks;
     double query_x = 0.0;
     double query_y = 0.0;
 
@@ -919,13 +930,13 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         query_y = ekf_pose(Y);
     }
 
-    ref_features = feature_loader_->queryNear(query_x, query_y, search_radius_);
+    landmarks = landmark_loader_->queryNear(query_x, query_y, search_radius_);
 
-    if (ref_features.empty()) {
+    if (landmarks.empty()) {
         if (search_radius_ < 0.0) {
-            ROS_WARN_THROTTLE(2.0, "performCorrection: No reference features found in the entire OSM map!");
+            ROS_WARN_THROTTLE(2.0, "performCorrection: No landmarks found in the entire OSM landmark file!");
         } else {
-            ROS_WARN_THROTTLE(2.0, "performCorrection: No reference features found in OSM map within search_radius (%.1f m) of pose (%.2f, %.2f)!", search_radius_, query_x, query_y);
+            ROS_WARN_THROTTLE(2.0, "performCorrection: No landmarks found within search_radius (%.1f m) of pose (%.2f, %.2f)!", search_radius_, query_x, query_y);
         }
         return;
     }
@@ -944,8 +955,17 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         cpp_features.push_back(cpp_feat);
     }
 
-    // ICP 특징점 정합(dynamics-driven EKF prediction이 막히지 않도록 mutex 해제 후 수행)
-    auto registration_result = registration_engine_->align(cpp_features, ref_features, initial_guess);
+    // ICP 특징점 정합(100Hz EKF 루프가 막히지 않도록 mutex 해제 후 수행)
+    bool publish_visual_debug = visualizer_ && visualizer_->hasIcpSubscribers();
+    bool publish_metrics = icp_metrics_pub_.getNumSubscribers() > 0;
+    bool collect_debug = publish_visual_debug || publish_metrics;
+    auto registration_result = registration_engine_->align(cpp_features, landmarks, initial_guess, collect_debug, publish_visual_debug);
+    const ros::Time metric_stamp = ros::Time::now();
+
+    if (visualizer_ && publish_visual_debug) {
+        visualizer_->publishAssociationMarkers(global_frame_, features.header.stamp, registration_result);
+    }
+
     if (registration_result.success) {
         Eigen::Vector3d z;
         z << registration_result.transform.translation().x(),
@@ -954,9 +974,17 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
 
         // 뮤텍스 락 아래 스레드 안전한 EKF 보정 단계 수행
         Eigen::Matrix3d R_reg = registration_result.covariance;
-        double current_time = 0.0;
+        double current_time = metric_stamp.toSec();
         double img_time = features.header.stamp.toSec();
-        double dt = 0.0;
+        double dt = current_time - img_time;
+
+        if (dt < 0.0 || dt >= 1.5) {
+            ROS_WARN_THROTTLE(2.0, "performCorrection: Measurement latency too high (%.3f s) or negative. Skipping EKF correction.", dt);
+            if (publish_metrics) {
+                publishIcpMetrics(metric_stamp, registration_result);
+            }
+            return;
+        }
 
         Eigen::Matrix3d R_reg_rear = Eigen::Matrix3d::Zero();
 
@@ -1022,7 +1050,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
 
             // 최대 허용 편차 검증(설정 파일 기반 검증 게이트)
-            // ICP 관측값의 신뢰도(fitness_score가 낮을수록 높음)가 높을수록 
+            // ICP 관측값의 신뢰도(fitness_score가 낮을수록 높음)가 높을수록
             // 검증 게이트(max_position_dev_) 범위를 동적으로 확장하여 누적된 큰 드리프트를 한번에 구제 및 복구
             // EKF 상태의 불확실성(P)에 따른 3-sigma 오차 한계선 계산
             const auto& P_current = state_frame.P;
@@ -1042,6 +1070,9 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             if (dist > adaptive_max_position_dev || std::abs(dyaw) > adaptive_max_yaw_dev) {
                 ROS_WARN_THROTTLE(2.0, "performCorrection: Match rejected by validation gate. Dev: %.3fm, %.1f deg (limits: %.2fm / adaptive: %.2fm, %.1f deg / yaw_limit: %.1f deg). Skipping correction.",
                                   dist, std::abs(dyaw) * 180.0 / M_PI, max_position_dev_, adaptive_max_position_dev, max_yaw_dev_ * 180.0 / M_PI, adaptive_max_yaw_dev * 180.0 / M_PI);
+                if (publish_metrics) {
+                    publishIcpMetrics(metric_stamp, registration_result);
+                }
                 return;
             }
 
@@ -1055,6 +1086,10 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
             if (correction_count_ == 0)
                 correction_start_sim_time_ = features.header.stamp.toSec();
             correction_count_++;
+        }
+
+        if (publish_metrics) {
+            publishIcpMetrics(metric_stamp, registration_result);
         }
 
         // 최종 로그 및 디버그 시각화(잠금 없이 수행)
@@ -1080,11 +1115,83 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         }
         correction_data_pub_.publish(correction_msg);
         visualizer_->publishCorrection(correction_msg);
-        ROS_INFO_THROTTLE(2.0, "performCorrection: ICP Registration SUCCESS! Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", registration_result.fitness_score, fitness_threshold_, registration_result.num_observed, registration_result.num_reference);
+        ROS_INFO_THROTTLE(2.0, "performCorrection: ICP Registration SUCCESS! Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", registration_result.fitness_score, fitness_threshold_, registration_result.num_observed, registration_result.num_landmarks);
     } else {
+        if (publish_metrics) {
+            publishIcpMetrics(metric_stamp, registration_result);
+        }
         visualizer_->clearCorrection();
-        ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Registration FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", registration_result.fitness_score, fitness_threshold_, registration_result.num_observed, registration_result.num_reference);
+        ROS_WARN_THROTTLE(2.0, "performCorrection: ICP Registration FAILED. Fitness score: %.3f (threshold: %.3f). Observed: %zu, Ref: %zu", registration_result.fitness_score, fitness_threshold_, registration_result.num_observed, registration_result.num_landmarks);
     }
+}
+
+void LocalizationNodelet::publishIcpMetrics(const ros::Time& stamp, const RegistrationResult& result) {
+    carmaker_msgs::IcpRegistrationMetrics msg;
+    const double no_data = std::numeric_limits<double>::quiet_NaN();
+    msg.header.stamp = stamp;
+    msg.header.frame_id = global_frame_;
+
+    msg.grid_i = 0;
+    msg.grid_j = 0;
+    msg.cell_x = no_data;
+    msg.cell_y = no_data;
+    msg.observed_count = static_cast<uint32_t>(result.num_observed);
+    msg.landmark_count = static_cast<uint32_t>(result.num_landmarks);
+
+    msg.success = result.success;
+    msg.attempt_count = 1;
+    msg.success_count = result.success ? 1 : 0;
+    msg.success_rate = result.success ? 1.0 : 0.0;
+    msg.fitness_score = result.fitness_score;
+    msg.icp_rear_x = no_data;
+    msg.icp_rear_y = no_data;
+    msg.icp_rear_yaw = no_data;
+
+    if (result.debug) {
+        msg.iterations = static_cast<uint32_t>(std::max(0, result.debug->iterations));
+        msg.latency_ms = result.debug->latency_ms;
+    }
+
+    msg.longitudinal_rmse = no_data;
+    msg.lateral_rmse = no_data;
+    msg.yaw_rmse = no_data;
+
+    msg.cov_xx = no_data;
+    msg.cov_xy = no_data;
+    msg.cov_xyaw = no_data;
+    msg.cov_yx = no_data;
+    msg.cov_yy = no_data;
+    msg.cov_yyaw = no_data;
+    msg.cov_yawx = no_data;
+    msg.cov_yawy = no_data;
+    msg.cov_yawyaw = no_data;
+    msg.cov_trace = no_data;
+    msg.cov_determinant = no_data;
+
+    if (result.success) {
+        const Eigen::Vector3d icp_bumper(
+            result.transform.translation().x(),
+            result.transform.translation().y(),
+            Eigen::Rotation2Dd(result.transform.linear()).angle());
+        const Eigen::Vector3d icp_rear = transformPose(icp_bumper, rear_axle_x_);
+        msg.icp_rear_x = icp_rear(0);
+        msg.icp_rear_y = icp_rear(1);
+        msg.icp_rear_yaw = icp_rear(2);
+        const Eigen::Matrix3d cov = propagateCovariance(result.covariance, icp_bumper(2), rear_axle_x_);
+        msg.cov_xx = cov(0, 0);
+        msg.cov_xy = cov(0, 1);
+        msg.cov_xyaw = cov(0, 2);
+        msg.cov_yx = cov(1, 0);
+        msg.cov_yy = cov(1, 1);
+        msg.cov_yyaw = cov(1, 2);
+        msg.cov_yawx = cov(2, 0);
+        msg.cov_yawy = cov(2, 1);
+        msg.cov_yawyaw = cov(2, 2);
+        msg.cov_trace = cov.trace();
+        msg.cov_determinant = cov.determinant();
+    }
+
+    icp_metrics_pub_.publish(msg);
 }
 
 void LocalizationNodelet::correctionWorkerLoop() {
@@ -1164,15 +1271,15 @@ void LocalizationNodelet::publishEstimation(const ros::Time& stamp) {
 
     tf_broadcaster_->sendTransform(tf_msg1);
 
-    // search_radius가 지역 탐색 모드(양수)이면 현재 EKF 추정 위치 기준으로 지도 특징점을 다시 발행
+    // search_radius가 지역 탐색 모드(양수)이면 현재 EKF 추정 위치 기준으로 랜드마크를 다시 발행
     if (visualizer_ && search_radius_ >= 0.0) {
-        double dx = x(X) - last_map_pub_x_;
-        double dy = x(Y) - last_map_pub_y_;
+        double dx = x(X) - last_landmark_pub_x_;
+        double dy = x(Y) - last_landmark_pub_y_;
         if (dx*dx + dy*dy > 1.0 * 1.0) {
-            auto current_ref_features = feature_loader_->queryNear(x(X), x(Y), search_radius_);
-            visualizer_->publishReferenceFeatures(current_ref_features);
-            last_map_pub_x_ = x(X);
-            last_map_pub_y_ = x(Y);
+            auto current_landmarks = landmark_loader_->queryNear(x(X), x(Y), search_radius_);
+            visualizer_->publishLandmarkFeatures(current_landmarks);
+            last_landmark_pub_x_ = x(X);
+            last_landmark_pub_y_ = x(Y);
         }
     }
 }
@@ -1329,8 +1436,8 @@ void LocalizationNodelet::resetLocalization() {
         cumulative_nees_ = 0.0;
         nees_latest_ = 0.0;
         err_count_ = 0;
-        last_map_pub_x_ = -9999.0;
-        last_map_pub_y_ = -9999.0;
+        last_landmark_pub_x_ = -9999.0;
+        last_landmark_pub_y_ = -9999.0;
     }
 
     // 보정 주파수 추적 초기화(리셋 전 데이터가 주파수 추정에 섞이는 것 방지)
@@ -1386,22 +1493,22 @@ void LocalizationNodelet::initLocalization(double current_time, const carmaker_m
     static_tf.transform.rotation.y = 0.0;
     static_tf.transform.rotation.z = 0.0;
     static_tf.transform.rotation.w = 1.0;
-    
+
     static_tf_broadcaster_->sendTransform(static_tf);
 
     if (visualizer_) {
-        visualizer_->publishReferenceFeatures(feature_loader_->queryNear(init_x, init_y, search_radius_));
-        last_map_pub_x_ = init_x;
-        last_map_pub_y_ = init_y;
+        visualizer_->publishLandmarkFeatures(landmark_loader_->queryNear(init_x, init_y, search_radius_));
+        last_landmark_pub_x_ = init_x;
+        last_landmark_pub_y_ = init_y;
     }
 }
 
 bool LocalizationNodelet::getMapCallback(nav_msgs::GetMap::Request&, nav_msgs::GetMap::Response& res) {
-    if (!feature_loader_) {
-        NODELET_WARN("Feature loader is not initialized, cannot provide map.");
+    if (!landmark_loader_) {
+        NODELET_WARN("Landmark loader is not initialized, cannot provide occupancy grid.");
         return false;
     }
-    res.map = feature_loader_->getOccupancyGrid();
+    res.map = landmark_loader_->getOccupancyGrid();
     if (res.map.data.empty()) {
         NODELET_WARN("OccupancyGrid map data is empty.");
         return false;
@@ -1429,7 +1536,7 @@ Eigen::Matrix3d LocalizationNodelet::propagateCovariance(const Eigen::Matrix3d& 
 void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::DynamicsInfo& dynamics) {
     auto state_frame = ekf_core_->getState();
     const auto& x_state = state_frame.x;
-    
+
     if (std::isnan(dynamics.RearAxle_x) || std::isnan(dynamics.RearAxle_y)) {
         return;
     }

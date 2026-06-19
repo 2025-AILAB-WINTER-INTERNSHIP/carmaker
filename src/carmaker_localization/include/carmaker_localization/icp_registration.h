@@ -12,8 +12,11 @@ public:
 
     virtual RegistrationResult align(
         const std::vector<LocalFeature>& observed,
-        const std::vector<ReferenceFeature>& reference,
-        const Eigen::Isometry2d& initial_guess) override;
+        const std::vector<LandmarkFeature>& landmarks,
+        const Eigen::Isometry2d& initial_guess,
+        bool collect_debug_info = false,
+        bool collect_associations = false,
+        bool collect_iteration_trace = false) override;
 
 private:
     double fitness_threshold_;

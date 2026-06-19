@@ -20,6 +20,7 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 find_package(Eigen3 REQUIRED)
+find_package(OpenMP REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
@@ -45,7 +46,10 @@ add_library(${PROJECT_NAME}_global
   src/ros_utils.cpp
   src/visualizer.cpp
 )
-target_link_libraries(${PROJECT_NAME}_global ${catkin_LIBRARIES})
+target_link_libraries(${PROJECT_NAME}_global
+  ${catkin_LIBRARIES}
+  OpenMP::OpenMP_CXX
+)
 
 # ── Global Planner Nodelet ───────────────────────────────────────────
 add_library(carmaker_planning_nodelet

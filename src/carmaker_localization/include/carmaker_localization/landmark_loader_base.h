@@ -1,5 +1,5 @@
-#ifndef CARMAKER_LOCALIZATION_FEATURE_LOADER_BASE_H
-#define CARMAKER_LOCALIZATION_FEATURE_LOADER_BASE_H
+#ifndef CARMAKER_LOCALIZATION_LANDMARK_LOADER_BASE_H
+#define CARMAKER_LOCALIZATION_LANDMARK_LOADER_BASE_H
 
 #include <string>
 #include <vector>
@@ -13,7 +13,7 @@
 
 namespace carmaker_localization {
 
-struct ReferenceFeature {
+struct LandmarkFeature {
     double x;
     double y;
     uint8_t class_id;
@@ -28,28 +28,28 @@ struct Point2d {
 };
 
 /**
- * @brief Abstract interface for road feature loading.
+ * @brief Abstract interface for landmark loading.
  * Supports OSM, Lanelet2, PCD, etc.
  */
-class FeatureLoaderBase {
+class LandmarkLoaderBase {
 public:
-    virtual ~FeatureLoaderBase() = default;
+    virtual ~LandmarkLoaderBase() = default;
 
     /**
-     * @brief Load features from file
-     * @param path Absolute path to feature file
+     * @brief Load landmarks from file
+     * @param path Absolute path to landmark file
      * @return true if success
      */
     virtual bool load(const std::string& path) = 0;
 
     /**
-     * @brief Query reference features near a position
+     * @brief Query landmarks near a position
      * @param x Query X (m)
      * @param y Query Y (m)
      * @param radius Search radius (m)
      * @return Vector of features within radius
      */
-    virtual std::vector<ReferenceFeature> queryNear(double x, double y, double radius) const = 0;
+    virtual std::vector<LandmarkFeature> queryNear(double x, double y, double radius) const = 0;
 
     /**
      * @brief Get compiled OccupancyGrid map for debugging/visualization
@@ -127,9 +127,9 @@ protected:
 
     static void voxelsToFeatures(const std::set<std::pair<double,double>>& voxels,
                                  uint8_t class_id,
-                                 std::vector<ReferenceFeature>& features) {
+                                 std::vector<LandmarkFeature>& features) {
         for (const auto& pt : voxels) {
-            ReferenceFeature f;
+            LandmarkFeature f;
             f.x = pt.first;
             f.y = pt.second;
             f.class_id = class_id;
@@ -172,4 +172,4 @@ private:
 
 } // namespace carmaker_localization
 
-#endif // CARMAKER_LOCALIZATION_FEATURE_LOADER_BASE_H
+#endif // CARMAKER_LOCALIZATION_LANDMARK_LOADER_BASE_H
