@@ -406,6 +406,103 @@ src/segmentation/runs/unet_carmaker/checkpoints/best.ckpt
 [test] loss=... miou=... dice=... acc=...
 ```
 
+## Final Holdout Rosbag 평가
+
+최종 성능 보고용 test set은 학습/validation에 사용한 `src/carmaker_image/data`와
+물리적으로 분리해서 관리하는 것이 좋다. 예를 들어 다음처럼 별도 data root를 둔다.
+
+```bash
+export TEST_DATA=/workspace/src/carmaker_image/data_final_test
+```
+
+### 1. 최종 test bag 추출
+
+```bash
+roslaunch carmaker_image batch_extract.launch \
+  bag_dirs:=/path/to/final_test_bags \
+  raw_out_dir:=$TEST_DATA/raw_images \
+  raw_post_dir:=$TEST_DATA/raw_post_processed \
+  gt_out_dir:=$TEST_DATA/gt_images \
+  gt_post_dir:=$TEST_DATA/gt_post_processed \
+  csv_dir:=$TEST_DATA/csv
+```
+
+### 2. GT mask 후처리
+
+```bash
+roslaunch carmaker_image apply_mask.launch \
+  recursive:=true \
+  gt_input_dir:=$TEST_DATA/gt_images \
+  raw_input_dir:=$TEST_DATA/raw_images \
+  gt_output_dir:=$TEST_DATA/gt_post_processed \
+  raw_output_dir:=$TEST_DATA/raw_post_processed
+```
+
+평가 전에 raw/GT pair가 맞는지 overlay를 눈으로 먼저 확인한다.
+
+```bash
+python3 src/segmentation/tools/debug_dataset.py \
+  --data-root $TEST_DATA \
+  --manifest $TEST_DATA/csv/manifest.csv \
+  --count 16 \
+  --image-size 720,480 \
+  --out-dir src/segmentation/runs/debug_final_test
+```
+
+### 3. best.ckpt 정량/정성 평가
+
+학습이 끝난 run의 `best.ckpt`를 외부 holdout manifest에 적용한다.
+
+```bash
+python3 src/segmentation/tools/evaluate_checkpoint.py \
+  --ckpt /workspace/src/segmentation/runs/<run_name>/checkpoints/best.ckpt \
+  --data-root $TEST_DATA \
+  --manifest $TEST_DATA/csv/manifest.csv \
+  --out-dir src/segmentation/runs/final_test_eval \
+  --batch-size 8 \
+  --overlay-count 80 \
+  --save-pred-masks \
+  --tensorboard
+```
+
+기본 `--eval-resolution network`는 학습/validation과 같은 입력 해상도에서 metric을 계산한다.
+원본 raw 해상도 기준 보고가 필요하면 `--eval-resolution original`을 추가한다.
+
+결과물:
+
+```text
+src/segmentation/runs/final_test_eval/
+  metrics.json              # overall, camera별, scenario별 IoU/Dice/Precision/Recall/F1
+  per_sample_metrics.csv    # frame별 metric과 image/mask path
+  overlays/                 # raw / gt / pred / error side-by-side PNG
+  pred_masks/               # 예측 class-id mask PNG (--save-pred-masks 사용 시)
+  events.out.tfevents...    # TensorBoard scalars/images (--tensorboard 사용 시)
+```
+
+TensorBoard에서 확인하려면 다음처럼 실행한다.
+
+```bash
+tensorboard --logdir src/segmentation/runs/final_test_eval --host 0.0.0.0 --port 6006
+```
+
+주요 scalar tag:
+
+```text
+final_test/overall/miou
+final_test/overall/miou_fg
+final_test/overall/dice
+final_test/overall/f1
+final_test/overall/f1_fg
+final_test/overall/f1/class_1
+final_test/overall/f1/class_2
+final_test/camera/front/f1_fg
+final_test/scenario/<scenario_name>/f1_fg
+```
+
+최종 test set은 `best.ckpt` 선택이나 hyperparameter tuning에 사용하지 않는다.
+결과가 낮으면 해당 결과를 기록한 뒤 원인을 분석하고, 모델을 바꾼 경우에는 새로운 holdout set 또는
+명확히 버전이 분리된 평가 set으로 다시 보고한다.
+
 마지막 epoch 상태는 항상 `last.ckpt`로 저장된다.
 
 ```text

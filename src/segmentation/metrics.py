@@ -62,11 +62,20 @@ def segmentation_scores(matrix: torch.Tensor) -> Dict[str, float]:
         2.0 * precision * recall / f1_denom.clamp_min(1e-12),
         torch.zeros_like(tp),
     )
+    precision_fg = precision[1:3] if len(precision) >= 3 else precision[1:]
+    recall_fg = recall[1:3] if len(recall) >= 3 else recall[1:]
+    f1_fg = f1[1:3] if len(f1) >= 3 else f1[1:]
 
     scores = {
         "miou": float(iou.mean().item()),
         "miou_fg": miou_fg,
         "dice": float(dice.mean().item()),
+        "precision": float(precision.mean().item()),
+        "precision_fg": float(precision_fg.mean().item()) if len(precision_fg) > 0 else 0.0,
+        "recall": float(recall.mean().item()),
+        "recall_fg": float(recall_fg.mean().item()) if len(recall_fg) > 0 else 0.0,
+        "f1": float(f1.mean().item()),
+        "f1_fg": float(f1_fg.mean().item()) if len(f1_fg) > 0 else 0.0,
     }
     for idx in range(matrix.shape[0]):
         scores[f"iou/class_{idx}"] = float(iou[idx].item())
