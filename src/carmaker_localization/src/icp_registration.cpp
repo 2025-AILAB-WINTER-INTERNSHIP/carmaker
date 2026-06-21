@@ -72,13 +72,14 @@ static thread_local KDTreeCache t_tree_cache;
 // ─────────────────────────────────────────────────────────────────────────────
 // IcpRegistration
 // ─────────────────────────────────────────────────────────────────────────────
-IcpRegistration::IcpRegistration(double fitness_threshold, int max_iterations, double vision_base_std, double vision_base_yaw_std, double min_search_radius, double max_covariance)
-    : fitness_threshold_(fitness_threshold),
-      max_iterations_(max_iterations),
-      vision_base_std_(vision_base_std),
-      vision_base_yaw_std_(vision_base_yaw_std),
-      min_search_radius_(min_search_radius),
-      max_covariance_(max_covariance) {}
+IcpRegistration::IcpRegistration(const IcpParams& params)
+    : fitness_threshold_(params.fitness_threshold),
+      max_iterations_(params.max_iterations),
+      vision_base_std_(params.vision_base_std),
+      vision_base_yaw_std_(params.vision_base_yaw_std),
+      min_search_radius_(params.min_search_radius),
+      max_covariance_(params.max_covariance),
+      max_observed_features_(params.max_observed_features) {}
 
 RegistrationResult IcpRegistration::align(
     const std::vector<LocalFeature>& observed,
@@ -110,9 +111,9 @@ RegistrationResult IcpRegistration::align(
 
     // Uniform step downsampling to prevent CPU saturation while preserving spatial distribution
     std::vector<LocalFeature> observed_used;
-    if (observed.size() > 400) {
-        size_t step = observed.size() / 400;
-        observed_used.reserve(400);
+    if (max_observed_features_ > 0 && static_cast<int>(observed.size()) > max_observed_features_) {
+        size_t step = observed.size() / max_observed_features_;
+        observed_used.reserve(max_observed_features_);
         for (size_t i = 0; i < observed.size(); i += step)
             observed_used.push_back(observed[i]);
     } else {

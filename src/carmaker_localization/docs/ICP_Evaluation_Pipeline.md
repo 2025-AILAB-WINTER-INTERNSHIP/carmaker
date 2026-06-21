@@ -70,7 +70,7 @@ flowchart TD
 
 CSV에 기록되는 pose error는 GT RearAxle pose 기준으로 계산한다.
 
-```
+```text
 dx = estimated_rear_x - gt_rear_x
 dy = estimated_rear_y - gt_rear_y
 dyaw = normalize(estimated_rear_yaw - gt_rear_yaw)
@@ -78,7 +78,7 @@ dyaw = normalize(estimated_rear_yaw - gt_rear_yaw)
 
 종방향/횡방향 오차는 GT 차량 프레임으로 투영한다.
 
-```
+```text
 longitudinal =  cos(gt_yaw) * dx + sin(gt_yaw) * dy
 lateral      = -sin(gt_yaw) * dx + cos(gt_yaw) * dy
 ```
@@ -87,13 +87,13 @@ lateral      = -sin(gt_yaw) * dx + cos(gt_yaw) * dy
 
 ICP registration 내부 transform은 map frame 기준 bumper pose를 의미한다. 정적 평가와 metrics publisher는 이를 RearAxle 기준으로 변환한 뒤 GT와 비교한다.
 
-```
+```text
 rear_pose = bumper_pose translated by rear_axle_offset_x along bumper yaw
 ```
 
 Bag 평가에서는 `IcpRegistrationMetrics.msg`의 다음 필드를 사용한다.
 
-```
+```text
 icp_rear_x
 icp_rear_y
 icp_rear_yaw
@@ -162,6 +162,7 @@ icp_rear_yaw
 | `output_csv_path` | `grid_registration_results.csv` | CSV 출력 경로 |
 | `output_dir` | `docs` | debug JSON/HTML 및 분석 출력 경로 |
 | `landmarks_csv_path` | `landmarks.csv` | heatmap overlay용 landmark CSV |
+| `max_observed_features` | `400` | ICP 연산 속도 보장을 위한 관측치 최대 개수 (다운샘플링 임계값, `<=0` 이면 다운샘플링 미수행) |
 
 ### 5.2 평가 절차
 
@@ -225,7 +226,7 @@ roslaunch carmaker_localization evaluator.launch mode:=bag \
 
 각 ICP metric마다 가장 가까운 GT sample을 선택한다.
 
-```
+```text
 metric timestamp -> nearest /carmaker/dynamic_info sample
 ```
 
@@ -235,7 +236,7 @@ metric timestamp -> nearest /carmaker/dynamic_info sample
 
 각 metric frame은 nearest GT 위치로 grid에 binning된다.
 
-```
+```text
 grid_i = round((gt_x - center_x) / grid_step)
 grid_j = round((gt_y - center_y) / grid_step)
 cell_x = center_x + grid_i * grid_step
@@ -318,7 +319,7 @@ Heatmap 색상 계산은 `inf`를 NaN으로 치환한 Series에서 값을 읽는
 
 Fitness score는 최종 ICP pose를 적용한 뒤 관측 feature가 landmark와 충분히 가깝게 맞은 비율이다.
 
-```
+```text
 fitness = inlier_count / valid_observed_count
 ```
 
@@ -333,7 +334,7 @@ Debug HTML의 iteration trace에는 해당 반복에서 SVD update에 사용한 
 
 예를 들어 다음 두 값은 서로 다른 의미다.
 
-```
+```text
 최종 Fitness Score = 0.9479
 현재 단계 매칭 비율 = 385 / 652 = 0.5905
 ```
@@ -346,7 +347,7 @@ Debug HTML의 iteration trace에는 해당 반복에서 SVD update에 사용한 
 
 ICP covariance는 최종 inlier들의 정보 행렬 Hessian에서 유도된다. 2D pose 상태는 `[x, y, yaw]`이며 covariance는 다음 형태다.
 
-```
+```text
 Sigma =
 [ cov_xx    cov_xy    cov_xyaw
   cov_yx    cov_yy    cov_yyaw
@@ -357,7 +358,7 @@ Sigma =
 
 `cov_trace`는 diagonal variance의 합이다.
 
-```
+```text
 cov_trace = cov_xx + cov_yy + cov_yawyaw
 ```
 
@@ -367,7 +368,7 @@ cov_trace = cov_xx + cov_yy + cov_yawyaw
 
 `cov_determinant`는 3차 covariance ellipsoid의 부피에 해당한다.
 
-```
+```text
 cov_determinant = det(Sigma)
 ```
 
@@ -440,7 +441,30 @@ python3 src/carmaker_localization/scripts/analyze_evaluation.py
 
 ---
 
-## 12. 현재 구현의 한계와 주의점
+## 12. KD-Tree 캐싱 및 성능 최적화
+
+`IcpRegistration::align` 메서드는 정합 시마다 클래스별 KD-Tree 인덱스를 $O(N \log N)$으로 빌드합니다. `static_evaluator`와 같이 수천 개의 격자 셀과 다중 Yaw 각도를 병렬 루프로 평가하는 조건에서는 이 인덱스 빌드가 큰 병렬 병목(Bottleneck)이 됩니다. 이를 해결하기 위해 다음과 같은 캐싱 설계를 도입했습니다.
+
+### 12.1 thread_local 캐시 구조
+
+- **Lock-free 병렬 처리:** OpenMP의 각 작업 스레드는 자신만의 `thread_local KDTreeCache` 객체를 가집니다. 스레드 간 락 경쟁(Mutex contention)이 전혀 없으므로 멀티코어 환경의 병렬 확장성이 극대화됩니다.
+- **메모리 안정성:** KD-Tree 인덱스가 참조하는 클래스별 랜드마크 맵(`landmarks_by_class`)의 사본을 스레드 로컬 영역에 안전하게 상주시켜, 정합 함수가 호출을 마친 후에도 포인터가 댕글링(Dangling Reference)되지 않도록 수명을 관리합니다.
+
+### 12.2 캐시 무효화 (Cache Invalidation) 검증 키
+
+실시간 EKF 교정 과정이나 여러 평가 환경에서 입력되는 랜드마크 세트가 변경되는 경우를 안전하게 감지하기 위해 아래의 **삼중 비교 가드(Triple-Check Guard)**를 수행하며, 조건 중 하나라도 다를 경우 캐시를 재생성합니다.
+
+1. `landmarks.data()`: 입력 랜드마크 벡터의 내부 힙 버퍼 주소 비교
+2. `landmarks.size()`: 랜드마크 특징점의 총 개수 비교
+3. `landmarks.front().x`: 첫 번째 특징점의 기하적 위치(X 좌표) 변동 여부 비교
+
+### 12.3 파라미터 구조체 (IcpParams) 도입을 통한 설계 단순화
+
+파라미터 변수의 증가로 인한 생성자 복잡성과 호출 시의 휴먼 에러(매개변수 순서 혼동)를 사전에 방지하기 위해, 정합 설정에 필요한 핵심 변수들을 `IcpParams` 구조체로 단일화하여 캡슐화했습니다. 이 구조체는 호출 코드의 가독성을 향상시키며, 향후 설정 변수 확장 시에도 기존 노드나 평가기 코드의 수정 없이 하위 호환성을 안정적으로 제공합니다.
+
+---
+
+## 13. 현재 구현의 한계와 주의점
 
 - Bag evaluator는 정지 spawn bag 전제다. 동적 주행 bag의 시간 동기화 검증에는 적합하지 않다.
 - `evaluator.launch`에 남아 있는 `max_match_dt` 인자는 현재 bag evaluator에서 사용하지 않는다.
@@ -449,22 +473,4 @@ python3 src/carmaker_localization/scripts/analyze_evaluation.py
 - Map-to-map debug는 성능 평가 row가 아니라 ICP 수렴 과정 분석 도구다.
 - Fitness score와 iteration matching ratio는 같은 값이 아니다.
 - Covariance determinant는 보조 지표다. RMSE, diagonal covariance, trace, success rate와 함께 해석해야 한다.
-
----
-
-## 13. KD-Tree 캐싱 및 성능 최적화
-
-`IcpRegistration::align` 메서드는 정합 시마다 클래스별 KD-Tree 인덱스를 $O(N \log N)$으로 빌드합니다. `static_evaluator`와 같이 수천 개의 격자 셀과 다중 Yaw 각도를 병렬 루프로 평가하는 조건에서는 이 인덱스 빌드가 큰 병렬 병목(Bottleneck)이 됩니다. 이를 해결하기 위해 다음과 같은 캐싱 설계를 도입했습니다.
-
-### 13.1 thread_local 캐시 구조
-
-- **Lock-free 병렬 처리:** OpenMP의 각 작업 스레드는 자신만의 `thread_local KDTreeCache` 객체를 가집니다. 스레드 간 락 경쟁(Mutex contention)이 전혀 없으므로 멀티코어 환경의 병렬 확장성이 극대화됩니다.
-- **메모리 안정성:** KD-Tree 인덱스가 참조하는 클래스별 랜드마크 맵(`landmarks_by_class`)의 사본을 스레드 로컬 영역에 안전하게 상주시켜, 정합 함수가 호출을 마친 후에도 포인터가 댕글링(Dangling Reference)되지 않도록 수명을 관리합니다.
-
-### 13.2 캐시 무효화 (Cache Invalidation) 검증 키
-
-실시간 EKF 교정 과정이나 여러 평가 환경에서 입력되는 랜드마크 세트가 변경되는 경우를 안전하게 감지하기 위해 아래의 **삼중 비교 가드(Triple-Check Guard)**를 수행하며, 조건 중 하나라도 다를 경우 캐시를 재생성합니다.
-
-1. `landmarks.data()`: 입력 랜드마크 벡터의 내부 힙 버퍼 주소 비교
-2. `landmarks.size()`: 랜드마크 특징점의 총 개수 비교
-3. `landmarks.front().x`: 첫 번째 특징점의 기하적 위치(X 좌표) 변동 여부 비교
+- **관측치 다운샘플링 필터**: CPU 오버헤드 방지를 위한 400개 균등 스텝 다운샘플링은 이제 `max_observed_features` 파라미터로 설정 가능합니다. 다운샘플링을 끄고 원본의 순수 성능을 비교하려면 이 값을 `0` 이하로 설정하십시오.

@@ -362,9 +362,19 @@ bool LocalizationNodelet::setupRosIo() {
     double max_covariance = pnh.param("feature_registration/max_covariance", 10.0);
 
     double min_search_radius = pnh.param("feature_registration/min_search_radius", 0.5);
+    int max_observed_features = pnh.param("feature_registration/max_observed_features", 400);
 
     if (registration_type == "icp") {
-        registration_engine_ = std::make_shared<IcpRegistration>(fitness_threshold_, max_iterations, vision_base_std, vision_base_yaw_std, min_search_radius, max_covariance);
+        IcpParams icp_params;
+        icp_params.fitness_threshold = fitness_threshold_;
+        icp_params.max_iterations = max_iterations;
+        icp_params.vision_base_std = vision_base_std;
+        icp_params.vision_base_yaw_std = vision_base_yaw_std;
+        icp_params.min_search_radius = min_search_radius;
+        icp_params.max_covariance = max_covariance;
+        icp_params.max_observed_features = max_observed_features;
+
+        registration_engine_ = std::make_shared<IcpRegistration>(icp_params);
         if (!registration_engine_) {
             NODELET_ERROR("Failed to allocate IcpRegistration instance.");
             return false;

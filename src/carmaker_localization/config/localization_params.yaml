@@ -129,6 +129,7 @@ feature_registration:
   fitness_threshold: 0.35 # 정합 유효 판정 임계값
   max_iterations: 50 # ICP 반복 횟수
   max_covariance: 10.0 # Eigen-capping 최대 공분산 분산 상한 [m^2 or rad^2] (unconstrained 방향 발산 방지)
+  max_observed_features: 0 # ICP 연산 속도 보장을 위한 관측치 최대 개수 (다운샘플링 임계값, <=0 이면 사용 안함)
 
   validation_gate:
     max_position_dev: 1.0 # [m] - EKF 예측치 기준 최대 허용 정합 위치 편차 (오정합 필터 차단)

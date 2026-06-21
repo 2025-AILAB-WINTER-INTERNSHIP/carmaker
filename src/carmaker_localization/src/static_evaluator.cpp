@@ -49,6 +49,7 @@ struct EvaluatorConfig {
     double max_covariance = 10.0;
     double vision_base_std = 0.1;
     double vision_base_yaw_std = 0.1;
+    int max_observed_features = 400;
     std::string output_csv_path = "grid_registration_results.csv";
     std::string output_dir = "docs";
     std::string landmarks_csv_path = "landmarks.csv";
@@ -161,6 +162,7 @@ bool loadConfig(const ros::NodeHandle& nh, const ros::NodeHandle& pnh, Evaluator
     getParamFallback(nh, pnh, "max_iterations", "feature_registration/max_iterations", cfg.max_iterations);
     getParamFallback(nh, pnh, "min_search_radius", "feature_registration/min_search_radius", cfg.min_search_radius);
     getParamFallback(nh, pnh, "max_covariance", "feature_registration/max_covariance", cfg.max_covariance);
+    getParamFallback(nh, pnh, "max_observed_features", "feature_registration/max_observed_features", cfg.max_observed_features);
     getParamFallback(nh, pnh, "vision_base_std", "ekf/camera/base_std", cfg.vision_base_std);
     getParamFallback(nh, pnh, "vision_base_yaw_std", "ekf/camera/base_yaw_std", cfg.vision_base_yaw_std);
     getParamFallback(nh, pnh, "output_csv_path", "evaluator/output_csv_path", cfg.output_csv_path);
@@ -410,8 +412,16 @@ EvaluationRow evaluatePoint(const GridCell& point, const EvaluatorConfig& cfg,
     row.grid = point;
     if (landmarks.empty()) return row;
 
-    IcpRegistration icp(cfg.fitness_threshold, cfg.max_iterations, cfg.vision_base_std,
-                        cfg.vision_base_yaw_std, cfg.min_search_radius, cfg.max_covariance);
+    IcpParams icp_params;
+    icp_params.fitness_threshold = cfg.fitness_threshold;
+    icp_params.max_iterations = cfg.max_iterations;
+    icp_params.vision_base_std = cfg.vision_base_std;
+    icp_params.vision_base_yaw_std = cfg.vision_base_yaw_std;
+    icp_params.min_search_radius = cfg.min_search_radius;
+    icp_params.max_covariance = cfg.max_covariance;
+    icp_params.max_observed_features = cfg.max_observed_features;
+
+    IcpRegistration icp(icp_params);
 
     Eigen::Isometry2d T_rear_bumper = Eigen::Isometry2d::Identity();
     T_rear_bumper.translation() = Eigen::Vector2d(-cfg.rear_axle_offset_x, 0.0);
@@ -512,8 +522,16 @@ void writeDebugPoseHtmlFiles(const EvaluatorConfig& cfg,
     Eigen::Isometry2d T_rear_bumper = Eigen::Isometry2d::Identity();
     T_rear_bumper.translation() = Eigen::Vector2d(-cfg.rear_axle_offset_x, 0.0);
 
-    IcpRegistration icp(cfg.fitness_threshold, cfg.max_iterations, cfg.vision_base_std,
-                        cfg.vision_base_yaw_std, cfg.min_search_radius, cfg.max_covariance);
+    IcpParams icp_params;
+    icp_params.fitness_threshold = cfg.fitness_threshold;
+    icp_params.max_iterations = cfg.max_iterations;
+    icp_params.vision_base_std = cfg.vision_base_std;
+    icp_params.vision_base_yaw_std = cfg.vision_base_yaw_std;
+    icp_params.min_search_radius = cfg.min_search_radius;
+    icp_params.max_covariance = cfg.max_covariance;
+    icp_params.max_observed_features = cfg.max_observed_features;
+
+    IcpRegistration icp(icp_params);
 
     std::ofstream index_csv(cfg.output_dir + "/icp_debug_index.csv");
     if (index_csv.is_open()) {
