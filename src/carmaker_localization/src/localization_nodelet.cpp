@@ -399,14 +399,20 @@ bool LocalizationNodelet::setupRosIo() {
     std::string topic_estimation_data = pnh.param("topics/publish/data/estimation_pose", std::string("/localization/data/estimation_pose"));
     std::string topic_correction_data = pnh.param("topics/publish/data/correction_pose", std::string("/localization/data/correction_pose"));
     std::string topic_rmse_pos = pnh.param("topics/publish/data/rmse_position", std::string("/localization/data/rmse_position"));
-    std::string topic_rmse_yaw = pnh.param("topics/publish/data/rmse_orientation", std::string("/localization/data/rmse_orientation"));
+    std::string topic_yaw_error = pnh.param("topics/publish/data/yaw_error", std::string("/localization/data/yaw_error"));
+    std::string topic_yaw_rmse = pnh.param("topics/publish/data/yaw_rmse", std::string("/localization/data/yaw_rmse"));
+    std::string topic_longitudinal_error = pnh.param("topics/publish/data/longitudinal_error", std::string("/localization/data/longitudinal_error"));
+    std::string topic_lateral_error = pnh.param("topics/publish/data/lateral_error", std::string("/localization/data/lateral_error"));
     std::string topic_longitudinal_rmse = pnh.param("topics/publish/data/longitudinal_rmse", std::string("/localization/data/longitudinal_rmse"));
     std::string topic_lateral_rmse = pnh.param("topics/publish/data/lateral_rmse", std::string("/localization/data/lateral_rmse"));
     std::string topic_nees = pnh.param("topics/publish/data/nees", std::string("/localization/data/nees"));
     estimation_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_estimation_data, 10);
     correction_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_correction_data, 10);
     rmse_pos_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_pos, 10);
-    rmse_yaw_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_yaw, 10);
+    yaw_error_pub_ = nh.advertise<std_msgs::Float64>(topic_yaw_error, 10);
+    yaw_rmse_pub_ = nh.advertise<std_msgs::Float64>(topic_yaw_rmse, 10);
+    longitudinal_error_pub_ = nh.advertise<std_msgs::Float64>(topic_longitudinal_error, 10);
+    lateral_error_pub_ = nh.advertise<std_msgs::Float64>(topic_lateral_error, 10);
     longitudinal_rmse_pub_ = nh.advertise<std_msgs::Float64>(topic_longitudinal_rmse, 10);
     lateral_rmse_pub_ = nh.advertise<std_msgs::Float64>(topic_lateral_rmse, 10);
     nees_pub_ = nh.advertise<std_msgs::Float64>(topic_nees, 10);
@@ -1601,9 +1607,21 @@ void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::Dynamic
 
     std_msgs::Float64 yaw_err_msg;
     yaw_err_msg.data = yaw_err_abs * 180.0 / M_PI; // radian -> degree 변환
-    rmse_yaw_pub_.publish(yaw_err_msg);
+    yaw_error_pub_.publish(yaw_err_msg);
 
     const double sample_count = static_cast<double>(err_count_);
+
+    std_msgs::Float64 yaw_rmse_msg;
+    yaw_rmse_msg.data = std::sqrt(cumulative_yaw_sq_err_ / sample_count) * 180.0 / M_PI;
+    yaw_rmse_pub_.publish(yaw_rmse_msg);
+
+    std_msgs::Float64 longitudinal_error_msg;
+    longitudinal_error_msg.data = longitudinal_err;
+    longitudinal_error_pub_.publish(longitudinal_error_msg);
+
+    std_msgs::Float64 lateral_error_msg;
+    lateral_error_msg.data = lateral_err;
+    lateral_error_pub_.publish(lateral_error_msg);
 
     std_msgs::Float64 longitudinal_rmse_msg;
     longitudinal_rmse_msg.data = std::sqrt(cumulative_longitudinal_sq_err_ / sample_count);

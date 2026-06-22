@@ -175,7 +175,10 @@ private:
     ros::Publisher estimation_data_pub_;
     ros::Publisher correction_data_pub_;
     ros::Publisher rmse_pos_pub_;
-    ros::Publisher rmse_yaw_pub_;
+    ros::Publisher yaw_error_pub_;
+    ros::Publisher yaw_rmse_pub_;
+    ros::Publisher longitudinal_error_pub_;
+    ros::Publisher lateral_error_pub_;
     ros::Publisher longitudinal_rmse_pub_;
     ros::Publisher lateral_rmse_pub_;
     ros::Publisher nees_pub_;
