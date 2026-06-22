@@ -20,10 +20,13 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
   diagnostic_updater
   visualization_msgs
+  rosbag
+  roslib
 )
 
 find_package(OpenCV CONFIG REQUIRED)
 find_package(Eigen3 CONFIG REQUIRED)
+find_package(OpenMP REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
@@ -47,12 +50,14 @@ add_library(carmaker_localization_nodelet
   src/feature_extractor.cpp
   src/ekf_core.cpp
   src/visualizer.cpp
-  src/osm_feature_loader.cpp
+  src/osm_landmark_loader.cpp
   src/icp_registration.cpp
+  src/evaluation_utils.cpp
 )
 target_link_libraries(carmaker_localization_nodelet
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  OpenMP::OpenMP_CXX
 )
 
 if(catkin_EXPORTED_TARGETS)
@@ -61,10 +66,33 @@ endif()
 
 catkin_install_python(PROGRAMS
   tools/evaluate_ekf.py
+  scripts/analyze_evaluation.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-install(TARGETS carmaker_localization_nodelet
+add_executable(static_evaluator src/static_evaluator.cpp)
+target_link_libraries(static_evaluator
+  carmaker_localization_nodelet
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  OpenMP::OpenMP_CXX
+)
+
+if(catkin_EXPORTED_TARGETS)
+  add_dependencies(static_evaluator ${catkin_EXPORTED_TARGETS})
+endif()
+
+add_executable(bag_evaluator src/bag_evaluator.cpp)
+target_link_libraries(bag_evaluator
+  carmaker_localization_nodelet
+  ${catkin_LIBRARIES}
+)
+
+if(catkin_EXPORTED_TARGETS)
+  add_dependencies(bag_evaluator ${catkin_EXPORTED_TARGETS})
+endif()
+
+install(TARGETS carmaker_localization_nodelet static_evaluator bag_evaluator
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

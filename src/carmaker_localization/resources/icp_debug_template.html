@@ -1,0 +1,1084 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ICP Debug Specification</title>
+<style>
+:root {
+  --bg: #ffffff;
+  --card-bg: #ffffff;
+  --ink-primary: #191f28;
+  --ink-secondary: #4e5968;
+  --ink-muted: #8b95a1;
+  --border: #f2f4f6;
+  --toss-blue: #0064ff;
+  --toss-blue-light: #f2f8ff;
+  --good: #2b8f65;
+  --good-bg: #eafcf4;
+  --bad: #df3c3c;
+  --bad-bg: #fdf0f0;
+  --line-color: #7c8da5;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--ink-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Apple SD Gothic Neo", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 24px;
+  background-color: var(--card-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.title h1 {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--ink-primary);
+  letter-spacing: -0.5px;
+}
+
+.title .sub {
+  margin-top: 6px;
+  color: var(--ink-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pill.good {
+  color: var(--good);
+  background-color: var(--good-bg);
+}
+
+.pill.bad {
+  color: var(--bad);
+  background-color: var(--bad-bg);
+}
+
+.main {
+  display: grid;
+  grid-template-columns: 1.2fr minmax(500px, 660px);
+  gap: 12px;
+  padding: 12px;
+  height: calc(100vh - 70px);
+  box-sizing: border-box;
+  overflow: hidden;
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+}
+
+.viewer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+.viewer-section .control-panel {
+  flex-shrink: 0;
+}
+
+.card {
+  background-color: var(--card-bg);
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  box-shadow: none;
+  padding: 12px;
+}
+
+.control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.field select {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background-color: var(--bg);
+  color: var(--ink-primary);
+  font-size: 14px;
+  font-weight: 600;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.field select:focus {
+  border-color: var(--toss-blue);
+}
+
+.slider-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.slider-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-secondary);
+}
+
+.frame-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--toss-blue);
+  font-variant-numeric: tabular-nums;
+}
+
+.field input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  outline: none;
+}
+
+.field input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.field input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--toss-blue);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 100, 255, 0.3);
+  margin-top: -7px;
+  transition: transform 0.1s;
+}
+
+.field input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.field input[type="range"]::-moz-range-track {
+  width: 100%;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.field input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: var(--toss-blue);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 100, 255, 0.3);
+  transition: transform 0.1s;
+}
+
+.field input[type="range"]::-moz-range-thumb:hover {
+  transform: scale(1.15);
+}
+
+.plot-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #ffffff;
+  padding: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.side-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+.metrics-full-card {
+  grid-column: 1 / span 2;
+}
+
+.analysis-grid {
+  grid-column: 1 / span 2;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.analysis-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.scroll-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.scroll-area::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 2px;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink-primary);
+  margin-bottom: 8px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.metrics-full-card .metric-grid {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.metric-card {
+  background-color: #f9fafb;
+  border-radius: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+}
+
+.metric-card.highlight {
+  background-color: var(--toss-blue-light);
+  border-color: rgba(0, 100, 255, 0.1);
+}
+
+.metric-card .label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-secondary);
+}
+
+.metric-card .value {
+  margin-top: 4px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-card.highlight .value {
+  color: var(--toss-blue);
+}
+
+.legend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+
+.swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.swatch.line {
+  height: 3px;
+  border-radius: 0;
+  border: none;
+}
+
+.details-box {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.details-box h3 {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-primary);
+  margin-bottom: 4px;
+  margin-top: 8px;
+}
+
+.details-box h3:first-child {
+  margin-top: 0;
+}
+
+@media (max-width: 1024px) {
+  .main {
+    grid-template-columns: 1fr;
+  }
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .status {
+    align-self: flex-end;
+  }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="title">
+      <h1 id="title">ICP Debug</h1>
+      <div id="subtitle" class="sub"></div>
+    </div>
+    <div class="status">
+      <span id="statusResult" class="pill"></span>
+      <span id="statusMap" class="pill"></span>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="viewer-section">
+      <div class="card control-panel">
+        <div class="field">
+          <label for="mode">시각화 모드 (View Mode)</label>
+          <select id="mode">
+            <option value="fixed">절대 랜드마크 기준 (Fixed Landmark)</option>
+            <option value="moving">차량 범퍼 기준 (Sensor Frame)</option>
+            <option value="map_pair">랜드마크-랜드마크 정합 과정 및 히트맵 (Landmark-to-Landmark & Heatmap)</option>
+          </select>
+        </div>
+        <div class="field slider-container">
+          <div class="slider-header">
+            <label for="slider" class="slider-label">최적화 단계 (Iteration)</label>
+            <span id="label" class="frame-text"></span>
+          </div>
+          <input id="slider" type="range" min="0" value="0">
+        </div>
+      </div>
+
+      <div class="card plot-card">
+        <svg id="plot" viewBox="0 0 960 720" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+    </section>
+
+    <aside class="side-section">
+      <!-- 1. 핵심 성능 지표 -->
+      <section id="metricsCard" class="card metrics-full-card">
+        <h2 class="panel-title">정합 지표</h2>
+        <div class="metric-grid">
+          <div class="metric-card highlight">
+            <div id="metricFitnessLabel" class="label">관측 최종 Fitness Score</div>
+            <div id="metricFitness" class="value"></div>
+          </div>
+          <div class="metric-card">
+            <div class="label">총/평균 처리 시간</div>
+            <div id="metricLatency" class="value"></div>
+          </div>
+          <div class="metric-card">
+            <div class="label">수렴 단계 (Iterations)</div>
+            <div id="metricIterations" class="value"></div>
+          </div>
+        </div>
+      </section>
+
+      <div id="analysisGrid" class="analysis-grid">
+        <!-- 2. 범례 (Legend) -->
+        <section id="legendCard" class="card analysis-card">
+          <h2 class="panel-title" style="margin-bottom: 8px;">범례 (Legend)</h2>
+          <div id="legend" class="legend-list scroll-area">
+            <!-- Dynamically updated -->
+          </div>
+        </section>
+
+        <!-- 3. 프레임 편차 (Error / RMSE) -->
+        <section id="errorCard" class="card analysis-card">
+          <h2 class="panel-title" style="margin-bottom: 8px;">프레임 편차 (Error / RMSE)</h2>
+          <div class="metric-grid" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div class="metric-card highlight" style="padding: 10px;">
+              <div class="label">종방향 오차 (Longitudinal)</div>
+              <div id="errLong" class="value" style="font-size: 16px;"></div>
+            </div>
+            <div class="metric-card highlight" style="padding: 10px;">
+              <div class="label">횡방향 오차 (Lateral)</div>
+              <div id="errLat" class="value" style="font-size: 16px;"></div>
+            </div>
+            <div class="metric-card" style="padding: 10px;">
+              <div class="label">거리 오차 (Position)</div>
+              <div id="errPos" class="value" style="font-size: 16px;"></div>
+            </div>
+            <div class="metric-card" style="padding: 10px;">
+              <div class="label">헤딩 오차 (Heading)</div>
+              <div id="errYaw" class="value" style="font-size: 16px;"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. 통계적 불확실성 (Covariance) -->
+        <section id="covarianceCard" class="card analysis-card">
+          <h2 class="panel-title" style="margin-bottom: 8px;">통계적 불확실성 (Covariance)</h2>
+          <div class="metric-grid" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div class="metric-card" style="padding: 10px;">
+              <div class="label">Covariance Trace</div>
+              <div id="covTrace" class="value" style="font-size: 16px;"></div>
+            </div>
+            <div class="metric-card" style="padding: 10px;">
+              <div class="label">Determinant</div>
+              <div id="covDet" class="value" style="font-size: 16px;"></div>
+            </div>
+            <div class="metric-card" style="padding: 10px;">
+              <div class="label">σ_xx (X 분산)</div>
+              <div id="covXX" class="value" style="font-size: 16px;"></div>
+            </div>
+            <div class="metric-card" style="padding: 10px;">
+              <div class="label">σ_yy (Y 분산)</div>
+              <div id="covYY" class="value" style="font-size: 16px;"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. 상세 데이터 -->
+        <section id="detailsCard" class="card analysis-card">
+          <h2 id="detailsTitle" class="panel-title" style="margin-bottom: 8px;">프레임 상세 데이터</h2>
+          <div id="details" class="details-box scroll-area"></div>
+        </section>
+
+        <!-- 6. 히트맵 이미지 카드 (랜드마크-랜드마크 모드에서만 표시) -->
+        <section id="heatmapCard" class="card analysis-card" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 8px; flex-shrink: 0; gap: 8px;">
+            <h2 class="panel-title" style="margin-bottom: 0;">평가 분석 히트맵 (Heatmap)</h2>
+            <select id="heatmapSelect" style="padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; font-weight: 600; cursor: pointer; outline: none; background: #fff; color: var(--ink-secondary); max-width: 52%;">
+              <option value="mean_observed_count">평균 관측 피처 수</option>
+              <option value="landmark_count">평균 랜드마크 피처 수</option>
+              <option value="attempts">정합 시도 수 (Attempts)</option>
+              <option value="success_count">정합 성공 수 (Success Count)</option>
+              <option value="success_rate" selected>정합 성공률 (Success Rate)</option>
+              <option value="mean_fitness">평균 Fitness Score</option>
+              <option value="mean_iterations">평균 수렴 Iterations</option>
+              <option value="mean_latency_ms">평균 처리 시간</option>
+              <option value="longitudinal_rmse">종방향 RMSE</option>
+              <option value="lateral_rmse">횡방향 RMSE</option>
+              <option value="yaw_rmse">헤딩 RMSE</option>
+              <option value="cov_trace">Covariance Trace</option>
+              <option value="cov_determinant">Covariance Determinant</option>
+              <option value="cov_xx">X 분산 Cov XX</option>
+              <option value="cov_yy">Y 분산 Cov YY</option>
+              <option value="cov_yawyaw">Yaw 분산 Cov YawYaw</option>
+            </select>
+          </div>
+          <div style="flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; overflow: hidden; background-color: #fff; border-radius: 8px;">
+            <img id="heatmapImage" src="heatmap_success_rate.png" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px;" />
+          </div>
+        </section>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script>
+const debugData = __DEBUG_DATA_PLACEHOLDER__;
+const landmarkFeatures = debugData.landmarks || debugData.map_features || [];
+const observedFeatures = debugData.observed_features || [];
+const movingLandmarks = debugData.moving_landmarks || debugData.moving_map_features || [];
+const traces = debugData.traces || [];
+const landmarkTraces = debugData.landmark_traces || debugData.map_traces || [];
+const gt = debugData.gt || {x:0,y:0,yaw:0,yaw_deg:0};
+const initialOffset = debugData.initial_offset || null;
+const rearOffset = debugData.rear_offset || 0;
+const result = debugData.result || {};
+const landmarkResult = debugData.landmark_to_landmark_result || debugData.map_to_map_result || {};
+const sensorRange = debugData.sensor_range || 6.0;
+
+// Setup header text
+document.getElementById('title').textContent = `ICP Debug: ${debugData.label || 'Pose'}`;
+const offsetText = initialOffset
+  ? ` | 초기 offset: x=${fmt(initialOffset.x, 3)}m, y=${fmt(initialOffset.y, 3)}m, yaw=${fmt(initialOffset.yaw_deg, 2)}°`
+  : '';
+document.getElementById('subtitle').textContent =
+  `GT RearAxle 기준점: x=${fmt(gt.x, 3)}m, y=${fmt(gt.y, 3)}m, yaw=${fmt(gt.yaw_deg, 2)}°${offsetText}`;
+
+// Setup status pills
+const statusResult = document.getElementById('statusResult');
+const statusLandmark = document.getElementById('statusMap');
+statusResult.textContent = `관측 정합: ${result.success ? '성공 (Success)' : '실패 (Failed)'}`;
+statusResult.className = `pill ${result.success ? 'good' : 'bad'}`;
+statusLandmark.textContent = `랜드마크 간 정합: ${landmarkResult.success ? '성공 (Success)' : '실패 (Failed)'}`;
+statusLandmark.className = `pill ${landmarkResult.success ? 'good' : 'bad'}`;
+
+const svg = document.getElementById('plot');
+const slider = document.getElementById('slider');
+const label = document.getElementById('label');
+const mode = document.getElementById('mode');
+const details = document.getElementById('details');
+const detailsTitle = document.getElementById('detailsTitle');
+
+const metricFitnessLabel = document.getElementById('metricFitnessLabel');
+const metricFitness = document.getElementById('metricFitness');
+const metricLatency = document.getElementById('metricLatency');
+const metricIterations = document.getElementById('metricIterations');
+
+const errLong = document.getElementById('errLong');
+const errLat = document.getElementById('errLat');
+const errPos = document.getElementById('errPos');
+const errYaw = document.getElementById('errYaw');
+
+const covTrace = document.getElementById('covTrace');
+const covDet = document.getElementById('covDet');
+const covXX = document.getElementById('covXX');
+const covYY = document.getElementById('covYY');
+
+const legend = document.getElementById('legend');
+const W = 960, H = 720, margin = 40;
+
+function fmt(v, digits=3) {
+  return Number.isFinite(Number(v)) ? Number(v).toFixed(digits) : 'N/A';
+}
+
+function fmtScientific(v, digits=3) {
+  if (!Number.isFinite(Number(v))) return 'N/A';
+  const num = Number(v);
+  if (num === 0) return '0';
+  if (Math.abs(num) < 1e-4 || Math.abs(num) > 1e4) {
+    return num.toExponential(digits);
+  }
+  return num.toFixed(digits);
+}
+
+function fmtCompact(v, digits=3) {
+  return Number.isFinite(Number(v)) ? Number(v).toFixed(digits).replace(/\.?0+$/, '') : 'N/A';
+}
+
+function colorForClass(c) {
+  const colors = ['#0064ff', '#ff8400', '#2bc06a', '#ff4d4f', '#9b51e0', '#8c564b', '#e051b8', '#8a95a1'];
+  return colors[Math.abs(c) % colors.length];
+}
+
+function transformPoint(x, y, pose) {
+  const c = Math.cos(pose.yaw), s = Math.sin(pose.yaw);
+  return {x: pose.x + c * x - s * y, y: pose.y + s * x + c * y};
+}
+
+function assocLandmarkX(a) {
+  return Number.isFinite(Number(a.lx)) ? Number(a.lx) : Number(a.rx);
+}
+
+function assocLandmarkY(a) {
+  return Number.isFinite(Number(a.ly)) ? Number(a.ly) : Number(a.ry);
+}
+
+function inverseTransformPoint(x, y, pose) {
+  const c = Math.cos(pose.yaw), s = Math.sin(pose.yaw);
+  const dx = x - pose.x, dy = y - pose.y;
+  return {x: c * dx + s * dy, y: -s * dx + c * dy};
+}
+
+function normalizeAngle(a) {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
+function rearPoseFromBumperFrame(frame) {
+  return {
+    x: frame.x + Math.cos(frame.yaw) * rearOffset,
+    y: frame.y + Math.sin(frame.yaw) * rearOffset,
+    yaw: frame.yaw
+  };
+}
+
+function poseError(estPose, gtPose) {
+  const dx = estPose.x - gtPose.x;
+  const dy = estPose.y - gtPose.y;
+  const dyaw = normalizeAngle(estPose.yaw - gtPose.yaw);
+  const longitudinal = Math.cos(gtPose.yaw) * dx + Math.sin(gtPose.yaw) * dy;
+  const lateral = -Math.sin(gtPose.yaw) * dx + Math.cos(gtPose.yaw) * dy;
+  return {dx, dy, dyaw, longitudinal, lateral, position: Math.hypot(dx, dy)};
+}
+
+function updateSidebarVisibility(modeValue) {
+  const mapPair = modeValue === 'map_pair';
+  const analysisGrid = document.getElementById('analysisGrid');
+  const legendCard = document.getElementById('legendCard');
+  const legend = document.getElementById('legend');
+  const heatmapCard = document.getElementById('heatmapCard');
+  const errorCard = document.getElementById('errorCard');
+  const covarianceCard = document.getElementById('covarianceCard');
+  const detailsCard = document.getElementById('detailsCard');
+
+  if (mapPair) {
+    analysisGrid.style.gridTemplateColumns = '1fr';
+    analysisGrid.style.gridTemplateRows = 'auto minmax(0, 1fr)';
+    legendCard.style.gridColumn = '1';
+    legendCard.style.gridRow = '1';
+    legendCard.style.padding = '10px 14px';
+
+    legend.style.display = 'flex';
+    legend.style.flexDirection = 'row';
+    legend.style.gap = '8px 18px';
+    legend.style.flexWrap = 'wrap';
+
+    errorCard.style.display = 'none';
+    covarianceCard.style.display = 'none';
+    detailsCard.style.display = 'none';
+    heatmapCard.style.display = 'flex';
+    heatmapCard.style.gridColumn = '1';
+    heatmapCard.style.gridRow = '2';
+  } else {
+    analysisGrid.style.gridTemplateColumns = '';
+    analysisGrid.style.gridTemplateRows = '';
+    legendCard.style.gridColumn = '';
+    legendCard.style.gridRow = '';
+    legendCard.style.padding = '14px';
+
+    legend.style.display = '';
+    legend.style.flexDirection = '';
+    legend.style.gap = '';
+    legend.style.flexWrap = '';
+
+    errorCard.style.display = '';
+    covarianceCard.style.display = '';
+    detailsCard.style.display = '';
+    heatmapCard.style.display = 'none';
+    heatmapCard.style.gridColumn = '';
+    heatmapCard.style.gridRow = '';
+  }
+}
+
+function setLegend(modeValue) {
+  const rows = modeValue === 'map_pair'
+    ? [
+        ['', '관측 피처 (Observed Feature, 클래스별 색상)', false, 'background: linear-gradient(90deg, #0064ff, #ff8400, #2bc06a, #ff4d4f)'],
+        ['', '랜드마크 전체 (Landmark, 전체)', false, 'background: linear-gradient(90deg, #0064ff, #ff8400, #2bc06a, #ff4d4f); opacity: 0.18'],
+        ['', '매칭된 랜드마크 (Matched Landmark)', false, 'border: 1.5px solid #191f28; background: none; border-radius: 50%'],
+        ['', '정합 연관선 (Association, 클래스별 색상)', true, 'background: linear-gradient(90deg, #0064ff, #ff8400, #2bc06a, #ff4d4f); opacity: 0.5'],
+      ]
+    : modeValue === 'moving'
+      ? [
+          ['#ff4d4f', 'GT 차량 위치'],
+          ['#0064ff', 'ICP 추정 차량 위치'],
+          ['', '관측 피처 전체 (Observed Feature, 전체)', false, 'background: linear-gradient(90deg, #0064ff, #ff8400, #2bc06a, #ff4d4f); opacity: 0.45'],
+          ['', '랜드마크 전체 (Landmark, 전체)', false, 'background: linear-gradient(90deg, #0064ff, #ff8400, #2bc06a, #ff4d4f); opacity: 0.18'],
+          ['#ff4d4f', '매칭된 관측 피처 (Matched Observed)', false, 'border: 2px solid #ff4d4f; background: #fdf0f0'],
+          ['', '매칭된 랜드마크 (Matched Landmark)', false, 'border: 1.5px solid #191f28; background: none; border-radius: 50%'],
+          ['#0064ff', '센서 범위 (Sensor Range, 반경)', true, 'border-top: 1.2px dashed #0064ff; background: none; height: 0; border-radius: 0'],
+          ['#7c8da5', '정합 연관선 (Association)', true],
+        ]
+      : [
+          ['#ff4d4f', 'GT 차량 위치'],
+          ['#0064ff', 'ICP 추정 차량 위치'],
+          ['', '관측 피처 전체 (Observed Feature, 전체)', false, 'background: linear-gradient(90deg, #0064ff, #ff8400, #2bc06a, #ff4d4f); opacity: 0.45'],
+          ['', '랜드마크 전체 (Landmark, 전체)', false, 'background: linear-gradient(90deg, #0064ff, #ff8400, #2bc06a, #ff4d4f); opacity: 0.18'],
+          ['#ff4d4f', '매칭된 관측 피처 (Matched Observed)', false, 'border: 2px solid #ff4d4f; background: #fdf0f0'],
+          ['', '매칭된 랜드마크 (Matched Landmark)', false, 'border: 1.5px solid #191f28; background: none; border-radius: 50%'],
+          ['#0064ff', '센서 범위 (Sensor Range, 반경)', true, 'border-top: 1.2px dashed #0064ff; background: none; height: 0; border-radius: 0'],
+          ['#7c8da5', '정합 연관선 (Association)', true],
+        ];
+
+  legend.innerHTML = rows.map(([color, text, line, extraStyle]) => {
+    const styleStr = extraStyle ? extraStyle : `background:${color}`;
+    return `<div class="legend-item"><span class="swatch ${line ? 'line' : ''}" style="${styleStr}"></span><span>${text}</span></div>`;
+  }).join('');
+}
+
+function paddedBounds(xs, ys) {
+  if (!xs.length) { xs.push(0); ys.push(0); }
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const span = Math.max(maxX - minX, maxY - minY, 1.0);
+  return {minX:minX-span*0.08,maxX:maxX+span*0.08,minY:minY-span*0.08,maxY:maxY+span*0.08};
+}
+
+function fixedBounds(frame) {
+  const xs = [gt.x], ys = [gt.y];
+  landmarkFeatures.forEach(p => { xs.push(p.x); ys.push(p.y); });
+  if (frame) {
+    const rear = rearPoseFromBumperFrame(frame);
+    xs.push(rear.x); ys.push(rear.y);
+    xs.push(frame.x - sensorRange, frame.x + sensorRange);
+    ys.push(frame.y - sensorRange, frame.y + sensorRange);
+    observedFeatures.forEach(p => {
+      const global = transformPoint(p.x, p.y, frame);
+      xs.push(global.x); ys.push(global.y);
+    });
+  }
+  if (frame) frame.associations.forEach(a => {
+    const p = transformPoint(a.ox, a.oy, frame);
+    xs.push(p.x, assocLandmarkX(a)); ys.push(p.y, assocLandmarkY(a));
+  });
+  return paddedBounds(xs, ys);
+}
+
+function landmarkPairBounds(frame) {
+  const xs = [gt.x], ys = [gt.y];
+  landmarkFeatures.forEach(p => { xs.push(p.x); ys.push(p.y); });
+  if (frame) {
+    xs.push(frame.x); ys.push(frame.y);
+    movingLandmarks.forEach(p => {
+      const moved = transformPoint(p.x, p.y, frame);
+      xs.push(moved.x); ys.push(moved.y);
+    });
+    frame.associations.forEach(a => {
+      const p = transformPoint(a.ox, a.oy, frame);
+      xs.push(p.x, assocLandmarkX(a)); ys.push(p.y, assocLandmarkY(a));
+    });
+  }
+  return paddedBounds(xs, ys);
+}
+
+function movingBounds(frame) {
+  const xs = [0, rearOffset, -sensorRange, sensorRange], ys = [0, 0, -sensorRange, sensorRange];
+  if (frame) {
+    observedFeatures.forEach(p => { xs.push(p.x); ys.push(p.y); });
+    landmarkFeatures.forEach(p => {
+      const local = inverseTransformPoint(p.x, p.y, frame);
+      xs.push(local.x); ys.push(local.y);
+    });
+    const gtLocal = inverseTransformPoint(gt.x, gt.y, frame);
+    xs.push(gtLocal.x); ys.push(gtLocal.y);
+    frame.associations.forEach(a => {
+      const landmarkLocal = inverseTransformPoint(assocLandmarkX(a), assocLandmarkY(a), frame);
+      xs.push(a.ox, landmarkLocal.x); ys.push(a.oy, landmarkLocal.y);
+    });
+  }
+  return paddedBounds(xs, ys);
+}
+
+function drawPose(x, y, yaw, color, name, sx, sy) {
+  const px = sx(x), py = sy(y), len = 22;
+  const ex = px + Math.cos(yaw) * len, ey = py - Math.sin(yaw) * len;
+  return `<circle cx="${px}" cy="${py}" r="6" fill="${color}" stroke="#ffffff" stroke-width="1.5"><title>${name}</title></circle>` +
+         `<line x1="${px}" y1="${py}" x2="${ex}" y2="${ey}" stroke="${color}" stroke-width="3" stroke-linecap="round"/>`;
+}
+
+function gridStep(span) {
+  const raw = span / 8;
+  const pow = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1e-6))));
+  const scaled = raw / pow;
+  if (scaled >= 5) return 5 * pow;
+  if (scaled >= 2) return 2 * pow;
+  return pow;
+}
+
+function drawGrid(b, sx, sy) {
+  const step = gridStep(Math.max(b.maxX - b.minX, b.maxY - b.minY));
+  const startX = Math.ceil(b.minX / step) * step;
+  const startY = Math.ceil(b.minY / step) * step;
+  let out = '';
+  for (let x = startX; x <= b.maxX; x += step) {
+    const px = sx(x);
+    out += `<line x1="${px}" y1="${margin}" x2="${px}" y2="${H - margin}" stroke="#f2f4f6" stroke-width="1"/>`;
+    out += `<text x="${px + 4}" y="${H - 15}" fill="#8b95a1" font-size="11" font-weight="600">${fmtCompact(x, 2)}</text>`;
+  }
+  for (let y = startY; y <= b.maxY; y += step) {
+    const py = sy(y);
+    out += `<line x1="${margin}" y1="${py}" x2="${W - margin}" y2="${py}" stroke="#f2f4f6" stroke-width="1"/>`;
+    out += `<text x="12" y="${py - 4}" fill="#8b95a1" font-size="11" font-weight="600">${fmtCompact(y, 2)}</text>`;
+  }
+  out += `<rect x="${margin}" y="${margin}" width="${W - 2 * margin}" height="${H - 2 * margin}" fill="none" stroke="#e5e8eb" stroke-width="1"/>`;
+  return out;
+}
+
+function updateMetrics(frame, activeTraces, modeValue, val, maxVal) {
+  const mapPair = modeValue === 'map_pair';
+  const activeResult = mapPair ? landmarkResult : result;
+  const taskLabel = mapPair ? '랜드마크-랜드마크 정합' : '관측-랜드마크 정합';
+  const matches = frame ? frame.associations.length : 0;
+  const observedCount = Number(activeResult.observed_count || 0);
+  const iterations = Number(activeResult.iterations ?? activeTraces.length);
+  const totalLatencyMs = Number(activeResult.latency_ms);
+  const meanLatencyMs = iterations > 0 && Number.isFinite(totalLatencyMs)
+    ? totalLatencyMs / iterations
+    : NaN;
+
+  const frameInliers = frame ? frame.associations.filter(a => a.is_inlier).length : 0;
+  const frameMatchRatio = observedCount > 0 ? (frameInliers / observedCount) : (matches > 0 ? 1.0 : 0.0);
+  metricFitnessLabel.textContent = mapPair ? '랜드마크-랜드마크 최종 Fitness Score' : '관측-랜드마크 최종 Fitness Score';
+  metricFitness.textContent = fmt(activeResult.fitness, 4);
+
+  metricLatency.textContent = `${fmt(totalLatencyMs, 1)} / ${fmt(meanLatencyMs, 2)} ms`;
+  metricIterations.textContent = `${iterations || activeTraces.length} 회`;
+  detailsTitle.textContent = mapPair ? '랜드마크-랜드마크 정합 상세 데이터' : '관측-랜드마크 정합 프레임 상세 데이터';
+
+  if (!frame) {
+    errLong.textContent = 'N/A';
+    errLat.textContent = 'N/A';
+    errPos.textContent = 'N/A';
+    errYaw.textContent = 'N/A';
+    covTrace.textContent = 'N/A';
+    covDet.textContent = 'N/A';
+    covXX.textContent = 'N/A';
+    covYY.textContent = 'N/A';
+    details.innerHTML = '<b>데이터 없음</b><br>정합 단계를 추적할 수 없습니다.';
+    return;
+  }
+
+  const gtPose = mapPair
+    ? {x: gt.x, y: gt.y, yaw: normalizeAngle(gt.yaw + 90.0 * Math.PI / 180.0)}
+    : {x: gt.x, y: gt.y, yaw: gt.yaw};
+  const estimatedPose = mapPair ? {x: frame.x, y: frame.y, yaw: frame.yaw} : rearPoseFromBumperFrame(frame);
+  const err = poseError(estimatedPose, gtPose);
+
+  // Update RMSE / Error card values
+  errLong.textContent = mapPair ? 'N/A' : `${fmt(err.longitudinal, 3)} m`;
+  errLat.textContent = mapPair ? 'N/A' : `${fmt(err.lateral, 3)} m`;
+  errPos.textContent = `${fmt(err.position, 3)} m`;
+  errYaw.textContent = `${fmt(err.dyaw * 180.0 / Math.PI, 2)}°`;
+
+  // Update Covariance values
+  covTrace.textContent = mapPair ? 'N/A' : fmtScientific(activeResult.cov_trace, 4);
+  covDet.textContent = mapPair ? 'N/A' : fmtScientific(activeResult.cov_det, 4);
+  covXX.textContent = mapPair ? 'N/A' : fmtScientific(activeResult.cov_xx, 4);
+  covYY.textContent = mapPair ? 'N/A' : fmtScientific(activeResult.cov_yy, 4);
+
+  const meanDistance = matches
+    ? frame.associations.reduce((sum, a) => sum + Number(a.d || 0), 0) / matches
+    : NaN;
+  const currentElapsedMs = Number(frame.elapsed_ms);
+  const previousFrame = activeTraces[val - 1] || null;
+  const previousElapsedMs = previousFrame ? Number(previousFrame.elapsed_ms) : 0;
+  const currentIterationMs = Number.isFinite(currentElapsedMs) && Number.isFinite(previousElapsedMs)
+    ? Math.max(0, currentElapsedMs - previousElapsedMs)
+    : NaN;
+
+  let statusHtml = '';
+  if (val === 0) {
+    statusHtml = '<span style="color:var(--ink-secondary); font-weight:700;">정합 전 (Initial Guess)</span>';
+  } else if (val === maxVal) {
+    statusHtml = activeResult.success
+      ? '<span style="color:var(--good); font-weight:700;">성공 (Success)</span>'
+      : '<span style="color:var(--bad); font-weight:700;">실패 (Failed)</span>';
+  } else {
+    statusHtml = `<span style="color:var(--toss-blue); font-weight:700;">최적화 중 (Iteration ${val})</span>`;
+  }
+
+  // Rich Details panel text
+  const estLabel = mapPair ? '추정 랜드마크 변환 (Estimated Landmark Transform)' : '추정 포즈 (Estimated Pose)';
+  const gtLabel = mapPair ? '랜드마크-랜드마크 기준 변환 (Landmark Transform)' : '정답 포즈 (GT Pose)';
+
+  details.innerHTML = `
+    <div style="margin-bottom: 12px;">
+      <strong>정합 상태:</strong> ${statusHtml}
+    </div>
+    <div style="margin-bottom: 12px;">
+      <strong>정합 과제:</strong> ${taskLabel}
+    </div>
+    <h3>${estLabel}</h3>
+    <div>x: <b>${fmt(estimatedPose.x, 4)}</b> m</div>
+    <div>y: <b>${fmt(estimatedPose.y, 4)}</b> m</div>
+    <div>yaw: <b>${fmt(estimatedPose.yaw, 5)}</b> rad (${fmt(estimatedPose.yaw * 180.0 / Math.PI, 2)}°)</div>
+
+    <h3>${gtLabel}</h3>
+    <div>x: <b>${fmt(gtPose.x, 4)}</b> m</div>
+    <div>y: <b>${fmt(gtPose.y, 4)}</b> m</div>
+    <div>yaw: <b>${fmt(gtPose.yaw, 5)}</b> rad (${fmt(gtPose.yaw * 180.0 / Math.PI, 2)}°)</div>
+
+    <h3>연관 관계 통계</h3>
+    <div>최종 검증 Fitness: <b>${fmt(activeResult.fitness, 4)}</b></div>
+    <div>SVD 업데이트 매칭 비율: <b>${fmt(frameMatchRatio, 4)}</b></div>
+    <div>SVD 업데이트 매칭쌍: <b>${matches}</b> / ${observedCount || 'N/A'} 개</div>
+    <div>현재 단계 연산 시간: <b>${fmt(currentIterationMs, 3)}</b> ms</div>
+    <div>누적 연산 시간: <b>${fmt(currentElapsedMs, 3)}</b> ms</div>
+    <div>평균 마할라노비스 거리: <b>${fmt(meanDistance, 4)}</b></div>
+  `;
+}
+
+function render() {
+  const modeValue = mode.value;
+  const activeTraces = modeValue === 'map_pair' ? landmarkTraces : traces;
+  slider.max = Math.max(0, activeTraces.length - 1);
+
+  if (Number(slider.value) > Number(slider.max)) {
+    slider.value = slider.max;
+  }
+
+  const val = Number(slider.value);
+  const frame = activeTraces.length ? activeTraces[val] : null;
+  const mapPair = modeValue === 'map_pair';
+  const moving = modeValue === 'moving';
+  const b = mapPair ? landmarkPairBounds(frame) : (moving ? movingBounds(frame) : fixedBounds(frame));
+
+  const sx = x => margin + (x - b.minX) / (b.maxX - b.minX) * (W - 2 * margin);
+  const sy = y => H - margin - (y - b.minY) / (b.maxY - b.minY) * (H - 2 * margin);
+
+  let out = `<rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>`;
+  out += drawGrid(b, sx, sy);
+  setLegend(modeValue);
+  updateSidebarVisibility(modeValue);
+  updateMetrics(frame, activeTraces, modeValue, val, Number(slider.max));
+
+  // Render slider frame label (Toss style)
+  if (val === 0) {
+    label.textContent = `0 (초기 추정치)`;
+  } else if (val === slider.max) {
+    label.textContent = `${val} (최종 정합 완료)`;
+  } else {
+    label.textContent = `${val}`;
+  }
+
+
+  if (frame && mapPair) {
+    landmarkFeatures.forEach(p => out += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="2" fill="${colorForClass(p.c)}" opacity="0.12"/>`);
+    movingLandmarks.forEach(p => {
+      const moved = transformPoint(p.x, p.y, frame);
+      out += `<circle cx="${sx(moved.x)}" cy="${sy(moved.y)}" r="2.5" fill="${colorForClass(p.c)}" opacity="0.75"/>`;
+    });
+    frame.associations.forEach(a => {
+      const p = transformPoint(a.ox, a.oy, frame);
+      const lx = assocLandmarkX(a), ly = assocLandmarkY(a);
+      out += `<line x1="${sx(p.x)}" y1="${sy(p.y)}" x2="${sx(lx)}" y2="${sy(ly)}" stroke="${colorForClass(a.c)}" stroke-width="1.2" opacity="0.4"/>`;
+      out += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="3.0" fill="${colorForClass(a.c)}"/>`;
+      out += `<circle cx="${sx(lx)}" cy="${sy(ly)}" r="4.5" fill="none" stroke="#191f28" stroke-width="1.5" opacity="0.8"/>`;
+    });
+    // Hide vehicle pose markers in landmark-to-landmark mode.
+  } else if (frame && moving) {
+    // Draw sensor range circle centered at (0, 0)
+    const cxRange = sx(0);
+    const cyRange = sy(0);
+    const rRange = Math.abs(sx(sensorRange) - sx(0));
+    out += `<circle cx="${cxRange}" cy="${cyRange}" r="${rRange}" fill="none" stroke="#0064ff" stroke-width="1.2" stroke-dasharray="4,4" opacity="0.4"/>`;
+
+    landmarkFeatures.forEach(p => {
+      const local = inverseTransformPoint(p.x, p.y, frame);
+      out += `<circle cx="${sx(local.x)}" cy="${sy(local.y)}" r="2" fill="${colorForClass(p.c)}" opacity="0.15"/>`;
+    });
+    observedFeatures.forEach(p => {
+      out += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="2.2" fill="${colorForClass(p.c)}" opacity="0.45"/>`;
+    });
+    frame.associations.forEach(a => {
+      const landmarkLocal = inverseTransformPoint(assocLandmarkX(a), assocLandmarkY(a), frame);
+      out += `<line x1="${sx(a.ox)}" y1="${sy(a.oy)}" x2="${sx(landmarkLocal.x)}" y2="${sy(landmarkLocal.y)}" stroke="#7c8da5" stroke-width="1.2" opacity="0.45"/>`;
+      out += `<circle cx="${sx(a.ox)}" cy="${sy(a.oy)}" r="3.0" fill="#ff4d4f"/>`;
+      out += `<circle cx="${sx(landmarkLocal.x)}" cy="${sy(landmarkLocal.y)}" r="4.5" fill="none" stroke="#191f28" stroke-width="1.5" opacity="0.8"/>`;
+    });
+    const gtLocal = inverseTransformPoint(gt.x, gt.y, frame);
+    out += drawPose(gtLocal.x, gtLocal.y, gt.yaw - frame.yaw, '#ff4d4f', 'GT RearAxle pose in sensor frame', sx, sy);
+    out += drawPose(rearOffset, 0, 0, '#0064ff', 'ICP estimated RearAxle pose in sensor frame', sx, sy);
+  } else {
+    landmarkFeatures.forEach(p => out += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="2" fill="${colorForClass(p.c)}" opacity="0.15"/>`);
+    if (frame) {
+      // Draw sensor range circle centered at estimated bumper frame position
+      const cxRange = sx(frame.x);
+      const cyRange = sy(frame.y);
+      const rRange = Math.abs(sx(frame.x + sensorRange) - sx(frame.x));
+      out += `<circle cx="${cxRange}" cy="${cyRange}" r="${rRange}" fill="none" stroke="#0064ff" stroke-width="1.2" stroke-dasharray="4,4" opacity="0.4"/>`;
+
+      observedFeatures.forEach(p => {
+        const global = transformPoint(p.x, p.y, frame);
+        out += `<circle cx="${sx(global.x)}" cy="${sy(global.y)}" r="2.2" fill="${colorForClass(p.c)}" opacity="0.45"/>`;
+      });
+      frame.associations.forEach(a => {
+        const p = transformPoint(a.ox, a.oy, frame);
+        const lx = assocLandmarkX(a), ly = assocLandmarkY(a);
+        out += `<line x1="${sx(p.x)}" y1="${sy(p.y)}" x2="${sx(lx)}" y2="${sy(ly)}" stroke="#7c8da5" stroke-width="1.2" opacity="0.45"/>`;
+        out += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="3.0" fill="#ff4d4f"/>`;
+        out += `<circle cx="${sx(lx)}" cy="${sy(ly)}" r="4.5" fill="none" stroke="#191f28" stroke-width="1.5" opacity="0.8"/>`;
+      });
+      const rear = {x: frame.x + Math.cos(frame.yaw) * rearOffset, y: frame.y + Math.sin(frame.yaw) * rearOffset, yaw: frame.yaw};
+      out += drawPose(rear.x, rear.y, rear.yaw, '#0064ff', 'ICP estimated RearAxle pose', sx, sy);
+    }
+    out += drawPose(gt.x, gt.y, gt.yaw, '#ff4d4f', 'GT RearAxle pose', sx, sy);
+  }
+  svg.innerHTML = out;
+}
+
+slider.addEventListener('input', render);
+mode.addEventListener('change', render);
+document.getElementById('heatmapSelect').addEventListener('change', (e) => {
+  document.getElementById('heatmapImage').src = `heatmap_${e.target.value}.png`;
+});
+render();
+</script>
+</body>
+</html>

@@ -14,9 +14,17 @@
 #include <vector>
 
 #include <carmaker_msgs/LocalFeatures.h>
-#include "carmaker_localization/feature_loader_base.h"
+#include "carmaker_localization/landmark_loader_base.h"
+#include "carmaker_localization/registration_base.h"
 
 namespace carmaker_localization {
+
+visualization_msgs::MarkerArray createIcpAssociationMarkers(
+    const std::string& frame_id,
+    const ros::Time& stamp,
+    const RegistrationResult& result,
+    double marker_resolution,
+    bool include_clear_markers = false);
 
 class Visualizer {
 public:
@@ -28,10 +36,13 @@ public:
     void publishObservation(const std::string& channel_name, const carmaker_msgs::LocalFeatures& features);
     void publishSvmImage(const cv::Mat& svm_image, const std::vector<cv::Point>& seam_line_points = {});
     void publishBevImage(const std::string& camera_name, const cv::Mat& bev_image, const std::string& type);
-    void publishReferenceFeatures(const std::vector<ReferenceFeature>& reference_features);
+    void publishLandmarkFeatures(const std::vector<LandmarkFeature>& landmarks);
+    void publishAssociationMarkers(const std::string& frame_id, const ros::Time& stamp, const RegistrationResult& result);
+    visualization_msgs::MarkerArray createAssociationMarkers(const std::string& frame_id, const ros::Time& stamp, const RegistrationResult& result);
+    bool hasIcpSubscribers() const;
     void clearCorrection();
     void clearEstimation();
-    void clearReferenceFeatures();
+    void clearLandmarkFeatures();
     void clearObservation(const std::string& channel_name);
     void reset();
 
@@ -41,7 +52,8 @@ private:
     ros::Publisher estimation_marker_pub_;
     ros::Publisher correction_marker_pub_;
     ros::Publisher estimation_trajectory_pub_;
-    ros::Publisher map_features_pub_;
+    ros::Publisher landmarks_pub_;
+    ros::Publisher icp_debug_pub_;
     std::map<std::string, ros::Publisher> observation_pub_map_;
     std::map<std::string, ros::Publisher> bev_image_pubs_;
 

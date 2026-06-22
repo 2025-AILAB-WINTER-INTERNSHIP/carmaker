@@ -16,7 +16,7 @@ topics:
       nees: "/localization/data/nees"
     debug:
       svm_image: "/localization/debug/svm_image"
-      map_features: "/localization/debug/map_features"
+      landmarks: "/localization/debug/landmarks"
       observation_prefix: "/localization/debug/observation"
       estimation_markers: "/localization/debug/estimation_markers"
       correction_markers: "/localization/debug/correction_markers"
@@ -25,6 +25,8 @@ topics:
       r_wheel_vx: "/localization/debug/r_wheel_vx"
       r_wheel_yaw_rate: "/localization/debug/r_wheel_yaw_rate"
       r_imu_yaw_rate: "/localization/debug/r_imu_yaw_rate"
+      icp: "/localization/debug/icp"
+      icp_metrics: "/localization/debug/icp_metrics"
   subscribe:
     dynamics: "/carmaker/dynamic_info"
     use_bundle: true
@@ -120,14 +122,37 @@ ekf:
 feature_registration:
   enable: true # True : 정합 수행, False : 정합 미수행 (디버깅용)
   type: "icp" # "icp" | 추후 "ndt", "point_to_line" 추가
-  map_format: "osm" # "osm" | 추후 "lanelet2", "pcd" 추가
-  map_file: "" # launch argument로 지정
-  search_radius: -1.0 # 지도 조회 반경 [m] (음수 설정 시 전체 맵 피처 사용 - 위치 유실 및 소형 맵 복구용)
+  landmark_format: "osm" # "osm" | 추후 "lanelet2", "pcd" 추가
+  landmark_file: "" # launch argument로 지정
+  search_radius: -1.0 # 랜드마크 조회 반경 [m] (음수 설정 시 전체 랜드마크 사용 - 위치 유실 및 소형 랜드마크 파일 복구용)
   min_search_radius: 5.0 # 최소 ICP 탐색 반경 [m] (초기 위치 오차 극복용)
   fitness_threshold: 0.35 # 정합 유효 판정 임계값
   max_iterations: 50 # ICP 반복 횟수
   max_covariance: 10.0 # Eigen-capping 최대 공분산 분산 상한 [m^2 or rad^2] (unconstrained 방향 발산 방지)
+  max_observed_features: 0 # ICP 연산 속도 보장을 위한 관측치 최대 개수 (다운샘플링 임계값, <=0 이면 사용 안함)
 
   validation_gate:
     max_position_dev: 1.0 # [m] - EKF 예측치 기준 최대 허용 정합 위치 편차 (오정합 필터 차단)
     max_yaw_dev: 0.25 # [rad] - EKF 예측치 기준 최대 허용 정합 요각 편차 (~14.3 deg)
+
+evaluator:
+  # 충전패드 (0, -4.33)
+  center_x: 0.0
+  center_y: -4.33
+  grid_step: 1.0
+  output_csv_path: "grid_registration_results.csv"
+  output_dir: "docs"
+  landmarks_csv_path: "landmarks.csv"
+
+  static:
+    num_yaw_angles: 4
+    sensor_range: 6.0
+    debug_poses:
+      - { x: 2.0, y: -4.33, yaw_deg: 0.0, label: "pad_center", offset_x: 0.3, offset_y: -0.3, offset_yaw_deg: 5.0 }
+    # Example:
+    # debug_poses:
+    #   - {x: 0.0, y: -4.33, yaw_deg: 0.0, label: "pad_center"}
+
+  bag:
+    path: ""
+    max_match_dt: 0.2

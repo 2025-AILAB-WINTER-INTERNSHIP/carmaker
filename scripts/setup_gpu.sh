@@ -430,7 +430,7 @@ setup_auto() {
 # Returns CMake flags to enable CUDA acceleration for OpenCV if NVIDIA hardware
 # is detected, otherwise disables CUDA. Extracted as a function so `local` is valid.
 __opencv_cmake_args() {
-    if has_nvidia; then
+    if has_nvidia && command -v nvcc >/dev/null 2>&1; then
         local args="-DWITH_CUDA=ON -DWITH_CUDNN=ON -DOPENCV_DNN_CUDA=ON"
         args+=" -DENABLE_FAST_MATH=ON -DCUDA_FAST_MATH=ON -DWITH_CUBLAS=ON"
         if command -v nvidia-smi >/dev/null 2>&1; then

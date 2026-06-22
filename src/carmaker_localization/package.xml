@@ -27,6 +27,8 @@
   <build_depend>image_transport</build_depend>
   <build_depend>diagnostic_updater</build_depend>
   <build_depend>visualization_msgs</build_depend>
+  <build_depend>rosbag</build_depend>
+  <build_depend>roslib</build_depend>
 
   <build_depend>eigen</build_depend>
   <build_depend>opencv</build_depend>
@@ -41,7 +43,6 @@
 
   <exec_depend>roscpp</exec_depend>
   <exec_depend>rospy</exec_depend>
-  <exec_depend>rosbag</exec_depend>
   <exec_depend>nodelet</exec_depend>
   <exec_depend>carmaker_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
@@ -55,6 +56,8 @@
   <exec_depend>image_transport</exec_depend>
   <exec_depend>diagnostic_updater</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>rosbag</exec_depend>
+  <exec_depend>roslib</exec_depend>
 
   <export>
     <nodelet plugin="${prefix}/nodelet_plugins.xml" />

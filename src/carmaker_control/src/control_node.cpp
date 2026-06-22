@@ -859,7 +859,10 @@ void ControlNode::advertiseDebugTopics()
   debug_pubs_.curvature_preview_distance = advertiseDebug<std_msgs::Float64>("curvature_preview_distance");
   debug_pubs_.steer_saturated = advertiseDebug<std_msgs::Int32>("steer_saturated");
   debug_pubs_.cross_track_error = advertiseDebug<std_msgs::Float64>("cross_track_error");
+  debug_pubs_.cross_track_error_rear = advertiseDebug<std_msgs::Float64>("cross_track_error_rear");
   debug_pubs_.heading_error = advertiseDebug<std_msgs::Float64>("heading_error");
+  debug_pubs_.heading_error_rear = advertiseDebug<std_msgs::Float64>("heading_error_rear");
+
   debug_pubs_.lookahead_distance = advertiseDebug<std_msgs::Float64>("lookahead_distance");
   debug_pubs_.segment_index = advertiseDebug<std_msgs::Int32>("segment_index");
   debug_pubs_.segment_count = advertiseDebug<std_msgs::Int32>("segment_count");
@@ -904,7 +907,9 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   const double current_speed = std::abs(signed_speed);
   const double nan = std::numeric_limits<double>::quiet_NaN();
   double cte = nan, heading_error = nan, curvature_ff = nan;
+  double cte_rear = nan, heading_error_rear = nan;
   double preview_curvature_value = nan, preview_distance_value = nan, distance_to_end = -1.0, trajectory_age = -1.0;
+
   int direction = 0, segment_index_value = trajectory ? 0 : -1, nearest_index_value = -1, target_index_value = -1, preview_index_value = -1;
   int segment_count = 0, steer_saturated = 0;
 
@@ -956,7 +961,15 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
     const double dx = tracking_pose.x - nearest_tracking_point.x;
     const double dy = tracking_pose.y - nearest_tracking_point.y;
     cte = std::sin(nearest_tracking_point.yaw) * dx - std::cos(nearest_tracking_point.yaw) * dy;
-    heading_error = normalizeAngle(nearest_tracking_point.yaw - tracking_pose.yaw);
+
+    const double dx_rear = pose.x - nearest_rear_point.x;
+    const double dy_rear = pose.y - nearest_rear_point.y;
+    cte_rear = std::sin(nearest_rear_point.yaw) * dx_rear - std::cos(nearest_rear_point.yaw) * dy_rear;
+    const double raw_heading_error_rear = normalizeAngle(nearest_rear_point.yaw - pose.yaw);
+    heading_error_rear = rad2deg(raw_heading_error_rear);
+
+    const double raw_heading_error = normalizeAngle(nearest_tracking_point.yaw - tracking_pose.yaw);
+    heading_error = rad2deg(raw_heading_error);
     const double ff_gain = (direction >= 0) ? forward_stanley_params_.curvature_ff_gain : reverse_stanley_params_.curvature_ff_gain;
     curvature_ff = steering_command_sign_ * steering_ratio_ * computeCurvatureFeedforward(preview_curvature, direction, ff_gain);
     steer_saturated = std::abs(steer_command) >= 0.98 * std::max(1e-6, max_steer_command_) ? 1 : 0;
@@ -993,8 +1006,12 @@ void ControlNode::publishDebugTelemetry(const Pose2D& pose,
   debug_pubs_.curvature_preview_distance.publish(float_msg);
   float_msg.data = cte;
   debug_pubs_.cross_track_error.publish(float_msg);
+  float_msg.data = cte_rear;
+  debug_pubs_.cross_track_error_rear.publish(float_msg);
   float_msg.data = heading_error;
   debug_pubs_.heading_error.publish(float_msg);
+  float_msg.data = heading_error_rear;
+  debug_pubs_.heading_error_rear.publish(float_msg);
   float_msg.data = lookahead;
   debug_pubs_.lookahead_distance.publish(float_msg);
   float_msg.data = distance_to_end;

@@ -23,11 +23,12 @@
 #include "carmaker_localization/feature_extractor.h"
 #include "carmaker_localization/ekf_core.h"
 #include "carmaker_localization/visualizer.h"
-#include "carmaker_localization/feature_loader_base.h"
+#include "carmaker_localization/landmark_loader_base.h"
 #include "carmaker_localization/registration_base.h"
 #include <carmaker_msgs/LocalFeatures.h>
 #include <carmaker_msgs/DynamicsInfo.h>
 #include <carmaker_msgs/CameraBundle.h>
+#include <carmaker_msgs/IcpRegistrationMetrics.h>
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/GetMap.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
@@ -102,6 +103,7 @@ private:
         const std::array<sensor_msgs::CameraInfoConstPtr, 4>& infos);
     void updateEstimation(double current_time, const carmaker_msgs::DynamicsInfo& dynamics);
     void performCorrection(const carmaker_msgs::LocalFeatures& features);
+    void publishIcpMetrics(const ros::Time& stamp, const RegistrationResult& result);
     void correctionWorkerLoop();
     void publishEstimation(const ros::Time& stamp);
     void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat);
@@ -181,7 +183,10 @@ private:
     ros::Publisher debug_r_wheel_vx_pub_;
     ros::Publisher debug_r_wheel_yaw_rate_pub_;
     ros::Publisher debug_r_imu_yaw_rate_pub_;
+    ros::Publisher icp_metrics_pub_;
+    ros::Timer prediction_timer_;
     ros::ServiceServer map_srv_;
+
 
     // Diagnostics
     std::unique_ptr<diagnostic_updater::Updater> diagnostic_updater_;
@@ -210,7 +215,7 @@ private:
     // 4. Algorithm Core Engines
     // =========================================================================
     std::shared_ptr<EkfCore> ekf_core_;
-    std::shared_ptr<FeatureLoaderBase> feature_loader_;
+    std::shared_ptr<LandmarkLoaderBase> landmark_loader_;
     std::shared_ptr<RegistrationBase> registration_engine_;
 
     // =========================================================================
@@ -219,8 +224,8 @@ private:
     std::vector<Channel> channels_;
     bool fusion_ = false;
     double last_prediction_time_ = 0.0;
-    double last_map_pub_x_ = -9999.0;
-    double last_map_pub_y_ = -9999.0;
+    double last_landmark_pub_x_ = -9999.0;
+    double last_landmark_pub_y_ = -9999.0;
 
     // EKF & Dynamics synchronization
     std::mutex estimation_mutex_;

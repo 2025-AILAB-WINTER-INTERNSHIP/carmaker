@@ -2,7 +2,7 @@
     <!-- Arguments -->
     <arg name="foxglove" default="false" />
     <arg name="use_sim_time" default="false" />
-    <arg name="map_file" default="$(find carmaker_localization)/config/Test.osm" />
+    <arg name="landmark_file" default="$(find carmaker_localization)/config/Test.osm" />
 
     <!-- Global parameter -->
     <param name="use_sim_time" value="$(arg use_sim_time)" />
@@ -17,8 +17,8 @@
         <rosparam command="load" file="$(find carmaker_localization)/config/localization_params.yaml" />
         <rosparam command="load" file="$(find carmaker_localization)/config/vehicle_params.yaml" />
 
-        <!-- Overwrite Map File Path -->
-        <param name="feature_registration/map_file" value="$(arg map_file)" />
+        <!-- Overwrite landmark file path -->
+        <param name="feature_registration/landmark_file" value="$(arg landmark_file)" />
     </node>
 
     <!-- Foxglove Bridge for Visualization (Optional) -->

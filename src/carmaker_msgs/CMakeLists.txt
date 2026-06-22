@@ -19,6 +19,7 @@ add_message_files(
   Objects.msg
   UAQ_Out.msg
   CameraBundle.msg
+  IcpRegistrationMetrics.msg
   TrajectoryPoint.msg
   TrajectoryPath.msg
   ArrivalError.msg

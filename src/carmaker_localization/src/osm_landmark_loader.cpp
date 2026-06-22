@@ -1,4 +1,4 @@
-#include "carmaker_localization/osm_feature_loader.h"
+#include "carmaker_localization/osm_landmark_loader.h"
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -9,14 +9,14 @@
 
 namespace carmaker_localization {
 
-OsmFeatureLoader::OsmFeatureLoader(double resolution)
+OsmLandmarkLoader::OsmLandmarkLoader(double resolution)
     : resolution_(resolution) {
 }
 
-bool OsmFeatureLoader::load(const std::string& path) {
+bool OsmLandmarkLoader::load(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "[OsmFeatureLoader] Failed to open OSM map file: " << path << std::endl;
+        std::cerr << "[OsmLandmarkLoader] Failed to open OSM landmark file: " << path << std::endl;
         return false;
     }
 
@@ -107,8 +107,8 @@ bool OsmFeatureLoader::load(const std::string& path) {
             in_way = true;
 
         } else if (in_way && line.find("<nd") != std::string::npos) {
-            std::string ref = extract_attr(line, "ref");
-            if (!ref.empty()) current_way.nodes.push_back(std::stoi(ref));
+            std::string node_ref = extract_attr(line, "ref");
+            if (!node_ref.empty()) current_way.nodes.push_back(std::stoi(node_ref));
 
         } else if (in_way && line.find("<tag") != std::string::npos) {
             std::string k = extract_attr(line, "k");
@@ -240,16 +240,16 @@ bool OsmFeatureLoader::load(const std::string& path) {
         occupancy_grid_.data = std::move(grid_data);
     }
 
-    std::cout << "[OsmFeatureLoader] Loaded " << features_.size()
-              << " features, boundary map: " << occupancy_grid_.info.width << "x" << occupancy_grid_.info.height
-              << " (voxel resolution: " << resolution_ << " m) from OSM map." << std::endl;
+    std::cout << "[OsmLandmarkLoader] Loaded " << features_.size()
+              << " landmarks, boundary occupancy grid: " << occupancy_grid_.info.width << "x" << occupancy_grid_.info.height
+              << " (voxel resolution: " << resolution_ << " m) from OSM landmark file." << std::endl;
     return true;
 }
 
-std::vector<ReferenceFeature> OsmFeatureLoader::queryNear(double x, double y, double radius) const {
+std::vector<LandmarkFeature> OsmLandmarkLoader::queryNear(double x, double y, double radius) const {
     if (radius < 0.0) return features_;
 
-    std::vector<ReferenceFeature> result;
+    std::vector<LandmarkFeature> result;
     result.reserve(features_.size() / 10);
 
     double r_sq = radius * radius;
@@ -260,7 +260,7 @@ std::vector<ReferenceFeature> OsmFeatureLoader::queryNear(double x, double y, do
     return result;
 }
 
-nav_msgs::OccupancyGrid OsmFeatureLoader::getOccupancyGrid() const {
+nav_msgs::OccupancyGrid OsmLandmarkLoader::getOccupancyGrid() const {
     return occupancy_grid_;
 }
 

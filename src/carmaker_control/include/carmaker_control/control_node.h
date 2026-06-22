@@ -118,7 +118,10 @@ private:
     ros::Publisher curvature_preview_distance;
     ros::Publisher steer_saturated;
     ros::Publisher cross_track_error;
+    ros::Publisher cross_track_error_rear;
     ros::Publisher heading_error;
+    ros::Publisher heading_error_rear;
+
     ros::Publisher lookahead_distance;
     ros::Publisher segment_index;
     ros::Publisher segment_count;
