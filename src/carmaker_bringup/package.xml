@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>carmaker_bringup</name>
+  <version>0.1.0</version>
+  <description>Bringup launch files for the complete CarMaker autonomous driving stack.</description>
+
+  <maintainer email="admin@example.com">admin</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>roslaunch</exec_depend>
+  <exec_depend>carmaker_image_synchronizer</exec_depend>
+  <exec_depend>segmentation_ros</exec_depend>
+  <exec_depend>carmaker_localization</exec_depend>
+  <exec_depend>carmaker_planning</exec_depend>
+  <exec_depend>carmaker_control</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend>
+  <exec_depend>rviz</exec_depend>
+
+  <export/>
+</package>

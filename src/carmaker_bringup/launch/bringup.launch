@@ -1,0 +1,36 @@
+<launch>
+  <arg name="use_sim_time" default="true" />
+  <arg name="checkpoint_path" default="$(find segmentation_ros)/data/models/best_0605.ckpt" />
+  <arg name="localization_foxglove" default="true" />
+  <arg name="image_synchronizer_foxglove" default="false" />
+  <arg name="map_file" default="$(find carmaker_localization)/config/Test.osm" />
+  <arg name="planner_rviz" default="true" />
+  <arg name="control_output" default="screen" />
+
+  <param name="use_sim_time" value="$(arg use_sim_time)" />
+
+  <include file="$(find carmaker_image_synchronizer)/launch/image_synchronizer.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)" />
+    <arg name="foxglove" value="$(arg image_synchronizer_foxglove)" />
+  </include>
+
+  <include file="$(find segmentation_ros)/launch/segmentation_inference.launch">
+    <arg name="checkpoint_path" value="$(arg checkpoint_path)" />
+  </include>
+
+  <include file="$(find carmaker_localization)/launch/localization.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)" />
+    <arg name="foxglove" value="$(arg localization_foxglove)" />
+    <arg name="map_file" value="$(arg map_file)" />
+  </include>
+
+  <include file="$(find carmaker_planning)/launch/planner.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)" />
+    <arg name="rviz" value="$(arg planner_rviz)" />
+  </include>
+
+  <include file="$(find carmaker_control)/launch/control.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)" />
+    <arg name="output" value="$(arg control_output)" />
+  </include>
+</launch>
