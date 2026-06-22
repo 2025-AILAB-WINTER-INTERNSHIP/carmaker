@@ -381,11 +381,15 @@ bool LocalizationNodelet::setupRosIo() {
     std::string topic_correction_data = pnh.param("topics/publish/data/correction_pose", std::string("/localization/data/correction_pose"));
     std::string topic_rmse_pos = pnh.param("topics/publish/data/rmse_position", std::string("/localization/data/rmse_position"));
     std::string topic_rmse_yaw = pnh.param("topics/publish/data/rmse_orientation", std::string("/localization/data/rmse_orientation"));
+    std::string topic_longitudinal_rmse = pnh.param("topics/publish/data/longitudinal_rmse", std::string("/localization/data/longitudinal_rmse"));
+    std::string topic_lateral_rmse = pnh.param("topics/publish/data/lateral_rmse", std::string("/localization/data/lateral_rmse"));
     std::string topic_nees = pnh.param("topics/publish/data/nees", std::string("/localization/data/nees"));
     estimation_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_estimation_data, 10);
     correction_data_pub_ = nh.advertise<geometry_msgs::PoseWithCovarianceStamped>(topic_correction_data, 10);
     rmse_pos_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_pos, 10);
     rmse_yaw_pub_ = nh.advertise<std_msgs::Float64>(topic_rmse_yaw, 10);
+    longitudinal_rmse_pub_ = nh.advertise<std_msgs::Float64>(topic_longitudinal_rmse, 10);
+    lateral_rmse_pub_ = nh.advertise<std_msgs::Float64>(topic_lateral_rmse, 10);
     nees_pub_ = nh.advertise<std_msgs::Float64>(topic_nees, 10);
 
     std::string topic_r_wheel_vx = pnh.param("topics/publish/debug/r_wheel_vx", std::string("/localization/debug/r_wheel_vx"));
@@ -1244,16 +1248,24 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
 
     double local_inst_pos_err = 0.0;
     double local_inst_yaw_err = 0.0;
+    double local_inst_longitudinal_err = 0.0;
+    double local_inst_lateral_err = 0.0;
     double local_cumulative_pos_sq_err = 0.0;
     double local_cumulative_yaw_sq_err = 0.0;
+    double local_cumulative_longitudinal_sq_err = 0.0;
+    double local_cumulative_lateral_sq_err = 0.0;
     double local_nees_latest = 0.0;
     double local_cumulative_nees_sum = 0.0;
     uint64_t local_count = 0;
     {
         local_inst_pos_err = inst_pos_err_;
         local_inst_yaw_err = inst_yaw_err_;
+        local_inst_longitudinal_err = inst_longitudinal_err_;
+        local_inst_lateral_err = inst_lateral_err_;
         local_cumulative_pos_sq_err = cumulative_pos_sq_err_;
         local_cumulative_yaw_sq_err = cumulative_yaw_sq_err_;
+        local_cumulative_longitudinal_sq_err = cumulative_longitudinal_sq_err_;
+        local_cumulative_lateral_sq_err = cumulative_lateral_sq_err_;
         local_nees_latest = nees_latest_;
         local_cumulative_nees_sum = cumulative_nees_;
         local_count = err_count_;
@@ -1264,6 +1276,10 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
         stat.add("Latest Instantaneous Yaw Error (deg)", local_inst_yaw_err * 180.0 / M_PI);
         stat.add("Cumulative Position RMSE (m)", std::sqrt(local_cumulative_pos_sq_err / local_count));
         stat.add("Cumulative Yaw RMSE (deg)", std::sqrt(local_cumulative_yaw_sq_err / local_count) * 180.0 / M_PI);
+        stat.add("Latest Instantaneous Longitudinal Error (m)", local_inst_longitudinal_err);
+        stat.add("Latest Instantaneous Lateral Error (m)", local_inst_lateral_err);
+        stat.add("Cumulative Longitudinal RMSE (m)", std::sqrt(local_cumulative_longitudinal_sq_err / local_count));
+        stat.add("Cumulative Lateral RMSE (m)", std::sqrt(local_cumulative_lateral_sq_err / local_count));
         stat.add("Latest Instantaneous NEES", local_nees_latest);
         stat.add("Cumulative Average NEES", local_cumulative_nees_sum / local_count);
     } else {
@@ -1271,6 +1287,10 @@ void LocalizationNodelet::produceDiagnostics(diagnostic_updater::DiagnosticStatu
         stat.add("Latest Instantaneous Yaw Error (deg)", 0.0);
         stat.add("Cumulative Position RMSE (m)", 0.0);
         stat.add("Cumulative Yaw RMSE (deg)", 0.0);
+        stat.add("Latest Instantaneous Longitudinal Error (m)", 0.0);
+        stat.add("Latest Instantaneous Lateral Error (m)", 0.0);
+        stat.add("Cumulative Longitudinal RMSE (m)", 0.0);
+        stat.add("Cumulative Lateral RMSE (m)", 0.0);
         stat.add("Latest Instantaneous NEES", 0.0);
         stat.add("Cumulative Average NEES", 0.0);
     }
@@ -1298,8 +1318,16 @@ void LocalizationNodelet::resetLocalization() {
         last_processed_cycleno_ = -1;
         latest_motion_velocity_ = 0.0;
         latest_motion_yaw_rate_ = 0.0;
+        inst_pos_err_ = 0.0;
+        inst_yaw_err_ = 0.0;
+        inst_longitudinal_err_ = 0.0;
+        inst_lateral_err_ = 0.0;
         cumulative_pos_sq_err_ = 0.0;
         cumulative_yaw_sq_err_ = 0.0;
+        cumulative_longitudinal_sq_err_ = 0.0;
+        cumulative_lateral_sq_err_ = 0.0;
+        cumulative_nees_ = 0.0;
+        nees_latest_ = 0.0;
         err_count_ = 0;
         last_map_pub_x_ = -9999.0;
         last_map_pub_y_ = -9999.0;
@@ -1409,6 +1437,10 @@ void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::Dynamic
     double dx = dynamics.RearAxle_x - x_state(X);
     double dy = dynamics.RearAxle_y - x_state(Y);
     double pos_err = std::hypot(dx, dy);
+    double cos_yaw = std::cos(dynamics.Car_Yaw);
+    double sin_yaw = std::sin(dynamics.Car_Yaw);
+    double longitudinal_err = cos_yaw * dx + sin_yaw * dy;
+    double lateral_err = -sin_yaw * dx + cos_yaw * dy;
 
     double yaw_err = dynamics.Car_Yaw - x_state(YAW);
     while (yaw_err > M_PI) yaw_err -= 2.0 * M_PI;
@@ -1435,13 +1467,17 @@ void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::Dynamic
 
     inst_pos_err_ = pos_err;
     inst_yaw_err_ = yaw_err_abs;
+    inst_longitudinal_err_ = longitudinal_err;
+    inst_lateral_err_ = lateral_err;
     cumulative_pos_sq_err_ += (pos_err * pos_err);
     cumulative_yaw_sq_err_ += (yaw_err * yaw_err);
+    cumulative_longitudinal_sq_err_ += (longitudinal_err * longitudinal_err);
+    cumulative_lateral_sq_err_ += (lateral_err * lateral_err);
     cumulative_nees_ += nees;
     nees_latest_ = nees;
     err_count_++;
 
-    // 토픽에는 실시간 오차 및 NEES 발행
+    // 토픽에는 실시간 오차, 누적 방향별 RMSE 및 NEES 발행
     std_msgs::Float64 pos_err_msg;
     pos_err_msg.data = pos_err;
     rmse_pos_pub_.publish(pos_err_msg);
@@ -1449,6 +1485,16 @@ void LocalizationNodelet::calculateAndPublishErrors(const carmaker_msgs::Dynamic
     std_msgs::Float64 yaw_err_msg;
     yaw_err_msg.data = yaw_err_abs * 180.0 / M_PI; // radian -> degree 변환
     rmse_yaw_pub_.publish(yaw_err_msg);
+
+    const double sample_count = static_cast<double>(err_count_);
+
+    std_msgs::Float64 longitudinal_rmse_msg;
+    longitudinal_rmse_msg.data = std::sqrt(cumulative_longitudinal_sq_err_ / sample_count);
+    longitudinal_rmse_pub_.publish(longitudinal_rmse_msg);
+
+    std_msgs::Float64 lateral_rmse_msg;
+    lateral_rmse_msg.data = std::sqrt(cumulative_lateral_sq_err_ / sample_count);
+    lateral_rmse_pub_.publish(lateral_rmse_msg);
 
     std_msgs::Float64 nees_msg;
     nees_msg.data = nees;

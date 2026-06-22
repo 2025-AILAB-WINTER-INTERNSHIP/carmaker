@@ -3,6 +3,8 @@
 
 Metrics:
   - Position RMSE [m]
+  - Longitudinal RMSE [m]
+  - Lateral RMSE [m]
   - Yaw RMSE [deg]
   - NEES for pose state [x, y, yaw]
 
@@ -123,6 +125,8 @@ class MetricRow:
     y_ekf: float
     yaw_ekf: float
     pos_err: float
+    longitudinal_err: float
+    lateral_err: float
     yaw_err_deg: float
     nees: Optional[float]
 
@@ -136,12 +140,16 @@ class MetricAccumulator:
     unmatched_samples: int = 0
     invalid_samples: int = 0
     pos_sq_sum: float = 0.0
+    longitudinal_sq_sum: float = 0.0
+    lateral_sq_sum: float = 0.0
     yaw_sq_sum: float = 0.0
     nees_values: List[float] = field(default_factory=list)
 
     def add_row(self, row: MetricRow, yaw_err_rad: float) -> None:
         self.rows.append(row)
         self.pos_sq_sum += row.pos_err * row.pos_err
+        self.longitudinal_sq_sum += row.longitudinal_err * row.longitudinal_err
+        self.lateral_sq_sum += row.lateral_err * row.lateral_err
         self.yaw_sq_sum += yaw_err_rad * yaw_err_rad
         if row.nees is not None and math.isfinite(row.nees):
             self.nees_values.append(row.nees)
@@ -162,6 +170,8 @@ class MetricAccumulator:
             "invalid_samples": float(self.invalid_samples),
             "nees_samples": float(nees_n),
             "position_rmse_m": math.sqrt(self.pos_sq_sum / n) if n else math.nan,
+            "longitudinal_rmse_m": math.sqrt(self.longitudinal_sq_sum / n) if n else math.nan,
+            "lateral_rmse_m": math.sqrt(self.lateral_sq_sum / n) if n else math.nan,
             "yaw_rmse_deg": math.degrees(math.sqrt(self.yaw_sq_sum / n)) if n else math.nan,
             "mean_nees": (sum(self.nees_values) / nees_n) if nees_n else math.nan,
             "median_nees": _percentile(self.nees_values, 50.0),
@@ -304,6 +314,10 @@ def _compute_row(gt: GtSample, odom: OdomSample) -> Optional[Tuple[MetricRow, fl
     yaw_err = _wrap_to_pi(gt.yaw - odom.yaw)
     if not _is_finite_values((dx, dy, yaw_err)):
         return None
+    cos_yaw = math.cos(gt.yaw)
+    sin_yaw = math.sin(gt.yaw)
+    longitudinal_err = cos_yaw * dx + sin_yaw * dy
+    lateral_err = -sin_yaw * dx + cos_yaw * dy
 
     nees = _compute_nees(dx, dy, yaw_err, odom.covariance)
     row = MetricRow(
@@ -315,6 +329,8 @@ def _compute_row(gt: GtSample, odom: OdomSample) -> Optional[Tuple[MetricRow, fl
         y_ekf=odom.y,
         yaw_ekf=odom.yaw,
         pos_err=math.hypot(dx, dy),
+        longitudinal_err=longitudinal_err,
+        lateral_err=lateral_err,
         yaw_err_deg=abs(math.degrees(yaw_err)),
         nees=nees,
     )
@@ -354,6 +370,8 @@ def _format_summary(summary: Dict[str, float]) -> str:
         "invalid_samples",
         "nees_samples",
         "position_rmse_m",
+        "longitudinal_rmse_m",
+        "lateral_rmse_m",
         "yaw_rmse_deg",
         "mean_nees",
         "median_nees",
@@ -381,6 +399,8 @@ def _write_csv(path: str, rows: Sequence[MetricRow]) -> None:
                 "y_ekf",
                 "yaw_ekf",
                 "pos_err",
+                "longitudinal_err",
+                "lateral_err",
                 "yaw_err_deg",
                 "nees",
             ]
@@ -396,6 +416,8 @@ def _write_csv(path: str, rows: Sequence[MetricRow]) -> None:
                     f"{row.y_ekf:.9f}",
                     f"{row.yaw_ekf:.9f}",
                     f"{row.pos_err:.9f}",
+                    f"{row.longitudinal_err:.9f}",
+                    f"{row.lateral_err:.9f}",
                     f"{row.yaw_err_deg:.9f}",
                     "" if row.nees is None else f"{row.nees:.9f}",
                 ]
@@ -532,6 +554,8 @@ class LiveEvaluator:
                     "y_ekf",
                     "yaw_ekf",
                     "pos_err",
+                    "longitudinal_err",
+                    "lateral_err",
                     "yaw_err_deg",
                     "nees",
                 ]
@@ -541,9 +565,13 @@ class LiveEvaluator:
         prefix = args.publish_prefix.rstrip("/")
         self.publishers = {
             "position_rmse_m": rospy.Publisher(f"{prefix}/position_rmse", Float64, queue_size=10),
+            "longitudinal_rmse_m": rospy.Publisher(f"{prefix}/longitudinal_rmse", Float64, queue_size=10),
+            "lateral_rmse_m": rospy.Publisher(f"{prefix}/lateral_rmse", Float64, queue_size=10),
             "yaw_rmse_deg": rospy.Publisher(f"{prefix}/yaw_rmse_deg", Float64, queue_size=10),
             "mean_nees": rospy.Publisher(f"{prefix}/mean_nees", Float64, queue_size=10),
             "latest_position_error_m": rospy.Publisher(f"{prefix}/latest_position_error", Float64, queue_size=10),
+            "latest_longitudinal_error_m": rospy.Publisher(f"{prefix}/latest_longitudinal_error", Float64, queue_size=10),
+            "latest_lateral_error_m": rospy.Publisher(f"{prefix}/latest_lateral_error", Float64, queue_size=10),
             "latest_yaw_error_deg": rospy.Publisher(f"{prefix}/latest_yaw_error_deg", Float64, queue_size=10),
             "latest_nees": rospy.Publisher(f"{prefix}/latest_nees", Float64, queue_size=10),
             "samples": rospy.Publisher(f"{prefix}/samples", Float64, queue_size=10),
@@ -636,6 +664,8 @@ class LiveEvaluator:
                     f"{row.y_ekf:.9f}",
                     f"{row.yaw_ekf:.9f}",
                     f"{row.pos_err:.9f}",
+                    f"{row.longitudinal_err:.9f}",
+                    f"{row.lateral_err:.9f}",
                     f"{row.yaw_err_deg:.9f}",
                     "" if row.nees is None else f"{row.nees:.9f}",
                 ]
@@ -652,9 +682,13 @@ class LiveEvaluator:
         summary = self.acc.summary()
         for key, value in (
             ("position_rmse_m", summary["position_rmse_m"]),
+            ("longitudinal_rmse_m", summary["longitudinal_rmse_m"]),
+            ("lateral_rmse_m", summary["lateral_rmse_m"]),
             ("yaw_rmse_deg", summary["yaw_rmse_deg"]),
             ("mean_nees", summary["mean_nees"]),
             ("latest_position_error_m", latest.pos_err),
+            ("latest_longitudinal_error_m", latest.longitudinal_err),
+            ("latest_lateral_error_m", latest.lateral_err),
             ("latest_yaw_error_deg", latest.yaw_err_deg),
             ("latest_nees", math.nan if latest.nees is None else latest.nees),
             ("samples", summary["samples"]),
@@ -697,7 +731,7 @@ def run_live(args: argparse.Namespace) -> int:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compute EKF Position RMSE, Yaw RMSE, and NEES from bag or live ROS topics."
+        description="Compute EKF position/directional RMSE, Yaw RMSE, and NEES from bag or live ROS topics."
     )
     subparsers = parser.add_subparsers(dest="mode", required=True)
 

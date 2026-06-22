@@ -174,6 +174,8 @@ private:
     ros::Publisher correction_data_pub_;
     ros::Publisher rmse_pos_pub_;
     ros::Publisher rmse_yaw_pub_;
+    ros::Publisher longitudinal_rmse_pub_;
+    ros::Publisher lateral_rmse_pub_;
     ros::Publisher nees_pub_;
     std::map<std::string, ros::Publisher> feature_data_pubs_;
     ros::Publisher debug_r_wheel_vx_pub_;
@@ -237,8 +239,12 @@ private:
     // Cumulative RMSE calculation variables
     double inst_pos_err_ = 0.0;
     double inst_yaw_err_ = 0.0;
+    double inst_longitudinal_err_ = 0.0;
+    double inst_lateral_err_ = 0.0;
     double cumulative_pos_sq_err_ = 0.0;
     double cumulative_yaw_sq_err_ = 0.0;
+    double cumulative_longitudinal_sq_err_ = 0.0;
+    double cumulative_lateral_sq_err_ = 0.0;
     double cumulative_nees_ = 0.0;
     double nees_latest_ = 0.0;
     uint64_t err_count_ = 0;

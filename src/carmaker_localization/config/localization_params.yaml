@@ -11,6 +11,8 @@ topics:
       features_prefix: "/localization/data/features"
       rmse_position: "/localization/data/rmse_position"
       rmse_orientation: "/localization/data/rmse_orientation"
+      longitudinal_rmse: "/localization/data/longitudinal_rmse"
+      lateral_rmse: "/localization/data/lateral_rmse"
       nees: "/localization/data/nees"
     debug:
       svm_image: "/localization/debug/svm_image"
