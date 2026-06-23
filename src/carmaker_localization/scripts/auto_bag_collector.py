@@ -59,14 +59,9 @@ def generate_grid_points():
         # 파일이 없을 시 기존의 수학적 백업 생성 로직 작동 (Fallback)
         print("[-] Warning: grid_registration_results.csv not found. Falling back to mathematical grid.")
         points = []
-        for dx in range(-15, 16):
-            for dy in range(-15, 16):
-                is_inner = (abs(dx) <= 10) and (abs(dy) <= 10)
-                if is_inner:
-                    points.append((center_x + float(dx), center_y + float(dy)))
-                else:
-                    if dx % 2 == 0 and dy % 2 == 0:
-                        points.append((center_x + float(dx), center_y + float(dy)))
+        for dx in range(-12, 13):
+            for dy in range(-12, 13):
+                points.append((center_x + float(dx), center_y + float(dy)))
         return points
 
     import csv
@@ -86,19 +81,12 @@ def generate_grid_points():
             dx = cell_x - center_x
             dy = cell_y - center_y
             
-            # 1. [-15, 15]m 외부 구역 필터링
-            if abs(dx) > 15.0 or abs(dy) > 15.0:
+            # 1. [-12, 12]m 외부 구역 필터링
+            if abs(dx) > 12.0 or abs(dy) > 12.0:
                 continue
                 
-            # 2. 중심부와 외곽부 분기 필터링
-            is_inner = (abs(dx) <= 10.0) and (abs(dy) <= 10.0)
-            if is_inner:
-                # 중심부 [-10, 10]: 모든 1m 주행 가능 그리드 수집
-                points.append((cell_x, cell_y))
-            else:
-                # 외곽부 [-15, 15]: 2m step을 위해 격자 인덱스가 짝수인 경우만 수집
-                if grid_i % 2 == 0 and grid_j % 2 == 0:
-                    points.append((cell_x, cell_y))
+            # 모든 1m 주행 가능 그리드 수집
+            points.append((cell_x, cell_y))
                     
     return points
 
@@ -121,14 +109,10 @@ def main():
 
     # 총 수집 횟수 및 시간 예측
     total_runs = len(grid_points) * len(yaws)
+    run_duration = 3.0
     total_duration = 0.0
     for gx, gy in grid_points:
-        # 충전패드 기준 오프셋 (dx, dy)으로 중심부 판단
-        dx = gx - center_x
-        dy = gy - center_y
-        is_center = (abs(dx) <= 10) and (abs(dy) <= 10)
-        run_duration = 5.0 if is_center else 2.5
-        total_duration += (run_duration + 2.0) * len(yaws) # 2.0초는 시작(1.0초)/정지(1.0초) 지연 마진
+        total_duration += (run_duration + 2.0) * len(yaws)
 
     print(f"[+] Total grid points: {len(grid_points)}")
     print(f"[+] Total simulation runs: {total_runs}")
@@ -147,11 +131,11 @@ def main():
         for yaw in yaws:
             run_idx += 1
             yaw_rad = yaw * math.pi / 180.0
-            
-            # 충전패드 기준 오프셋 (dx, dy)으로 중심부 판단
+
+            # 충전패드 기준 오프셋 (dx, dy) 계산
             dx = gx - center_x
             dy = gy - center_y
-            duration = 5.0 if (abs(dx) <= 10 and abs(dy) <= 10) else 2.5
+            duration = 3.0
 
             # 파일명에 정수 오프셋 dx, dy를 직접 사용하여 중복 방지
             bag_name = f"grid_dx_{int(round(dx))}_dy_{int(round(dy))}_yaw_{int(yaw)}deg.bag"
@@ -159,8 +143,12 @@ def main():
 
             print(f"\n[{run_idx}/{total_runs}] Teleporting to: ({gx:.1f}, {gy:.1f}) | Yaw: {yaw} deg | Duration: {duration}s")
 
-            # A. CarMaker 차량 초기 위치 설정 (StartPos로 변경 및 Flush 후 Reload)
-            r1 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos" "{gx} {gy} 0"')
+            # A. CarMaker 차량 초기 위치 설정 (실제 후륜축이 gx, gy에 오도록 뒷범퍼 스폰 위치 sx, sy 역보상)
+            rear_axle_offset = 0.82
+            sx = gx - rear_axle_offset * math.cos(yaw_rad)
+            sy = gy - rear_axle_offset * math.sin(yaw_rad)
+
+            r1 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos" "{sx} {sy} 0"')
             r2 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos.Orientation" "{yaw}"')
             r3 = cm.send_cmd("IFileFlush")
             time.sleep(0.5)  # 디스크 쓰기 시간 보장
