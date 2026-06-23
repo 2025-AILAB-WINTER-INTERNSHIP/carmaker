@@ -172,7 +172,10 @@ def main():
             # CarMaker가 'Running' 상태(1~3)가 될 때까지 폴링(Polling) 대기
             for _ in range(10):
                 sim_status = cm.send_cmd('expr {$SimStatus}')
-                if sim_status.strip() in ['1', '2', '3']:
+                if sim_status.strip().startswith('E') or not sim_status.strip():
+                    sim_status = cm.send_cmd('DDictGet "SimCore.State"')
+                # 수치형 혹은 문자열 상태 값에 대응
+                if sim_status.strip() in ['1', '2', '3', 'SCState_Simulate', 'SCState_Preflight']:
                     break
                 time.sleep(0.5)
             
@@ -193,12 +196,40 @@ def main():
                 "-e", "^/(control|planning|localization|carmaker|diagnostics|tf|parking).*"
             ]
             
-            print(f"  └─ Recording to {bag_name} for {duration}s...")
+            print(f"  └─ Recording to {bag_name} for {duration}s (sim time)...")
             # 백그라운드로 녹화 시작
             rosbag_proc = subprocess.Popen(rosbag_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
-            # 실제 컴퓨터 시간 기준으로 대기하여 /clock 정지에 의한 무한 프리징 방지
-            time.sleep(duration)
+            # 실제 시뮬레이션 시간 기준(DDictGet "Time") 대기
+            try:
+                start_time_str = cm.send_cmd('DDictGet "Time"')
+                if start_time_str.strip().startswith('E') or not start_time_str.strip():
+                    start_time_str = cm.send_cmd('expr {$Qu(Time)}')
+                start_sim_time = float(start_time_str.strip())
+            except (ValueError, Exception):
+                start_sim_time = 0.0
+                
+            elapsed_sim_time = 0.0
+            timeout_limit = duration * 3.0  # 무한 대기 방지용 현실 시간 아웃마진
+            t_start = time.time()
+            
+            while elapsed_sim_time < duration:
+                # 현실 시간 기준 세이프가드 타임아웃
+                if time.time() - t_start > timeout_limit:
+                    print("  └─ [Warning] Simulation time polling timeout. Proceeding...")
+                    break
+                
+                time.sleep(0.05)  # 과도한 소켓 통신 오버헤드 방지
+                
+                try:
+                    curr_time_str = cm.send_cmd('DDictGet "Time"')
+                    if curr_time_str.strip().startswith('E') or not curr_time_str.strip():
+                        curr_time_str = cm.send_cmd('expr {$Qu(Time)}')
+                    curr_sim_time = float(curr_time_str.strip())
+                    elapsed_sim_time = curr_sim_time - start_sim_time
+                except (ValueError, Exception):
+                    # 오류 발생 시 현실 시간 경과로 대체 처리
+                    elapsed_sim_time = time.time() - t_start
             
             # 프로세스 안전 종료 및 자원 회수
             rosbag_proc.terminate()
@@ -211,7 +242,9 @@ def main():
             # 시뮬레이터가 완전히 'Idle(0)' 상태로 돌아올 때까지 대기
             for _ in range(10):
                 sim_status = cm.send_cmd('expr {$SimStatus}')
-                if sim_status.strip() == '0':
+                if sim_status.strip().startswith('E') or not sim_status.strip():
+                    sim_status = cm.send_cmd('DDictGet "SimCore.State"')
+                if sim_status.strip() in ['0', 'SCState_Idle']:
                     break
                 time.sleep(0.5)
             print("  └─ Simulator is Idle and ready for next run.")
