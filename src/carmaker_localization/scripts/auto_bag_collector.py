@@ -164,7 +164,7 @@ def main():
             rosbag_cmd = [
                 "rosbag", "record",
                 "--lz4",
-                "--buffsize", "4096",
+                "--buffsize", "1024",
                 "-O", bag_path,
                 "-e", "^/(control|planning|localization|carmaker|diagnostics|tf|parking).*"
             ]
