@@ -163,7 +163,6 @@ def main():
             r2 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos.Orientation" "{yaw}"')
             r3 = cm.send_cmd("IFileFlush")
             time.sleep(0.5)  # 디스크 쓰기 시간 보장
-            cm.send_cmd("LoadTestRun \"\"")  # 캐싱 방지 dummy load
             r4 = cm.send_cmd(f"LoadTestRun {testrun_name}")
             print(f"  └─ Tcl Modify Responses: StartPos={r1}, Orientation={r2}, Flush={r3}, Reload={r4}")
             
