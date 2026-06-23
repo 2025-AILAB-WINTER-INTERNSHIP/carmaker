@@ -22,7 +22,7 @@ frames:
   rear_axle: "Fr1A_Rear_Axle_Pred"
 
 setting:
-  use_gt_pose: true # true → /carmaker/dynamic_info (GT), false → /localization/odom (EKF)
+  use_gt_pose: false # true → /carmaker/dynamic_info (GT), false → /localization/odom (EKF)
   test_pose:
     enabled: false # true → /planning/start for offline quintic path fitting test
     topic: "/planning/start"
