@@ -258,7 +258,9 @@ void Visualizer::publishEstimation(const geometry_msgs::PoseWithCovarianceStampe
     if (estimation_trajectory_.poses.empty() || (dx*dx + dy*dy) > 0.2*0.2) {
         geometry_msgs::PoseStamped ps;
         ps.header = pose.header;
+        ps.header.frame_id = global_frame_;
         ps.pose = pose.pose.pose;
+        estimation_trajectory_.header.frame_id = global_frame_;
         estimation_trajectory_.header.stamp = pose.header.stamp;
         estimation_trajectory_.poses.push_back(ps);
         last_published_pose_ = ps.pose;
