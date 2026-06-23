@@ -166,7 +166,21 @@ def main():
             r4 = cm.send_cmd(f"LoadTestRun {testrun_name}")
             print(f"  └─ Tcl Modify Responses: StartPos={r1}, Orientation={r2}, Flush={r3}, Reload={r4}")
             
-            # B. 시뮬레이션 시작 (Tcl 표준 기동 명령어인 StartSim 사용)
+            # B. 백그라운드로 rosbag 녹화 먼저 실행 (시뮬레이션 시작 순간의 최초 토픽 및 EKF 초기화 로그 누락 방지)
+            rosbag_cmd = [
+                "rosbag", "record",
+                "--lz4",
+                "--buffsize", "4096",
+                "-O", bag_path,
+                "-e", "^/(control|planning|localization|carmaker|diagnostics|tf|parking).*"
+            ]
+            print(f"  └─ Recording to {bag_name} for {duration}s (sim time)...")
+            rosbag_proc = subprocess.Popen(rosbag_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # rosbag record 노드가 완전히 활성화되고 구독을 시작할 수 있도록 1.0초 대기
+            time.sleep(1.0)
+            
+            # C. 시뮬레이션 시작 (Tcl 표준 기동 명령어인 StartSim 사용)
             res = cm.send_cmd("StartSim")
             print(f"  └─ Start Response: {res}")
             
@@ -188,19 +202,6 @@ def main():
             else:
                 time.sleep(1.0)
 
-            # C. 백그라운드로 rosbag 녹화 실행 (시뮬레이션 시간이 멈춰도 스크립트가 멈추지 않도록 Popen으로 제어)
-            rosbag_cmd = [
-                "rosbag", "record",
-                "--lz4",
-                "--buffsize", "4096",
-                "-O", bag_path,
-                "-e", "^/(control|planning|localization|carmaker|diagnostics|tf|parking).*"
-            ]
-            
-            print(f"  └─ Recording to {bag_name} for {duration}s (sim time)...")
-            # 백그라운드로 녹화 시작
-            rosbag_proc = subprocess.Popen(rosbag_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
             # 실제 시뮬레이션 시간 기준(DDictGet "Time") 대기
             try:
                 start_time_str = cm.send_cmd('DDictGet "Time"')
