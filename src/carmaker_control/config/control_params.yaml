@@ -15,7 +15,7 @@ control:
   rate: 100.0
   # odom: localization이 publish하는 /localization/odom 사용
   # dynamics: CarMaker GT /carmaker/dynamic_info 사용
-  state_source: "dynamics"
+  state_source: "odom"
 
   # Input freshness -----------------------------------------------------------
   # 각 입력이 이 시간 이상 갱신되지 않으면 정지 명령을 낸다.
