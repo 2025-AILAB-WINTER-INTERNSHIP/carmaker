@@ -355,6 +355,7 @@ bool LocalizationNodelet::setupRosIo() {
     // 정합 엔진 설정
     std::string registration_type = pnh.param("feature_registration/type", std::string("icp"));
     fitness_threshold_ = pnh.param("feature_registration/fitness_threshold", 0.5);
+    publish_metrics_always_ = pnh.param("feature_registration/publish_metrics_always", true);
     int max_iterations = pnh.param("feature_registration/max_iterations", 50);
     search_radius_ = pnh.param("feature_registration/search_radius", 20.0);
     double vision_base_std = pnh.param("ekf/camera/base_std", 0.1);
@@ -973,7 +974,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
 
     // ICP 특징점 정합(100Hz EKF 루프가 막히지 않도록 mutex 해제 후 수행)
     bool publish_visual_debug = visualizer_ && visualizer_->hasIcpSubscribers();
-    bool publish_metrics = icp_metrics_pub_.getNumSubscribers() > 0;
+    bool publish_metrics = publish_metrics_always_ || icp_metrics_pub_.getNumSubscribers() > 0;
     bool collect_debug = publish_visual_debug || publish_metrics;
     auto registration_result = registration_engine_->align(cpp_features, landmarks, initial_guess, collect_debug, publish_visual_debug);
     const ros::Time metric_stamp = ros::Time::now();

@@ -124,6 +124,7 @@ ekf:
 
 feature_registration:
   enable: true # True : 정합 수행, False : 정합 미수행 (디버깅용)
+  publish_metrics_always: true # True : 구독자가 없어도 ICP 메트릭 토픽을 강제로 상시 발행 (rosbag 수집 오작동 방지)
   type: "icp" # "icp" | 추후 "ndt", "point_to_line" 추가
   landmark_format: "osm" # "osm" | 추후 "lanelet2", "pcd" 추가
   landmark_file: "" # launch argument로 지정

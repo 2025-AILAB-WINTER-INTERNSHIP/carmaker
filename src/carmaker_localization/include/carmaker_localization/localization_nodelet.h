@@ -141,6 +141,7 @@ private:
     bool feature_registration_enabled_ = true;  // feature_registration/enable 파라미터로 제어
     double search_radius_ = 20.0;
     double fitness_threshold_ = 0.5;
+    bool publish_metrics_always_ = true;
 
     // Vehicle Kinematics
     double tire_radius_ = 0.298;
