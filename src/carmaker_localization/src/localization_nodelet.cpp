@@ -903,6 +903,15 @@ void LocalizationNodelet::processImages(
                     ROS_DEBUG_THROTTLE(2.0, "Correction queue busy. Dropping features from camera: %s", features.camera_name.c_str());
                 }
             }
+        } else {
+            // 특징점이 비어있더라도 publish_metrics_always_가 true라면 빈 특징점 메시지를 큐에 넣어 메트릭 발행을 유도
+            if (!fusion_ && feature_registration_enabled_ && landmark_loader_ && registration_engine_ && publish_metrics_always_) {
+                std::lock_guard<std::mutex> lock(correction_queue_mutex_);
+                if (correction_queue_.size() < 1) {
+                    correction_queue_.push(features);
+                    correction_queue_cv_.notify_one();
+                }
+            }
         }
     }
 
@@ -911,20 +920,32 @@ void LocalizationNodelet::processImages(
         visualizer_->publishSvmImage(svm_canvas_, seam_line_points_);
     }
 
-    if (fusion_ && !combined.features.empty() && feature_registration_enabled_ && landmark_loader_ && registration_engine_) {
-        std::lock_guard<std::mutex> lock(correction_queue_mutex_);
-        if (correction_queue_.size() < 1) {
-            correction_queue_.push(combined);
-            correction_queue_cv_.notify_one();
-        } else {
-            ROS_DEBUG_THROTTLE(2.0, "Correction queue busy. Dropping combined features.");
+    if (fusion_ && feature_registration_enabled_ && landmark_loader_ && registration_engine_) {
+        if (!combined.features.empty() || publish_metrics_always_) {
+            std::lock_guard<std::mutex> lock(correction_queue_mutex_);
+            if (correction_queue_.size() < 1) {
+                correction_queue_.push(combined);
+                correction_queue_cv_.notify_one();
+            } else {
+                ROS_DEBUG_THROTTLE(2.0, "Correction queue busy. Dropping combined features.");
+            }
         }
     }
 }
 
 void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& features) {
+    ros::Time metric_stamp = ros::Time::now();
+
     if (features.features.empty()) {
         ROS_WARN_THROTTLE(2.0, "performCorrection: Input features are empty!");
+        if (publish_metrics_always_) {
+            RegistrationResult dummy_result;
+            dummy_result.success = false;
+            dummy_result.num_observed = 0;
+            dummy_result.num_landmarks = landmark_loader_ ? landmark_loader_->queryNear(0.0, 0.0, -1.0).size() : 0;
+            dummy_result.fitness_score = std::numeric_limits<double>::quiet_NaN();
+            publishIcpMetrics(metric_stamp, dummy_result);
+        }
         return;
     }
 
@@ -955,6 +976,14 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         } else {
             ROS_WARN_THROTTLE(2.0, "performCorrection: No landmarks found within search_radius (%.1f m) of pose (%.2f, %.2f)!", search_radius_, query_x, query_y);
         }
+        if (publish_metrics_always_) {
+            RegistrationResult dummy_result;
+            dummy_result.success = false;
+            dummy_result.num_observed = features.features.size();
+            dummy_result.num_landmarks = 0;
+            dummy_result.fitness_score = std::numeric_limits<double>::quiet_NaN();
+            publishIcpMetrics(metric_stamp, dummy_result);
+        }
         return;
     }
 
@@ -977,7 +1006,7 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
     bool publish_metrics = publish_metrics_always_ || icp_metrics_pub_.getNumSubscribers() > 0;
     bool collect_debug = publish_visual_debug || publish_metrics;
     auto registration_result = registration_engine_->align(cpp_features, landmarks, initial_guess, collect_debug, publish_visual_debug);
-    const ros::Time metric_stamp = ros::Time::now();
+    metric_stamp = ros::Time::now();
 
     if (visualizer_ && publish_visual_debug) {
         visualizer_->publishAssociationMarkers(global_frame_, features.header.stamp, registration_result);
