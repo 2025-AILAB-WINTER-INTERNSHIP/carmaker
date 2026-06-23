@@ -96,10 +96,10 @@ def profile_single_case(
                 loss_fn = loss_fn.bfloat16()
 
         try:
-            model = torch.compile(model, options={"triton.cudagraphs": False})
+            model = torch.compile(model, options={"triton.cudagraphs": False}, dynamic=True)
         except Exception:
             try:
-                model = torch.compile(model)
+                model = torch.compile(model, dynamic=True)
             except Exception as e:
                 pass
 

@@ -59,8 +59,8 @@ def generate_grid_points():
         # 파일이 없을 시 기존의 수학적 백업 생성 로직 작동 (Fallback)
         print("[-] Warning: grid_registration_results.csv not found. Falling back to mathematical grid.")
         points = []
-        for dx in range(-12, 13):
-            for dy in range(-12, 13):
+        for dx in range(-10, 11):
+            for dy in range(-10, 11):
                 points.append((center_x + float(dx), center_y + float(dy)))
         return points
 
@@ -81,8 +81,8 @@ def generate_grid_points():
             dx = cell_x - center_x
             dy = cell_y - center_y
             
-            # 1. [-12, 12]m 외부 구역 필터링
-            if abs(dx) > 12.0 or abs(dy) > 12.0:
+            # 1. [-10, 10]m 외부 구역 필터링
+            if abs(dx) > 10.0 or abs(dy) > 10.0:
                 continue
                 
             # 모든 1m 주행 가능 그리드 수집
@@ -141,6 +141,11 @@ def main():
             bag_name = f"grid_dx_{int(round(dx))}_dy_{int(round(dy))}_yaw_{int(yaw)}deg.bag"
             bag_path = os.path.join(output_dir, bag_name)
 
+            # 이미 수집된 정상적인 크기(10KB 이상)의 bag 파일이 존재할 경우 스킵 (이어받기)
+            if os.path.exists(bag_path) and os.path.getsize(bag_path) > 10240:
+                print(f"[{run_idx}/{total_runs}] Skip: {bag_name} (Already collected)")
+                continue
+
             print(f"\n[{run_idx}/{total_runs}] Teleporting to: ({gx:.1f}, {gy:.1f}) | Yaw: {yaw} deg | Duration: {duration}s")
 
             # A. CarMaker 차량 초기 위치 설정 (실제 후륜축이 gx, gy에 오도록 뒷범퍼 스폰 위치 sx, sy 역보상)
@@ -149,7 +154,7 @@ def main():
             sy = gy - rear_axle_offset * math.sin(yaw_rad)
 
             r1 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos" "{sx} {sy} 0"')
-            r2 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos.Orientation" "{yaw}"')
+            r2 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos.Orientation" "{yaw}"') # degree
             r3 = cm.send_cmd("IFileFlush")
             time.sleep(0.5)  # 디스크 쓰기 시간 보장
             r4 = cm.send_cmd(f"LoadTestRun {testrun_name}")

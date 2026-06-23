@@ -119,10 +119,13 @@ double weightedRmseOrNoData(double weighted_sum_sq, double weight) {
 }
 
 bool loadConfig(const ros::NodeHandle& nh, const ros::NodeHandle& pnh, Config& cfg) {
-    pnh.param("bag_path", cfg.bag_path, cfg.bag_path);
-    pnh.param("bag/path", cfg.bag_path, cfg.bag_path);
-    pnh.param("evaluator/bag/path", cfg.bag_path, cfg.bag_path);
+    // 1. 글로벌/공통 파라미터 조회 (낮은 우선순위)
     nh.param("evaluator/bag/path", cfg.bag_path, cfg.bag_path);
+
+    // 2. 노드 프라이빗 파라미터 조회 (높은 우선순위)
+    pnh.param("evaluator/bag/path", cfg.bag_path, cfg.bag_path);
+    pnh.param("bag/path", cfg.bag_path, cfg.bag_path);
+    pnh.param("bag_path", cfg.bag_path, cfg.bag_path);
     if (cfg.bag_path.empty()) return false;
 
     pnh.param("center_x", cfg.center_x, cfg.center_x);

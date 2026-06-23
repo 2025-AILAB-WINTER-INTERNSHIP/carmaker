@@ -91,11 +91,11 @@ class SegmentationPredictor:
         if use_compile:
             try:
                 # 멀티스레드(ROS worker thread) 환경에서 CUDA Graphs TLS AssertionError 방지를 위해 cudagraphs 비활성화 옵션 적용
-                self.model = torch.compile(self.model, options={"triton.cudagraphs": False})
+                self.model = torch.compile(self.model, options={"triton.cudagraphs": False}, dynamic=True)
             except Exception:
                 try:
                     # Fallback: 옵션 없는 기본 컴파일 시도
-                    self.model = torch.compile(self.model)
+                    self.model = torch.compile(self.model, dynamic=True)
                 except Exception:
                     pass
 
