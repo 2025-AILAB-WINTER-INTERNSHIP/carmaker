@@ -158,12 +158,14 @@ def main():
 
             print(f"\n[{run_idx}/{total_runs}] Teleporting to: ({gx:.1f}, {gy:.1f}) | Yaw: {yaw} deg | Duration: {duration}s")
 
-            # A. CarMaker 차량 초기 위치 설정 (인메모리 버퍼 변경 후 Flush)
-            r1 = cm.send_cmd(f'IFileModify TestRun "Vehicle.Init.x" "{gx}"')
-            r2 = cm.send_cmd(f'IFileModify TestRun "Vehicle.Init.y" "{gy}"')
-            r3 = cm.send_cmd(f'IFileModify TestRun "Vehicle.Init.yaw" "{yaw_rad}"')
-            r4 = cm.send_cmd("IFileFlush")
-            print(f"  └─ Tcl Modify Responses: Modify=[{r1}, {r2}, {r3}], Flush={r4}")
+            # A. CarMaker 차량 초기 위치 설정 (StartPos로 변경 및 Flush 후 Reload)
+            r1 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos" "{gx} {gy} 0"')
+            r2 = cm.send_cmd(f'IFileModify TestRun "Vehicle.StartPos.Orientation" "{yaw}"')
+            r3 = cm.send_cmd("IFileFlush")
+            time.sleep(0.5)  # 디스크 쓰기 시간 보장
+            cm.send_cmd("LoadTestRun \"\"")  # 캐싱 방지 dummy load
+            r4 = cm.send_cmd(f"LoadTestRun {testrun_name}")
+            print(f"  └─ Tcl Modify Responses: StartPos={r1}, Orientation={r2}, Flush={r3}, Reload={r4}")
             
             # B. 시뮬레이션 시작 (Tcl 표준 기동 명령어인 StartSim 사용)
             res = cm.send_cmd("StartSim")
