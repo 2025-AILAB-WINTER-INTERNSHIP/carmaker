@@ -1112,21 +1112,18 @@ void LocalizationNodelet::performCorrection(const carmaker_msgs::LocalFeatures& 
         geometry_msgs::PoseWithCovarianceStamped correction_msg;
         correction_msg.header.stamp = ros::Time(current_time);
         correction_msg.header.frame_id = global_frame_;
-        // correction_msg: 후륜축 기준 z → Fr1A 범퍼 기준으로 역변환·발행
-        Eigen::Vector3d z_bumper = transformPose(z, -rear_axle_x_);
-        correction_msg.pose.pose.position.x = z_bumper(0);
-        correction_msg.pose.pose.position.y = z_bumper(1);
+        // correction_msg: 후륜축 기준 z를 그대로 발행
+        correction_msg.pose.pose.position.x = z(0);
+        correction_msg.pose.pose.position.y = z(1);
         tf2::Quaternion q;
-        q.setRPY(0, 0, z_bumper(2));
+        q.setRPY(0, 0, z(2));
         correction_msg.pose.pose.orientation = tf2::toMsg(q);
 
-        // 지연 보상된 후륜축 기준 공분산 R_reg_rear를 다시 후방 범퍼 기준으로 역변환하여 퍼블리시용 공분산으로 저장
-        Eigen::Matrix3d R_reg_bumper = propagateCovariance(R_reg_rear, z(2), -rear_axle_x_);
-
+        // 후륜축 기준 공분산 R_reg_rear를 그대로 퍼블리시용 공분산으로 저장
         for (int r = 0; r < 3; ++r) {
             for (int c = 0; c < 3; ++c) {
                 int idx = (r == 2 ? 5 : r) * 6 + (c == 2 ? 5 : c);
-                correction_msg.pose.covariance[idx] = R_reg_bumper(r, c);
+                correction_msg.pose.covariance[idx] = R_reg_rear(r, c);
             }
         }
         correction_data_pub_.publish(correction_msg);

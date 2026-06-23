@@ -310,7 +310,7 @@ void Visualizer::publishCorrection(const geometry_msgs::PoseWithCovarianceStampe
 
     // 2. Vehicle Body & Label
     std::vector<double> color = {1.0, 0.0, 0.0, 0.7};
-    _addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color, true);
+    _addVehicleMarker(marker_array, pose.pose.pose, "correction", "Correction", color, false);
 
     correction_marker_pub_.publish(marker_array);
 }
