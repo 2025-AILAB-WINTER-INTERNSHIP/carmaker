@@ -147,14 +147,15 @@ def main():
         for yaw in yaws:
             run_idx += 1
             yaw_rad = yaw * math.pi / 180.0
-            bag_name = f"grid_x_{int(gx)}_y_{int(gy)}_yaw_{int(yaw)}deg.bag"
-            bag_path = os.path.join(output_dir, bag_name)
-
+            
             # 충전패드 기준 오프셋 (dx, dy)으로 중심부 판단
             dx = gx - center_x
             dy = gy - center_y
-            is_center = (abs(dx) <= 10) and (abs(dy) <= 10)
-            duration = 5.0 if is_center else 2.5
+            duration = 5.0 if (abs(dx) <= 10 and abs(dy) <= 10) else 2.5
+
+            # 파일명에 정수 오프셋 dx, dy를 직접 사용하여 중복 방지
+            bag_name = f"grid_dx_{int(round(dx))}_dy_{int(round(dy))}_yaw_{int(yaw)}deg.bag"
+            bag_path = os.path.join(output_dir, bag_name)
 
             print(f"\n[{run_idx}/{total_runs}] Teleporting to: ({gx:.1f}, {gy:.1f}) | Yaw: {yaw} deg | Duration: {duration}s")
 
