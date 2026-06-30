@@ -69,6 +69,7 @@ def load_config(package_dir):
         "output_csv_path": "grid_registration_results.csv",
         "output_dir": "docs",
         "landmarks_csv_path": "landmarks.csv",
+        "landmark_file": "config/Test.osm",
     }
     yaml_path = os.path.join(package_dir, "config", "localization_params.yaml")
     if not os.path.exists(yaml_path):
@@ -79,7 +80,14 @@ def load_config(package_dir):
             params = yaml.safe_load(f) or {}
         eval_params = params.get("evaluator", {})
         for key in cfg:
-            cfg[key] = eval_params.get(key, cfg[key])
+            if key in eval_params:
+                cfg[key] = eval_params[key]
+        
+        reg_params = params.get("feature_registration", {})
+        landmark_file = reg_params.get("landmark_file", "") or eval_params.get("map_file", "")
+        if landmark_file:
+            cfg["landmark_file"] = landmark_file
+
         cfg["landmarks_csv_path"] = eval_params.get(
             "landmarks_csv_path",
             eval_params.get("map_features_csv_path", cfg["landmarks_csv_path"]),
@@ -178,13 +186,115 @@ def aggregate_duplicate_grids(df):
     return aggregated[ordered + extras]
 
 
+def parse_osm_to_landmarks(osm_path):
+    import xml.etree.ElementTree as ET
+    import math
+    try:
+        tree = ET.parse(osm_path)
+    except Exception as e:
+        print(f"[-] Failed to parse OSM file {osm_path}: {e}")
+        return None
+
+    root = tree.getroot()
+    nodes = {}
+    for node in root.findall('node'):
+        nid_str = node.get('id')
+        if not nid_str:
+            continue
+        nid = int(nid_str)
+        local_x, local_y = None, None
+        for tag in node.findall('tag'):
+            if tag.get('k') == 'local_x':
+                local_x = float(tag.get('v'))
+            elif tag.get('k') == 'local_y':
+                local_y = float(tag.get('v'))
+        if local_x is not None and local_y is not None:
+            nodes[nid] = (local_x, local_y)
+
+    sampled_points = []
+    
+    def sample_segment(x1, y1, x2, y2, res=0.05):
+        points = []
+        dx = x2 - x1
+        dy = y2 - y1
+        dist = math.hypot(dx, dy)
+        if dist == 0.0:
+            return [(x1, y1)]
+        steps = int(math.ceil(dist / res))
+        for step in range(steps + 1):
+            t = step / steps
+            points.append((x1 + t * dx, y1 + t * dy))
+        return points
+
+    for way in root.findall('way'):
+        tags = {tag.get('k'): tag.get('v') for tag in way.findall('tag') if tag.get('k') and tag.get('v')}
+        class_id = None
+        if tags.get('amenity') == 'ev_charging' or tags.get('type') == 'ev_charging':
+            class_id = 2
+        elif tags.get('type') in ('parking_spot', 'lane', 'line'):
+            class_id = 1
+
+        if class_id is None:
+            continue
+
+        nd_refs = [int(nd.get('ref')) for nd in way.findall('nd') if nd.get('ref')]
+        if not nd_refs:
+            continue
+
+        for i in range(len(nd_refs) - 1):
+            ref1, ref2 = nd_refs[i], nd_refs[i+1]
+            if ref1 in nodes and ref2 in nodes:
+                p1, p2 = nodes[ref1], nodes[ref2]
+                pts = sample_segment(p1[0], p1[1], p2[0], p2[1], res=0.05)
+                for pt in pts:
+                    sampled_points.append((class_id, pt[0], pt[1]))
+
+        if class_id == 2 and nd_refs[0] != nd_refs[-1]:
+            ref1, ref2 = nd_refs[-1], nd_refs[0]
+            if ref1 in nodes and ref2 in nodes:
+                p1, p2 = nodes[ref1], nodes[ref2]
+                pts = sample_segment(p1[0], p1[1], p2[0], p2[1], res=0.05)
+                for pt in pts:
+                    sampled_points.append((class_id, pt[0], pt[1]))
+
+    if not sampled_points:
+        return None
+
+    voxel_size = 0.05
+    voxels = {}
+    for cid, x, y in sampled_points:
+        vx = int(round(x / voxel_size))
+        vy = int(round(y / voxel_size))
+        key = (cid, vx, vy)
+        if key not in voxels:
+            voxels[key] = (vx * voxel_size, vy * voxel_size)
+
+    rows = []
+    for (cid, _, _), (x, y) in voxels.items():
+        rows.append({"class_id": cid, "x": x, "y": y})
+
+    return pd.DataFrame(rows)
+
+
 def load_landmarks(package_dir, cfg):
     path = resolve_config_path(package_dir, cfg["landmarks_csv_path"])
     if not os.path.exists(path) and cfg["landmarks_csv_path"] == "landmarks.csv":
         path = resolve_config_path(package_dir, "map_features.csv")
-    if not os.path.exists(path):
-        return None
-    return pd.read_csv(path)
+    if os.path.exists(path):
+        return pd.read_csv(path)
+
+    landmark_file = cfg.get("landmark_file", "config/Test.osm")
+    osm_path = resolve_config_path(package_dir, landmark_file)
+    if os.path.exists(osm_path):
+        print(f"[!] {cfg['landmarks_csv_path']} not found. Auto-generating from OSM file: {osm_path}")
+        landmarks_df = parse_osm_to_landmarks(osm_path)
+        if landmarks_df is not None:
+            csv_out = resolve_config_path(package_dir, cfg["landmarks_csv_path"])
+            landmarks_df.to_csv(csv_out, index=False)
+            print(f"[+] Re-generated and saved landmarks CSV to: {csv_out}")
+            return landmarks_df
+
+    return None
 
 
 def write_debug_html(json_path, html_path):
@@ -292,8 +402,8 @@ def plot_heatmap(df, column, title, colorbar_label, cmap, output_path, cfg, land
     ax.legend(
         [cell_handle, pad_handle, Patch(facecolor=(0.9, 0.9, 0.9, 0.65), edgecolor="#e5e8eb")] + feature_handles,
         ["GT RearAxle grid center", "Charging pad center", "N/A"] + feature_labels,
-        loc="upper right",
-        framealpha=1.0,
+        loc="lower right",
+        framealpha=0.65,
         facecolor="white",
         edgecolor="#e5e8eb",
         markerscale=2.0,
