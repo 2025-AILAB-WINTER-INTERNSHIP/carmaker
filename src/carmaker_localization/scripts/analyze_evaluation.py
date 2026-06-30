@@ -341,7 +341,7 @@ def write_debug_html_reports(output_dir):
         write_debug_html(json_path, html_path)
 
 
-def plot_heatmap(df, column, title, colorbar_label, cmap, output_path, cfg, landmarks=None):
+def plot_heatmap(df, column, title, colorbar_label, cmap, output_path, cfg, landmarks=None, filter_perfect=False):
     grid_step = cfg["grid_step"]
     fig, ax = plt.subplots(figsize=(10, 8))
     fig.patch.set_facecolor('white')
@@ -351,6 +351,9 @@ def plot_heatmap(df, column, title, colorbar_label, cmap, output_path, cfg, land
         spine.set_linewidth(0.8)
 
     values = df[column].replace([np.inf, -np.inf], np.nan)
+    if filter_perfect and "success_rate" in df.columns:
+        values = values.copy()
+        values[df["success_rate"] < 0.9999] = np.nan
     finite = values.dropna()
     if column == "success_rate":
         vmin, vmax = 0.0, 1.0
@@ -508,6 +511,12 @@ def main():
     for column, title, label, cmap in HEATMAPS:
         if column in df.columns:
             plot_heatmap(df, column, title, label, cmap, os.path.join(output_dir, f"heatmap_{column}.png"), cfg, landmarks)
+            if column in ("longitudinal_rmse", "lateral_rmse", "yaw_rmse"):
+                plot_heatmap(
+                    df, column, f"{title}", label, cmap,
+                    os.path.join(output_dir, f"heatmap_{column}_perfect.png"),
+                    cfg, landmarks, filter_perfect=True
+                )
 
     write_summary(df, os.path.join(output_dir, "evaluation_summary.md"), cfg)
     write_detail(df, os.path.join(output_dir, "evaluation_detail.md"))
