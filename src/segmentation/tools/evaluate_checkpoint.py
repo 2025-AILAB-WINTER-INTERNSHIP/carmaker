@@ -118,7 +118,7 @@ def main() -> None:
     sample_count_by_camera: dict[str, int] = defaultdict(int)
     sample_count_by_scenario: dict[str, int] = defaultdict(int)
     per_sample_rows: list[dict[str, Any]] = []
-    tensorboard_panels: list[tuple[str, np.ndarray]] = []
+    tensorboard_panels: list[tuple[str, str, np.ndarray]] = []
     invalid_target_pixels = 0
     total_inference_ms = 0.0
 
@@ -181,7 +181,7 @@ def main() -> None:
                     cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
                 if save_tensorboard_image:
                     tag = f"{sample_index:06d}_{scenario}_{camera}_{_safe_stem(sample.image_path)}"
-                    tensorboard_panels.append((tag, overlay))
+                    tensorboard_panels.append((camera, tag, overlay))
 
         done = min(start + len(batch_samples), len(samples))
         if done == len(samples) or done % 50 == 0:
@@ -418,7 +418,7 @@ def _write_per_sample_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _write_tensorboard(out_dir: Path, metrics: dict[str, Any], image_panels: list[tuple[str, np.ndarray]]) -> None:
+def _write_tensorboard(out_dir: Path, metrics: dict[str, Any], image_panels: list[tuple[str, str, np.ndarray]]) -> None:
     try:
         from torch.utils.tensorboard import SummaryWriter
     except ImportError:
@@ -438,8 +438,8 @@ def _write_tensorboard(out_dir: Path, metrics: dict[str, Any], image_panels: lis
         for scenario, values in metrics["by_scenario"].items():
             _write_tensorboard_scalars(writer, f"final_test/scenario/{_safe_tag(scenario)}", values, step)
 
-        for tag, image in image_panels:
-            writer.add_image(f"final_test/overlay/{_safe_tag(tag)}", image, step, dataformats="HWC")
+        _write_confusion_matrix_tensorboard(writer, metrics, step)
+        _write_overlay_tensorboard(writer, image_panels, step)
 
         writer.add_text(
             "final_test/summary",
@@ -455,6 +455,184 @@ def _write_tensorboard(out_dir: Path, metrics: dict[str, Any], image_panels: lis
     finally:
         writer.flush()
         writer.close()
+
+
+def _write_overlay_tensorboard(
+    writer: Any,
+    image_panels: list[tuple[str, str, np.ndarray]],
+    step: int,
+) -> None:
+    panels_by_camera: dict[str, list[np.ndarray]] = defaultdict(list)
+    camera_order = ["front", "rear", "left", "right"]
+
+    for camera, tag, image in image_panels:
+        camera_tag = _safe_tag(camera)
+        writer.add_image(
+            f"final_test/overlay/{camera_tag}/{_safe_tag(tag)}",
+            image,
+            step,
+            dataformats="HWC",
+        )
+        panels_by_camera[camera].append(image)
+
+    ordered_cameras = [
+        camera for camera in camera_order if camera in panels_by_camera
+    ] + sorted(camera for camera in panels_by_camera if camera not in camera_order)
+
+    for camera in ordered_cameras:
+        images = panels_by_camera[camera]
+        if not images:
+            continue
+        grid = _make_image_grid(images[:4], columns=1)
+        writer.add_image(
+            f"final_test/overlay_grid/{_safe_tag(camera)}",
+            grid,
+            step,
+            dataformats="HWC",
+        )
+
+
+def _write_confusion_matrix_tensorboard(
+    writer: Any,
+    metrics: dict[str, Any],
+    step: int,
+) -> None:
+    class_names = metrics.get("classes") or []
+    matrix = metrics.get("confusion_matrix")
+    if matrix is not None:
+        _write_confusion_matrix_text(
+            writer,
+            "final_test/confusion_matrix/overall",
+            step,
+            matrix,
+            class_names,
+        )
+        writer.add_image(
+            "final_test/confusion_matrix_image/overall",
+            _confusion_matrix_image(matrix, class_names),
+            step,
+            dataformats="HWC",
+        )
+
+    for camera, values in metrics.get("by_camera", {}).items():
+        camera_matrix = values.get("confusion_matrix")
+        if camera_matrix is None:
+            continue
+        tag = _safe_tag(camera)
+        _write_confusion_matrix_text(
+            writer,
+            f"final_test/confusion_matrix/camera/{tag}",
+            step,
+            camera_matrix,
+            class_names,
+        )
+        writer.add_image(
+            f"final_test/confusion_matrix_image/camera/{tag}",
+            _confusion_matrix_image(camera_matrix, class_names),
+            step,
+            dataformats="HWC",
+        )
+
+
+def _write_confusion_matrix_text(
+    writer: Any,
+    tag: str,
+    step: int,
+    matrix: list[list[int]],
+    class_names: list[str],
+) -> None:
+    labels = [str(name) for name in class_names]
+    if len(labels) != len(matrix):
+        labels = [f"class_{idx}" for idx in range(len(matrix))]
+
+    header = "| GT \\ Pred | " + " | ".join(labels) + " |"
+    separator = "|---|" + "|".join("---" for _ in labels) + "|"
+    rows = [header, separator]
+    for label, row in zip(labels, matrix):
+        rows.append("| " + label + " | " + " | ".join(str(int(value)) for value in row) + " |")
+
+    writer.add_text(tag, "\n".join(rows), step)
+
+
+def _confusion_matrix_image(
+    matrix: list[list[int]],
+    class_names: list[str],
+) -> np.ndarray:
+    values = np.asarray(matrix, dtype=np.float64)
+    if values.ndim != 2 or values.shape[0] == 0 or values.shape[1] == 0:
+        return np.zeros((64, 64, 3), dtype=np.uint8)
+
+    labels = [str(name) for name in class_names]
+    if len(labels) != values.shape[0]:
+        labels = [f"class_{idx}" for idx in range(values.shape[0])]
+
+    cell = 96
+    label_w = 150
+    label_h = 54
+    height = label_h + values.shape[0] * cell
+    width = label_w + values.shape[1] * cell
+    image = np.full((height, width, 3), 245, dtype=np.uint8)
+
+    max_value = float(values.max()) if values.size else 0.0
+    for row in range(values.shape[0]):
+        for col in range(values.shape[1]):
+            value = float(values[row, col])
+            intensity = 0.0 if max_value <= 0.0 else value / max_value
+            base = np.array([235, 245, 255], dtype=np.float64)
+            hot = np.array([32, 104, 191], dtype=np.float64)
+            color = ((1.0 - intensity) * base + intensity * hot).astype(np.uint8)
+            y0 = label_h + row * cell
+            x0 = label_w + col * cell
+            image[y0 : y0 + cell, x0 : x0 + cell] = color
+            cv2.rectangle(image, (x0, y0), (x0 + cell, y0 + cell), (210, 210, 210), 1)
+            text = str(int(value))
+            text_color = (255, 255, 255) if intensity > 0.45 else (25, 25, 25)
+            _put_centered_text(image, text, (x0, y0, cell, cell), 0.65, text_color)
+
+    for col, label in enumerate(labels):
+        x0 = label_w + col * cell
+        _put_centered_text(image, label, (x0, 0, cell, label_h), 0.48, (40, 40, 40))
+    for row, label in enumerate(labels):
+        y0 = label_h + row * cell
+        _put_centered_text(image, label, (0, y0, label_w, cell), 0.48, (40, 40, 40))
+
+    cv2.putText(image, "GT \\ Pred", (10, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (40, 40, 40), 1, cv2.LINE_AA)
+    return image
+
+
+def _put_centered_text(
+    image: np.ndarray,
+    text: str,
+    rect: tuple[int, int, int, int],
+    scale: float,
+    color: tuple[int, int, int],
+) -> None:
+    x, y, width, height = rect
+    thickness = 1
+    (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+    tx = x + max(4, (width - tw) // 2)
+    ty = y + max(th + 4, (height + th - baseline) // 2)
+    cv2.putText(image, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
+
+
+def _make_image_grid(images: list[np.ndarray], columns: int = 2, pad: int = 8) -> np.ndarray:
+    if not images:
+        raise ValueError("_make_image_grid requires at least one image")
+
+    height, width, channels = images[0].shape
+    rows = int(np.ceil(len(images) / max(1, columns)))
+    grid_h = rows * height + max(rows - 1, 0) * pad
+    grid_w = columns * width + max(columns - 1, 0) * pad
+    grid = np.full((grid_h, grid_w, channels), 32, dtype=np.uint8)
+
+    for idx, image in enumerate(images):
+        row = idx // columns
+        col = idx % columns
+        y0 = row * (height + pad)
+        x0 = col * (width + pad)
+        grid[y0 : y0 + height, x0 : x0 + width] = image
+
+    return grid
 
 
 def _write_tensorboard_scalars(writer: Any, prefix: str, values: dict[str, Any], step: int) -> None:
