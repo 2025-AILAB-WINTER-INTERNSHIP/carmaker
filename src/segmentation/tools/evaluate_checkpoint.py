@@ -47,25 +47,71 @@ def parse_args() -> argparse.Namespace:
             "write metrics, per-sample scores, prediction masks, and overlays."
         )
     )
-    parser.add_argument("--ckpt", required=True, help="Path to best.ckpt or another checkpoint.")
+    parser.add_argument(
+        "--ckpt", required=True, help="Path to best.ckpt or another checkpoint."
+    )
     parser.add_argument("--data-root", default=str(DEFAULT_DATA_ROOT))
-    parser.add_argument("--manifest", default="", help="Path to manifest.csv. Defaults to data-root/csv/manifest.csv.")
-    parser.add_argument("--config", default="", help="Optional config override for checkpoint inference.")
-    parser.add_argument("--cameras", default="", help="Comma-separated camera filter, e.g. front,left.")
-    parser.add_argument("--use-raw-post-processed", action="store_true", help="Use manifest raw_post before raw.")
-    parser.add_argument("--image-size", default="", help="Optional network input size WIDTH,HEIGHT.")
-    parser.add_argument("--eval-resolution", choices=("network", "original"), default="network")
+    parser.add_argument(
+        "--manifest",
+        default="",
+        help="Path to manifest.csv. Defaults to data-root/csv/manifest.csv.",
+    )
+    parser.add_argument(
+        "--config",
+        default="",
+        help="Optional config override for checkpoint inference.",
+    )
+    parser.add_argument(
+        "--cameras", default="", help="Comma-separated camera filter, e.g. front,left."
+    )
+    parser.add_argument(
+        "--use-raw-post-processed",
+        action="store_true",
+        help="Use manifest raw_post before raw.",
+    )
+    parser.add_argument(
+        "--image-size", default="", help="Optional network input size WIDTH,HEIGHT."
+    )
+    parser.add_argument(
+        "--eval-resolution", choices=("network", "original"), default="network"
+    )
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--max-samples", type=int, default=0, help="Limit sample count for quick checks. 0 means all.")
-    parser.add_argument("--device", default="", help="Torch device override, e.g. cuda:0 or cpu.")
-    parser.add_argument("--precision", default="auto", choices=("auto", "fp32", "fp16", "bf16"))
-    parser.add_argument("--compile", action="store_true", help="Enable torch.compile for long GPU eval runs.")
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=0,
+        help="Limit sample count for quick checks. 0 means all.",
+    )
+    parser.add_argument(
+        "--device", default="", help="Torch device override, e.g. cuda:0 or cpu."
+    )
+    parser.add_argument(
+        "--precision", default="auto", choices=("auto", "fp32", "fp16", "bf16")
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable torch.compile for long GPU eval runs.",
+    )
     parser.add_argument("--warmup-iterations", type=int, default=1)
-    parser.add_argument("--out-dir", default="", help="Output directory. Defaults to runs/eval_<ckpt>_<time>.")
-    parser.add_argument("--overlay-count", type=int, default=32, help="Number of side-by-side overlays to save.")
+    parser.add_argument(
+        "--out-dir",
+        default="",
+        help="Output directory. Defaults to runs/eval_<ckpt>_<time>.",
+    )
+    parser.add_argument(
+        "--overlay-count",
+        type=int,
+        default=32,
+        help="Number of side-by-side overlays to save.",
+    )
     parser.add_argument("--save-all-overlays", action="store_true")
     parser.add_argument("--save-pred-masks", action="store_true")
-    parser.add_argument("--tensorboard", action="store_true", help="Write TensorBoard scalars/images into out-dir.")
+    parser.add_argument(
+        "--tensorboard",
+        action="store_true",
+        help="Write TensorBoard scalars/images into out-dir.",
+    )
     parser.add_argument("--tensorboard-image-count", type=int, default=16)
     return parser.parse_args()
 
@@ -96,7 +142,9 @@ def main() -> None:
     if args.max_samples > 0:
         samples = samples[: args.max_samples]
     if not samples:
-        raise RuntimeError("No evaluation samples found. Check --data-root, --manifest, and --cameras.")
+        raise RuntimeError(
+            "No evaluation samples found. Check --data-root, --manifest, and --cameras."
+        )
 
     image_size = _parse_image_size(args.image_size) if args.image_size else None
     predictor = SegmentationPredictor(
@@ -113,11 +161,16 @@ def main() -> None:
     num_classes = len(predictor.class_names)
     palette = _palette_for_classes(adapter.palette, num_classes)
     matrix_total = torch.zeros((num_classes, num_classes), dtype=torch.int64)
-    matrix_by_camera: dict[str, torch.Tensor] = defaultdict(lambda: torch.zeros((num_classes, num_classes), dtype=torch.int64))
-    matrix_by_scenario: dict[str, torch.Tensor] = defaultdict(lambda: torch.zeros((num_classes, num_classes), dtype=torch.int64))
+    matrix_by_camera: dict[str, torch.Tensor] = defaultdict(
+        lambda: torch.zeros((num_classes, num_classes), dtype=torch.int64)
+    )
+    matrix_by_scenario: dict[str, torch.Tensor] = defaultdict(
+        lambda: torch.zeros((num_classes, num_classes), dtype=torch.int64)
+    )
     sample_count_by_camera: dict[str, int] = defaultdict(int)
     sample_count_by_scenario: dict[str, int] = defaultdict(int)
     per_sample_rows: list[dict[str, Any]] = []
+    tensorboard_panels: list[tuple[str, str, np.ndarray]] = []
     tensorboard_panels: list[tuple[str, str, np.ndarray]] = []
     invalid_target_pixels = 0
     total_inference_ms = 0.0
@@ -127,15 +180,21 @@ def main() -> None:
 
     for start in range(0, len(samples), max(1, args.batch_size)):
         batch_samples = samples[start : start + max(1, args.batch_size)]
-        batch_images_bgr = [_read_image_bgr(sample.image_path) for sample in batch_samples]
+        batch_images_bgr = [
+            _read_image_bgr(sample.image_path) for sample in batch_samples
+        ]
         results, pure_ms = predictor.predict_batch(batch_images_bgr, color_order="bgr")
         total_inference_ms += float(pure_ms)
 
-        for offset, (sample, image_bgr, result) in enumerate(zip(batch_samples, batch_images_bgr, results)):
+        for offset, (sample, image_bgr, result) in enumerate(
+            zip(batch_samples, batch_images_bgr, results)
+        ):
             sample_index = start + offset
             mask = _read_mask(sample.mask_path)
             pred = result.class_map
-            pred_eval, mask_eval = _align_prediction_and_mask(pred, mask, args.eval_resolution, predictor.image_size)
+            pred_eval, mask_eval = _align_prediction_and_mask(
+                pred, mask, args.eval_resolution, predictor.image_size
+            )
 
             invalid = int(((mask_eval < 0) | (mask_eval >= num_classes)).sum())
             invalid_target_pixels += invalid
@@ -163,24 +222,41 @@ def main() -> None:
                 "mask_path": str(sample.mask_path),
                 "valid_pixels": int(sample_matrix.sum().item()),
                 "invalid_target_pixels": invalid,
-                "psnr": mask_psnr(torch.from_numpy(pred_eval), torch.from_numpy(mask_eval), max_value=float(num_classes - 1)),
+                "psnr": mask_psnr(
+                    torch.from_numpy(pred_eval),
+                    torch.from_numpy(mask_eval),
+                    max_value=float(num_classes - 1),
+                ),
                 **scores,
             }
             per_sample_rows.append(row)
 
             if args.save_pred_masks:
-                pred_path = pred_dir / f"{sample_index:06d}_{camera}_{_safe_stem(sample.image_path)}.png"
+                pred_path = (
+                    pred_dir
+                    / f"{sample_index:06d}_{camera}_{_safe_stem(sample.image_path)}.png"
+                )
                 cv2.imwrite(str(pred_path), pred_eval.astype(np.uint8))
 
-            save_overlay_file = args.save_all_overlays or sample_index < args.overlay_count
-            save_tensorboard_image = args.tensorboard and len(tensorboard_panels) < max(0, args.tensorboard_image_count)
+            save_overlay_file = (
+                args.save_all_overlays or sample_index < args.overlay_count
+            )
+            save_tensorboard_image = args.tensorboard and len(tensorboard_panels) < max(
+                0, args.tensorboard_image_count
+            )
             if save_overlay_file or save_tensorboard_image:
                 overlay = _make_overlay_panel(image_bgr, mask, pred, palette)
                 if save_overlay_file:
-                    overlay_path = overlay_dir / f"{sample_index:06d}_{scenario}_{camera}_{_safe_stem(sample.image_path)}.png"
-                    cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+                    overlay_path = (
+                        overlay_dir
+                        / f"{sample_index:06d}_{scenario}_{camera}_{_safe_stem(sample.image_path)}.png"
+                    )
+                    cv2.imwrite(
+                        str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR)
+                    )
                 if save_tensorboard_image:
                     tag = f"{sample_index:06d}_{scenario}_{camera}_{_safe_stem(sample.image_path)}"
+                    tensorboard_panels.append((camera, tag, overlay))
                     tensorboard_panels.append((camera, tag, overlay))
 
         done = min(start + len(batch_samples), len(samples))
@@ -232,11 +308,15 @@ def _resolve_out_dir(value: str, ckpt_path: Path) -> Path:
         ckpt_name = f"{ckpt_path.parent.parent.name}_{ckpt_path.stem}"
     else:
         ckpt_name = ckpt_path.stem
-    return (SEGMENTATION_ROOT / "runs" / f"eval_{_safe_name(ckpt_name)}_{timestamp}").resolve()
+    return (
+        SEGMENTATION_ROOT / "runs" / f"eval_{_safe_name(ckpt_name)}_{timestamp}"
+    ).resolve()
 
 
 def _parse_image_size(value: str) -> tuple[int, int]:
-    parts = [part.strip() for part in value.replace("x", ",").split(",") if part.strip()]
+    parts = [
+        part.strip() for part in value.replace("x", ",").split(",") if part.strip()
+    ]
     if len(parts) != 2:
         raise ValueError("--image-size must be WIDTH,HEIGHT")
     return int(parts[0]), int(parts[1])
@@ -287,7 +367,9 @@ def _scenario_name(sample: SegmentationSample) -> str:
     return metadata.get("scenario") or sample.image_path.parent.parent.name or "unknown"
 
 
-def _palette_for_classes(base_palette: Any, num_classes: int) -> list[tuple[int, int, int]]:
+def _palette_for_classes(
+    base_palette: Any, num_classes: int
+) -> list[tuple[int, int, int]]:
     palette = [tuple(int(v) for v in color) for color in base_palette]
     fallback = [
         (255, 0, 0),
@@ -325,12 +407,19 @@ def _make_overlay_panel(
     )
 
 
-def _overlay_hwc(image_rgb: np.ndarray, mask: np.ndarray, palette: list[tuple[int, int, int]], alpha: float = 0.45) -> np.ndarray:
+def _overlay_hwc(
+    image_rgb: np.ndarray,
+    mask: np.ndarray,
+    palette: list[tuple[int, int, int]],
+    alpha: float = 0.45,
+) -> np.ndarray:
     color = colorize_mask(mask, palette)
     return ((1.0 - alpha) * image_rgb + alpha * color).astype(np.uint8)
 
 
-def _error_overlay(image_rgb: np.ndarray, gt: np.ndarray, pred: np.ndarray) -> np.ndarray:
+def _error_overlay(
+    image_rgb: np.ndarray, gt: np.ndarray, pred: np.ndarray
+) -> np.ndarray:
     error = image_rgb.copy()
     valid = gt >= 0
     diff = (gt != pred) & valid
@@ -343,10 +432,23 @@ def _panel_with_labels(items: list[tuple[str, np.ndarray]]) -> np.ndarray:
     pad = 8
     label_h = 28
     height, width, channels = items[0][1].shape
-    panel = np.full((height + label_h, len(items) * width + (len(items) - 1) * pad, channels), 32, dtype=np.uint8)
+    panel = np.full(
+        (height + label_h, len(items) * width + (len(items) - 1) * pad, channels),
+        32,
+        dtype=np.uint8,
+    )
     for idx, (label, image) in enumerate(items):
         x0 = idx * (width + pad)
-        cv2.putText(panel, label, (x0 + 8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 1, cv2.LINE_AA)
+        cv2.putText(
+            panel,
+            label,
+            (x0 + 8, 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (235, 235, 235),
+            1,
+            cv2.LINE_AA,
+        )
         panel[label_h : label_h + height, x0 : x0 + width] = image
     return panel
 
@@ -369,7 +471,9 @@ def _build_metrics_report(
     return {
         "checkpoint": str(ckpt_path),
         "data_root": str(Path(args.data_root).expanduser().resolve()),
-        "manifest": str(Path(args.manifest).expanduser().resolve()) if args.manifest else str(Path(args.data_root).expanduser().resolve() / "csv" / "manifest.csv"),
+        "manifest": str(Path(args.manifest).expanduser().resolve())
+        if args.manifest
+        else str(Path(args.data_root).expanduser().resolve() / "csv" / "manifest.csv"),
         "out_dir": str(out_dir),
         "samples": sample_count,
         "classes": list(predictor.class_names),
@@ -378,7 +482,8 @@ def _build_metrics_report(
         "precision": predictor.inference_precision,
         "invalid_target_pixels": invalid_target_pixels,
         "total_inference_ms": total_inference_ms,
-        "avg_inference_ms_per_batch": total_inference_ms / max(1, int(np.ceil(sample_count / max(1, args.batch_size)))),
+        "avg_inference_ms_per_batch": total_inference_ms
+        / max(1, int(np.ceil(sample_count / max(1, args.batch_size)))),
         "overall": overall,
         "confusion_matrix": _matrix_to_list(matrix_total),
         "by_camera": {
@@ -418,26 +523,46 @@ def _write_per_sample_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _write_tensorboard(out_dir: Path, metrics: dict[str, Any], image_panels: list[tuple[str, str, np.ndarray]]) -> None:
+def _write_tensorboard(
+    out_dir: Path,
+    metrics: dict[str, Any],
+    image_panels: list[tuple[str, str, np.ndarray]],
+) -> None:
     try:
         from torch.utils.tensorboard import SummaryWriter
     except ImportError:
-        print("[warn] TensorBoard is not installed. Skipping TensorBoard event writing.")
+        print(
+            "[warn] TensorBoard is not installed. Skipping TensorBoard event writing."
+        )
         return
 
     writer = SummaryWriter(log_dir=str(out_dir))
     try:
         step = 0
         writer.add_scalar("final_test/samples", metrics["samples"], step)
-        writer.add_scalar("final_test/invalid_target_pixels", metrics["invalid_target_pixels"], step)
-        writer.add_scalar("final_test/avg_inference_ms_per_batch", metrics["avg_inference_ms_per_batch"], step)
+        writer.add_scalar(
+            "final_test/invalid_target_pixels", metrics["invalid_target_pixels"], step
+        )
+        writer.add_scalar(
+            "final_test/avg_inference_ms_per_batch",
+            metrics["avg_inference_ms_per_batch"],
+            step,
+        )
 
-        _write_tensorboard_scalars(writer, "final_test/overall", metrics["overall"], step)
+        _write_tensorboard_scalars(
+            writer, "final_test/overall", metrics["overall"], step
+        )
         for camera, values in metrics["by_camera"].items():
-            _write_tensorboard_scalars(writer, f"final_test/camera/{_safe_tag(camera)}", values, step)
+            _write_tensorboard_scalars(
+                writer, f"final_test/camera/{_safe_tag(camera)}", values, step
+            )
         for scenario, values in metrics["by_scenario"].items():
-            _write_tensorboard_scalars(writer, f"final_test/scenario/{_safe_tag(scenario)}", values, step)
+            _write_tensorboard_scalars(
+                writer, f"final_test/scenario/{_safe_tag(scenario)}", values, step
+            )
 
+        _write_confusion_matrix_tensorboard(writer, metrics, step)
+        _write_overlay_tensorboard(writer, image_panels, step)
         _write_confusion_matrix_tensorboard(writer, metrics, step)
         _write_overlay_tensorboard(writer, image_panels, step)
 
@@ -549,7 +674,9 @@ def _write_confusion_matrix_text(
     separator = "|---|" + "|".join("---" for _ in labels) + "|"
     rows = [header, separator]
     for label, row in zip(labels, matrix):
-        rows.append("| " + label + " | " + " | ".join(str(int(value)) for value in row) + " |")
+        rows.append(
+            "| " + label + " | " + " | ".join(str(int(value)) for value in row) + " |"
+        )
 
     writer.add_text(tag, "\n".join(rows), step)
 
@@ -596,7 +723,16 @@ def _confusion_matrix_image(
         y0 = label_h + row * cell
         _put_centered_text(image, label, (0, y0, label_w, cell), 0.48, (40, 40, 40))
 
-    cv2.putText(image, "GT \\ Pred", (10, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (40, 40, 40), 1, cv2.LINE_AA)
+    cv2.putText(
+        image,
+        "GT \\ Pred",
+        (10, 33),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (40, 40, 40),
+        1,
+        cv2.LINE_AA,
+    )
     return image
 
 
@@ -609,13 +745,26 @@ def _put_centered_text(
 ) -> None:
     x, y, width, height = rect
     thickness = 1
-    (tw, th), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+    (tw, th), baseline = cv2.getTextSize(
+        text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness
+    )
     tx = x + max(4, (width - tw) // 2)
     ty = y + max(th + 4, (height + th - baseline) // 2)
-    cv2.putText(image, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
+    cv2.putText(
+        image,
+        text,
+        (tx, ty),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
 
 
-def _make_image_grid(images: list[np.ndarray], columns: int = 2, pad: int = 8) -> np.ndarray:
+def _make_image_grid(
+    images: list[np.ndarray], columns: int = 2, pad: int = 8
+) -> np.ndarray:
     if not images:
         raise ValueError("_make_image_grid requires at least one image")
 
@@ -635,7 +784,9 @@ def _make_image_grid(images: list[np.ndarray], columns: int = 2, pad: int = 8) -
     return grid
 
 
-def _write_tensorboard_scalars(writer: Any, prefix: str, values: dict[str, Any], step: int) -> None:
+def _write_tensorboard_scalars(
+    writer: Any, prefix: str, values: dict[str, Any], step: int
+) -> None:
     for key, value in values.items():
         if key == "confusion_matrix" or not isinstance(value, (int, float)):
             continue
