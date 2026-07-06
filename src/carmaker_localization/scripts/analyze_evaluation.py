@@ -30,11 +30,29 @@ HEATMAPS = [
     ("longitudinal_rmse", "GT Pose Frame Longitudinal RMSE", "GT pose frame RMSE (m)", "viridis_r"),
     ("lateral_rmse", "GT Pose Frame Lateral RMSE", "GT pose frame RMSE (m)", "viridis_r"),
     ("yaw_rmse", "GT Pose Frame Yaw RMSE", "GT pose frame RMSE (rad)", "viridis_r"),
+    ("yaw_rmse_deg", "GT Pose Frame Yaw RMSE", "GT pose frame RMSE (deg)", "viridis_r"),
     ("cov_trace", "Mean Covariance Trace", "Trace", "inferno"),
     ("cov_determinant", "Mean Covariance Determinant", "Determinant", "inferno"),
     ("cov_xx", "Mean Covariance X Variance", "Variance (m^2)", "Reds"),
     ("cov_yy", "Mean Covariance Y Variance", "Variance (m^2)", "Reds"),
     ("cov_yawyaw", "Mean Covariance Yaw Variance", "Variance (rad^2)", "Reds"),
+    ("cov_yawyaw_deg2", "Mean Covariance Yaw Variance", "Variance (deg^2)", "Reds"),
+    ("cov_xyaw", "Mean X-Yaw Covariance", "Covariance (m*rad)", "coolwarm"),
+    ("cov_yyaw", "Mean Y-Yaw Covariance", "Covariance (m*rad)", "coolwarm"),
+    ("cov_xyaw_deg", "Mean X-Yaw Covariance", "Covariance (m*deg)", "coolwarm"),
+    ("cov_yyaw_deg", "Mean Y-Yaw Covariance", "Covariance (m*deg)", "coolwarm"),
+    ("abs_cov_xyaw", "Mean Absolute X-Yaw Covariance", "|Covariance| (m*rad)", "Reds"),
+    ("abs_cov_yyaw", "Mean Absolute Y-Yaw Covariance", "|Covariance| (m*rad)", "Reds"),
+    ("abs_cov_xyaw_deg", "Mean Absolute X-Yaw Covariance", "|Covariance| (m*deg)", "Reds"),
+    ("abs_cov_yyaw_deg", "Mean Absolute Y-Yaw Covariance", "|Covariance| (m*deg)", "Reds"),
+    ("std_x", "Mean ICP X Standard Deviation", "Std Dev (m)", "Reds"),
+    ("std_y", "Mean ICP Y Standard Deviation", "Std Dev (m)", "Reds"),
+    ("std_position", "Mean ICP Position Standard Deviation", "Std Dev (m)", "Reds"),
+    ("std_position_cm", "Mean ICP Position Standard Deviation", "Std Dev (cm)", "Reds"),
+    ("std_yaw", "Mean ICP Yaw Standard Deviation", "Std Dev (rad)", "Reds"),
+    ("std_yaw_deg", "Mean ICP Yaw Standard Deviation", "Std Dev (deg)", "Reds"),
+    ("yaw_translation_coupling", "Mean Yaw-Translation Coupling", "Coupling (m*rad)", "Reds"),
+    ("yaw_translation_coupling_deg", "Mean Yaw-Translation Coupling", "Coupling (m*deg)", "Reds"),
 ]
 
 LEGACY_COLUMN_ALIASES = {
@@ -44,7 +62,9 @@ LEGACY_COLUMN_ALIASES = {
 DETAIL_COLUMNS = [
     "grid_i", "grid_j", "cell_x", "cell_y", "mean_observed_count", "landmark_count",
     "attempts", "success_count", "success_rate", "mean_fitness", "mean_iterations", "mean_latency_ms",
-    "longitudinal_rmse", "lateral_rmse", "yaw_rmse",
+    "longitudinal_rmse", "lateral_rmse", "yaw_rmse", "yaw_rmse_deg",
+    "std_x", "std_y", "std_position", "std_position_cm", "std_yaw", "std_yaw_deg",
+    "yaw_translation_coupling", "yaw_translation_coupling_deg", "cov_yawyaw_deg2",
     "cov_xx", "cov_xy", "cov_xyaw", "cov_yx", "cov_yy", "cov_yyaw",
     "cov_yawx", "cov_yawy", "cov_yawyaw", "cov_trace", "cov_determinant",
 ]
@@ -106,6 +126,76 @@ def normalize_schema(df):
     for legacy, current in LEGACY_COLUMN_ALIASES.items():
         if current not in df.columns and legacy in df.columns:
             df[current] = df[legacy]
+    return df
+
+
+def add_standard_deviation_columns(df):
+    variance_to_std = {
+        "cov_xx": "std_x",
+        "cov_yy": "std_y",
+        "cov_yawyaw": "std_yaw",
+    }
+    for variance_column, std_column in variance_to_std.items():
+        if variance_column not in df.columns:
+            df[std_column] = np.nan
+            continue
+        variances = pd.to_numeric(df[variance_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        df[std_column] = np.sqrt(variances.where(variances >= 0.0, np.nan))
+
+    if "cov_xx" in df.columns and "cov_yy" in df.columns:
+        cov_xx = pd.to_numeric(df["cov_xx"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        cov_yy = pd.to_numeric(df["cov_yy"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        position_variance = cov_xx + cov_yy
+        df["std_position"] = np.sqrt(position_variance.where(position_variance >= 0.0, np.nan))
+        df["std_position_cm"] = df["std_position"] * 100.0
+    else:
+        df["std_position"] = np.nan
+        df["std_position_cm"] = np.nan
+
+    if "cov_yawyaw" in df.columns:
+        yaw_variance = pd.to_numeric(df["cov_yawyaw"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        yaw_variance = yaw_variance.where(yaw_variance >= 0.0, np.nan)
+        rad_to_deg = 180.0 / np.pi
+        df["cov_yawyaw_deg2"] = yaw_variance * (rad_to_deg ** 2)
+        df["std_yaw_deg"] = np.sqrt(yaw_variance) * rad_to_deg
+    else:
+        df["cov_yawyaw_deg2"] = np.nan
+        df["std_yaw_deg"] = np.nan
+    return df
+
+
+def add_yaw_degree_columns(df):
+    if "yaw_rmse" in df.columns:
+        yaw_rmse = pd.to_numeric(df["yaw_rmse"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        df["yaw_rmse_deg"] = yaw_rmse * 180.0 / np.pi
+    else:
+        df["yaw_rmse_deg"] = np.nan
+    return df
+
+
+def add_covariance_coupling_columns(df):
+    rad_to_deg = 180.0 / np.pi
+    for column in ("cov_xyaw", "cov_yyaw"):
+        abs_column = f"abs_{column}"
+        deg_column = f"{column}_deg"
+        abs_deg_column = f"abs_{column}_deg"
+        if column in df.columns:
+            values = pd.to_numeric(df[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+            df[abs_column] = values.abs()
+            df[deg_column] = values * rad_to_deg
+            df[abs_deg_column] = values.abs() * rad_to_deg
+        else:
+            df[abs_column] = np.nan
+            df[deg_column] = np.nan
+            df[abs_deg_column] = np.nan
+    if "cov_xyaw" in df.columns and "cov_yyaw" in df.columns:
+        cov_xyaw = pd.to_numeric(df["cov_xyaw"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        cov_yyaw = pd.to_numeric(df["cov_yyaw"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        df["yaw_translation_coupling"] = np.sqrt(cov_xyaw.pow(2) + cov_yyaw.pow(2))
+        df["yaw_translation_coupling_deg"] = df["yaw_translation_coupling"] * rad_to_deg
+    else:
+        df["yaw_translation_coupling"] = np.nan
+        df["yaw_translation_coupling_deg"] = np.nan
     return df
 
 
@@ -428,7 +518,11 @@ def write_summary(df, output_path, cfg):
     metrics = [
         "mean_observed_count", "landmark_count", "success_rate",
         "mean_fitness", "mean_iterations", "mean_latency_ms",
-        "longitudinal_rmse", "lateral_rmse", "yaw_rmse",
+        "longitudinal_rmse", "lateral_rmse", "yaw_rmse", "yaw_rmse_deg",
+        "std_x", "std_y", "std_position", "std_position_cm", "std_yaw", "std_yaw_deg",
+        "yaw_translation_coupling", "yaw_translation_coupling_deg",
+        "cov_yawyaw_deg2", "abs_cov_xyaw", "abs_cov_yyaw",
+        "abs_cov_xyaw_deg", "abs_cov_yyaw_deg",
         "cov_trace", "cov_determinant",
     ]
     valid_grid_count = int((df["attempts"] > 0).sum())
@@ -503,6 +597,9 @@ def main():
         if column not in df.columns:
             df[column] = np.nan
     df = aggregate_duplicate_grids(df)
+    df = add_standard_deviation_columns(df)
+    df = add_yaw_degree_columns(df)
+    df = add_covariance_coupling_columns(df)
 
     output_dir = resolve_config_path(package_dir, cfg["output_dir"])
     os.makedirs(output_dir, exist_ok=True)
@@ -511,7 +608,7 @@ def main():
     for column, title, label, cmap in HEATMAPS:
         if column in df.columns:
             plot_heatmap(df, column, title, label, cmap, os.path.join(output_dir, f"heatmap_{column}.png"), cfg, landmarks)
-            if column in ("longitudinal_rmse", "lateral_rmse", "yaw_rmse"):
+            if column in ("longitudinal_rmse", "lateral_rmse", "yaw_rmse", "yaw_rmse_deg"):
                 plot_heatmap(
                     df, column, f"{title}", label, cmap,
                     os.path.join(output_dir, f"heatmap_{column}_perfect.png"),
