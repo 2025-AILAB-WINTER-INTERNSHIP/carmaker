@@ -1,0 +1,5 @@
+#INFOFILE1.1 - Do not remove this line!
+Geometry.Bbox = -0.508 0.508 -0.508 0.508 0.000 0.001
+FileClass.New = 5.1
+Geometry.BenchmarkGrade = 100
+Object.Class = TrafficSign

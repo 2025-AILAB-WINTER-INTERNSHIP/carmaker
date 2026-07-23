@@ -1,0 +1,232 @@
+#INFOFILE1.1 (UTF-8) - Do not remove this line!
+FileIdent = IPGRoad 12.0
+FileCreator = CarMaker 12.0.1
+LibVersion = 12.0.1
+Country = DEU DEU
+nLinks = 3
+nJunctions = 0
+nObjects = 219
+nRoutes = 3
+RoadNetworkLength = 162
+BBox = -37 139.675177834372 -90.6262789543203 52.25 -11 20
+Route.0.Length = 54
+Route.1.Length = 54
+Route.2.Length = 54
+RST.Unit = kmh
+RST = 50 100 -1 30 70 50 -1 -1
+Movie = 0.2 1 0.02 0 0 1.2 1.2
+Visualization.SamplingParams = 0.2 1 0.02
+Visualization.RoadsideWidth = 0 0
+Visualization.RoadsideSlope = 1.2 1.2
+Visualization.MovieNX.RenderMask = 4095
+PathMode = -1
+Terrain.Param = 50 25 300 100 0.75 0
+Link.0.ID = 426
+Link.0.Node0 = -27 -18 0 0
+Link.0.Node1 = 27 -18 0 0
+Link.0.RST = Roundabout
+Link.0.Movie = 0.2 0.2 0.02 0 0 0 0
+Link.0.Visualization.SamplingParams = 0.2 0.2 0.02
+Link.0.Visualization.RoadsideWidth = 0 0
+Link.0.Visualization.RoadsideSlope = 0 0
+Link.0.RL.ID = 427
+Link.0.Seg.0.ID = 428
+Link.0.Seg.0.Type = PointList
+Link.0.Seg.0.Param = 1 0 1 0 0 0 0 0
+Link.0.Seg.0.PointList:
+	2209 -1 27 -18
+Link.0.LaneSection.0.ID = 429
+Link.0.LaneSection.0.Start = 0
+Link.0.LaneSection.0.LaneL.0.ID = 430
+Link.0.LaneSection.0.LaneL.0 = 0 2.5 2.5 0 7 1 1
+Link.0.LaneSection.0.LaneL.0.ARP = 3168 3169 3170 3171 3172 3173
+Link.0.LaneSection.0.LaneL.1.ID = 431
+Link.0.LaneSection.0.LaneL.1 = 0 6 6 0 7 1 1
+Link.0.LaneSection.0.LaneL.1.ARP = 3174 3175 3176 3177 3178 3179
+Link.0.LaneSection.0.LaneL.1.Width:
+	2367 -1 2.99999999999999 0 2 6 0 -999 -999
+	2368 -1 3.09999999999998 0 2 6 0 -999 -999
+	2369 -1 24.5 0 2 6 0 -999 -999
+	2370 -1 24.6 0 2 6 0 -999 -999
+	2371 -1 26 0 2 6 0 -999 -999
+	2372 -1 26.1 0 2 6 0 -999 -999
+	2373 -1 47.5 0 2 6 0 -999 -999
+	2374 -1 47.6 0 2 6 0 -999 -999
+	2375 -1 49 0 2 6 0 -999 -999
+	2376 -1 49.1 0 2 6 0 -999 -999
+Link.0.LaneSection.0.LaneL.2.ID = 459
+Link.0.LaneSection.0.LaneL.2 = 0 1 1 5 0 0 0
+Link.0.LaneSection.0.LaneR.0.ID = 460
+Link.0.LaneSection.0.LaneR.0 = 0 2.5 2.5 0 7 1 1
+Link.0.LaneSection.0.LaneR.0.ARP = 3186 3187 3188 3189 3190 3191
+Link.0.LaneSection.0.LaneR.1.ID = 461
+Link.0.LaneSection.0.LaneR.1 = 0 6 6 0 7 1 1
+Link.0.LaneSection.0.LaneR.1.ARP = 3192 3193 3194 3195 3196 3197
+Link.0.LaneSection.0.LaneR.2.ID = 489
+Link.0.LaneSection.0.LaneR.2 = 0 1 1 5 0 0 0
+Link.0.ElevationProfile.ID = 514
+Link.0.ElevationProfile.Params = 0 0
+Link.0.ElevationProfile:
+	2356 -1 0 0 0 0 -0
+	2405 -1 0 1 0 0 0
+Link.0.SlopeProfile.ID = 4573
+Link.0.SlopeProfile.Params = 0 0
+Link.0.SlopeProfile:
+	2419 -1 0 0 0 -0 0
+	2423 -1 0 1 0 0 0
+Link.0.CamberProfile.ID = 4574
+Link.0.CamberProfile.Params = 0 0
+Link.0.CamberProfile:
+	2425 -1 0 0 0 0 -0
+	2432 -1 0 1 0 0 0
+Link.1.ID = 561
+Link.1.Node0 = -27 0 0 0
+Link.1.Node1 = 27 0 0 0
+Link.1.RST = Roundabout
+Link.1.Movie = 0.2 0.2 0.02 0 0 0 0
+Link.1.Visualization.SamplingParams = 0.2 0.2 0.02
+Link.1.Visualization.RoadsideWidth = 0 0
+Link.1.Visualization.RoadsideSlope = 0 0
+Link.1.RL.ID = 562
+Link.1.Seg.0.ID = 563
+Link.1.Seg.0.Type = PointList
+Link.1.Seg.0.Param = 1 0 1 0 0 0 0 0
+Link.1.Seg.0.PointList:
+	2210 -1 27 0
+Link.1.LaneSection.0.ID = 564
+Link.1.LaneSection.0.Start = 0
+Link.1.LaneSection.0.LaneL.0.ID = 565
+Link.1.LaneSection.0.LaneL.0 = 0 2.5 2.5 0 7 1 1
+Link.1.LaneSection.0.LaneL.0.ARP = 3204 3205 3206 3207 3208 3209
+Link.1.LaneSection.0.LaneL.1.ID = 566
+Link.1.LaneSection.0.LaneL.1 = 0 6 6 0 7 1 1
+Link.1.LaneSection.0.LaneL.1.ARP = 3210 3211 3212 3213 3214 3215
+Link.1.LaneSection.0.LaneL.1.Width:
+	2448 -1 0 0 2 6 0 -999 -999
+Link.1.LaneSection.0.LaneL.2.ID = 594
+Link.1.LaneSection.0.LaneL.2 = 0 1 1 5 0 0 0
+Link.1.LaneSection.0.LaneR.0.ID = 595
+Link.1.LaneSection.0.LaneR.0 = 0 2.5 2.5 0 7 1 1
+Link.1.LaneSection.0.LaneR.0.ARP = 3222 3223 3224 3225 3226 3227
+Link.1.LaneSection.0.LaneR.1.ID = 596
+Link.1.LaneSection.0.LaneR.1 = 0 6 6 0 7 1 1
+Link.1.LaneSection.0.LaneR.1.ARP = 3228 3229 3230 3231 3232 3233
+Link.1.LaneSection.0.LaneR.2.ID = 610
+Link.1.LaneSection.0.LaneR.2 = 0 1 1 0 7 1 1
+Link.1.LaneSection.0.LaneR.2.ARP = 3234 3235 3236 3237 3238 3239
+Link.1.LaneSection.0.LaneR.3.ID = 624
+Link.1.LaneSection.0.LaneR.3 = 0 1 1 5 0 0 0
+Link.1.ElevationProfile.ID = 649
+Link.1.ElevationProfile.Params = 0 0
+Link.1.ElevationProfile:
+	2365 -1 0 0 0 0 -0
+	2433 -1 0 1 0 0 0
+Link.1.SlopeProfile.ID = 4587
+Link.1.SlopeProfile.Params = 0 0
+Link.1.SlopeProfile:
+	2418 -1 0 0 0 -0 0
+	2475 -1 0 1 0 0 0
+Link.1.CamberProfile.ID = 4588
+Link.1.CamberProfile.Params = 0 0
+Link.1.CamberProfile:
+	2431 -1 0 0 0 0 -0
+	2491 -1 0 1 0 0 0
+Link.2.ID = 696
+Link.2.Node0 = -27 18 0 0
+Link.2.Node1 = 27 18 0 0
+Link.2.RST = Roundabout
+Link.2.Movie = 0.2 0.2 0.02 0 0 5 0
+Link.2.Visualization.SamplingParams = 0.2 0.2 0.02
+Link.2.Visualization.RoadsideWidth = 0 0
+Link.2.Visualization.RoadsideSlope = 5 0
+Link.2.RL.ID = 697
+Link.2.Seg.0.ID = 698
+Link.2.Seg.0.Type = PointList
+Link.2.Seg.0.Param = 1 0 1 0 0 0 0 0
+Link.2.Seg.0.PointList:
+	2213 -1 27 18
+Link.2.LaneSection.0.ID = 699
+Link.2.LaneSection.0.Start = 0
+Link.2.LaneSection.0.LaneL.0.ID = 700
+Link.2.LaneSection.0.LaneL.0 = 0 2.5 2.5 0 7 1 1
+Link.2.LaneSection.0.LaneL.0.ARP = 3240 3241 3242 3243 3244 3245
+Link.2.LaneSection.0.LaneL.1.ID = 701
+Link.2.LaneSection.0.LaneL.1 = 0 0 0 0 7 1 1
+Link.2.LaneSection.0.LaneL.1.ARP = 3246 3247 3248 3249 3250 3251
+Link.2.LaneSection.0.LaneL.1.Width:
+	2518 -1 0 0 2 6 0 -999 -999
+Link.2.LaneSection.0.LaneL.2.ID = 729
+Link.2.LaneSection.0.LaneL.2 = 0 1 1 5 0 0 0
+Link.2.LaneSection.0.LaneR.0.ID = 730
+Link.2.LaneSection.0.LaneR.0 = 0 2.5 2.5 0 7 1 1
+Link.2.LaneSection.0.LaneR.0.ARP = 3258 3259 3260 3261 3262 3263
+Link.2.LaneSection.0.LaneR.1.ID = 731
+Link.2.LaneSection.0.LaneR.1 = 0 0 0 0 7 1 1
+Link.2.LaneSection.0.LaneR.1.ARP = 3264 3265 3266 3267 3268 3269
+Link.2.LaneSection.0.LaneR.1.Width:
+	2544 -1 0 0 2 6 0 -999 -999
+Link.2.LaneSection.0.LaneR.2.ID = 745
+Link.2.LaneSection.0.LaneR.2 = 0 0 0 0 7 1 1
+Link.2.LaneSection.0.LaneR.2.ARP = 3270 3271 3272 3273 3274 3275
+Link.2.LaneSection.0.LaneR.2.Width:
+	2553 -1 0 0 2 1 0 -999 -999
+Link.2.LaneSection.0.LaneR.3.ID = 759
+Link.2.LaneSection.0.LaneR.3 = 0 1 1 5 0 0 0
+Link.2.ElevationProfile.ID = 784
+Link.2.ElevationProfile.Params = 0 0
+Link.2.ElevationProfile:
+	2430 -1 0 0 0 0 -0
+	2498 -1 0 1 0 0 0
+Link.2.SlopeProfile.ID = 4601
+Link.2.SlopeProfile.Params = 0 0
+Link.2.SlopeProfile:
+	2488 -1 0 0 0 -0 0
+	2501 -1 0 1 0 0 0
+Link.2.CamberProfile.ID = 4602
+Link.2.CamberProfile.Params = 0 0
+Link.2.CamberProfile:
+	2497 -1 0 0 0 0 -0
+	2504 -1 0 1 0 0 0
+LanePath.0 = 1759 430 2 10 0.1 0.1 -1 -1
+LanePath.1 = 1760 431 2 10 0.1 0.1 -1 -1
+LanePath.2 = 1762 460 2 10 0.1 0.1 -1 -1
+LanePath.3 = 1763 461 2 10 0.1 0.1 -1 -1
+LanePath.4 = 1765 565 2 10 0.1 0.1 -1 -1
+LanePath.5 = 1766 566 2 10 0.1 0.1 -1 -1
+LanePath.6 = 1768 595 2 10 0.1 0.1 -1 -1
+LanePath.7 = 1769 596 2 10 0.1 0.1 -1 -1
+LanePath.8 = 1770 610 0.25 10 0.1 0.1 -1 -1
+LanePath.9 = 1771 700 2 10 0.1 0.1 -1 -1
+LanePath.10 = 1772 701 2 10 0.1 0.1 -1 -1
+LanePath.11 = 1774 730 2 10 0.1 0.1 -1 -1
+LanePath.12 = 1775 731 2 10 0.1 0.1 -1 -1
+LanePath.13 = 1776 745 0.25 10 0.1 0.1 -1 -1
+Route.0.ID = 14
+Route.0.Name = route_14
+Route.0.DrvPath.ID = 18
+Route.0.DrvPath:
+	1771
+Route.1.ID = 19
+Route.1.Name = route_19
+Route.1.DrvPath.ID = 20
+Route.1.DrvPath:
+	1771
+Route.2.ID = 21
+Route.2.Name = route_21
+Route.2.DrvPath.ID = 22
+Route.2.DrvPath:
+	1771
+RL.562.GeoObject.0.ID = 0 562
+RL.562.GeoObject.0 = 27 0 27 0 -4.7 100 0 0 0 0 90 1 1 1 -2.389 3D/StreetFurniture/TicketMachine_02_2.mobj
+RL.562.GeoObject.0.SensorBBox = 1 0 0.74 -0.57 0.57 0 2.39
+RL.562.GeoObject.1.ID = 1 562
+RL.562.GeoObject.1 = 29.47 0 29.47 0 -2.338 100 0 0 90 0 90 1 1 1 0.508 3D/AprilGrid/AprilGrid.obj
+RL.562.GeoObject.1.SensorBBox = 1 -0.508 0.508 -0.508 0.508 0 0.001
+RL.562.RoadMarking.0.ID = 681 562
+RL.562.RoadMarking.0 = 25.75 0 42.1 0 0 0 0.1 0 1 1 0 5 0 1 1 2 ""
+RL.562.RoadMarking.0.PointList:
+	0 0
+	0 -5
+	2.5 -5
+	2.5 0
+MaxUsedObjId = 4602

@@ -49,8 +49,12 @@ make ros-term     # 테미네이터로 컨테이너 접속
 mksync --share  # 시스템 패키지 공유
 ```
 
-### 개발
+### 실행
 
 ```bash
 s
+
+roslaunch carmaker_bringup bringup.launch checkpoint_path:=/workspace/src/segmentation_ros/data/models/best.ckpt
+
+rostopic pub -1 /planning/goal geometry_msgs/PoseStamped '{header: {stamp: now, frame_id: "Fr0"}, pose: {position: {x: 0, y: -4.33, z: 0}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}}'
 ```
