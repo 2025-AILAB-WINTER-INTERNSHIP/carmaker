@@ -19,7 +19,7 @@ setting:
   # use_gt_pose: true        → /carmaker/dynamic_info topic (Simulator GT)
   # use_manual_pose: true    → /planning/start topic (manual input for testing)
   # (both false)             → TF lookup (Fr0 → Fr1A_Rear_Axle_Pred, actual deployment EKF)
-  use_gt_pose: true # Set to true to use GT pose, false to use EKF pose from TF
+  use_gt_pose: false # Set to true to use GT pose, false to use EKF pose from TF
   use_manual_pose:
     enabled: false # Set to true for offline testing (no simulator). Overrides TF lookup.
     topic: "/planning/start" # geometry_msgs/PoseWithCovarianceStamped — publish via RViz "2D Pose Estimate" tool
